@@ -4,14 +4,16 @@
 #SBATCH --partition maxcpu
 #SBATCH --job-name sim
 #SBATCH --constraint='EPYC&7402' 
+#SBATCH --output=/gpfs/dust/maxwell/user/dayhallh/physical_recos/job_logs/sim_%j.out
+#SBATCH --error=/gpfs/dust/maxwell/user/dayhallh/physical_recos/job_logs/sim_%j.err
+#SBATCH --mail-type=FAIL
 ##SBATCH --nodelist="max-wn063"         # you can select specific nodes, if necessary
-##SBATCH --nodelist="max-wn065"
 
 # Change these to your files/directories ~~~~~~~~~~~~~~~
 # With a Di_Photon_sim_commands.sh and your steering file;
 steer_dir=/home/dayhallh/training/physical_recos
 # name of your model, must be a valid model in the steering file
-model_name=cc
+model_name=cc  # g4 cc bibae
 # Where you want the output to go
 output_dir=/gpfs/dust/maxwell/user/dayhallh/physical_recos/sim_output
 # Where your models are
