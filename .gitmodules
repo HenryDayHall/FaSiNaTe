@@ -1,0 +1,9 @@
+[submodule "ddfastshowerml"]
+	path = ddfastshowerml
+	url = git@gitlab.desy.de:ilcsoft/ddfastshowerml.git
+[submodule "ddml_diphoton_analysis"]
+	path = ddml_diphoton_analysis
+	url = git@gitlab.desy.de:ftx-sft/peter_code/ddml_diphoton_analysis.git
+[submodule "ILDConfig"]
+	path = ILDConfig
+	url = https://github.com/iLCSoft/ILDConfig.git
