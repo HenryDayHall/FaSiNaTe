@@ -27,7 +27,7 @@ export SINGULARITY_CACHEDIR=/beegfs/desy/user/akorol/container/cache/
 starting_dir=$(pwd)
 
 
-singularity instance start -H $PWD --bind /cvmfs:/cvmfs,/beegfs/desy/user/akorol/projects/2_sim_calo/Regular_detector/ILDConfig/StandardConfig/production/lcgeo/v00-16-06:/RegularLcgio/,$steer_dir:/user_steer,$data_dir:/user_data /beegfs/desy/user/akorol/singularity_images/ubuntu22_wmesa_latest.sif instance1
+singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$steer_dir:/user_steer,$data_dir:/user_data /beegfs/desy/user/akorol/singularity_images/ubuntu22_wmesa_latest.sif instance1
 
 
 echo "-- Running Marlin ..."
