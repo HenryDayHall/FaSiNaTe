@@ -1,5 +1,7 @@
 MarlinStdRecoParsed.xml
 *.log
 *.swp
+singularity_dir/
+singularity_dir
 build/
 plots/

@@ -40,6 +40,8 @@ A known working image can be created with;
 mkdir singularity_dir
 cd singularity_dir
 singularity pull docker://ghcr.io/key4hep/key4hep-images/ubuntu22:latest
+mkdir cache
+mkdir tmp
 ```
 
 You should now have a file called `ubuntu22_latest.sif`.

@@ -19,15 +19,17 @@ data_dir=/data/dust/user/dayhallh/physical_recos
 input_file=sim_output/di_photons_g4_output_files/ild-sim-e2020pdg22maxsep30centralposz50-p1-seed1.slcio
 # if desired, pick a detector model, default is ILD_l5_o1_v02
 # detector_model=ILD_l5_o1_v02
+# Your singularity, created with create_singularity.sh if needed
+singularity_path=./singularity_dir/ubuntu22_latest.sif
+export SINGULARITY_TMPDIR=./singularity_dir/tmp/
+export SINGULARITY_CACHEDIR=./singularity_dir/cache/
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-export SINGULARITY_TMPDIR=/beegfs/desy/user/akorol/container/tmp/
-export SINGULARITY_CACHEDIR=/beegfs/desy/user/akorol/container/cache/
 # store the current directory for later
 starting_dir=$(pwd)
 
 
-singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$steer_dir:/user_steer,$data_dir:/user_data /beegfs/desy/user/akorol/singularity_images/ubuntu22_wmesa_latest.sif instance1
+singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$steer_dir:/user_steer,$data_dir:/user_data $singularity_path instance1
 
 
 echo "-- Running Marlin ..."
