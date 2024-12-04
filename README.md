@@ -6,7 +6,7 @@ It's an agglomeration of work done by Peter McKeown and Anatolii Korol.
 There are roughly 5 steps;
 
 1. Compile to model into c++ *TODO*
-2. Create a sample of inputs to start events from, see `run_sam.sh`.
+2. Create a sample of inputs to start events from, see `Di_Photon_Input_slcio.py`.
 3. Simulate events, using the model you compiled, see `run_sim.sh`.
 4. Reconstruct the simulated events, see `run_rec.sh`.
 5. Perform analysis on the events. Only a photon separation analysis is currently described.
@@ -71,6 +71,8 @@ In addition you need to compile `ddfastshowerml`.
 This is a submodule of this repository, so you should already have a copy.
 There are instructions for compiling in the `ddfastshowerml/README.md`,
 but it's important that the version of key4hep you use to build with is the same one you run with.
+Also, since we are running in a container, you also need to build in a container
+(it sometimes works without, but it's not very reliable).
 
 In short;
 ensure you start with a clean shell, in which no python environment has ever been activated.
@@ -78,15 +80,26 @@ It's a bit inclined to get confused.
 Then the commands are;
 
 ```bash
+singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$repo_dir:/user_repo $singularity_path instance1
+singularity instance shell instance://instance1
+```
+
+This will change your prompt to `Singularity>`, or something like that.
+
+```bash
 source setup_env_stable.sh
 cd ddfastshowerml
 mkdir build
 cd build
 cmake ..
-make
+make -j4 install
+exit
 ```
 
-Assuming this was build correctly the last stage of setting up is to modify the paths in `run_sim.sh`.
+Then stop the singularity instance with `singularity instance stop instance1`.
+You should only need to do this build once.
+
+Assuming this build went smoothly, the last stage of setting up is to modify the paths in `run_sim.sh`.
 Looking at the top of the file, you can see some example instructions for SLURM jobs, which you may want to modify,
 then further down you must modify the paths/variables in this block;
 

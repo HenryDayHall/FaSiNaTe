@@ -483,7 +483,7 @@ def aiDanceTorch(kernel):
         ml_model_1 = "RegularGridTwoAngleBIBAEModelEndcapTorchModel/EndcapModelTorch"
         ml_correct_angles = False
     elif sim_model == "cc":
-        ml_file = os.path.join(model_folder, "CC2_SF_2.pt")
+        ml_file = os.path.join(model_folder, "CC3_SF_2A.pt")
         ml_model = "CaloCloudsTwoAngleModelPolyhedraBarrelTorchModel/BarrelModelTorch"
         ml_model_1 = "CaloCloudsTwoAngleModelPolyhedraBarrelTorchModel/EndcapModelTorch"
         ml_correct_angles = False

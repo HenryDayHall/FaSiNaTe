@@ -35,12 +35,12 @@ starting_dir=$(pwd)
 cd ddfastshowerml
 
 #singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$lcgeo:/RegularLcgio/,$repo_dir:/user_repo,$output_dir:/user_output $singularity_path instance1
-singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$repo_dir:/user_repo,$data_dir:/user_data $singularity_path instance1
+singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$repo_dir:/user_repo,$data_dir:/user_data,$model_dir:/model_dir $singularity_path instance1
 
 
 echo "-- Running DDSim ..."
 
-singularity exec instance://instance1 /user_repo/Di_Photon_sim_commands.sh $model_dir $model_name $input_file
+singularity exec instance://instance1 /user_repo/Di_Photon_sim_commands.sh $model_name $input_file
 
 echo "-- Done."
 # stop the instance
