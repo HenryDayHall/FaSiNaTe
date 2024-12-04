@@ -1,2 +1,5 @@
+MarlinStdRecoParsed.xml
+*.log
+*.swp
 build/
 plots/

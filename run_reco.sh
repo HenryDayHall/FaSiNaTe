@@ -11,10 +11,10 @@
 
 
 # Change these to your files/directories ~~~~~~~~~~~~~~~
-# With a Di_Photon_rec_commands.sh
+# With a Di_Photon_rec_commands.sh and a ddfastshowerml repository and setup_stable_env.sh in the same directory
 steer_dir=/home/dayhallh/training/physical_recos
 # Where to find input and output, will be mounted to /user_data inside the container
-data_dir=/gpfs/dust/maxwell/user/dayhallh/physical_recos
+data_dir=/data/dust/user/dayhallh/physical_recos
 # Need to pick an input file, this also determines the output file (sim->rec)
 input_file=sim_output/di_photons_g4_output_files/ild-sim-e2020pdg22maxsep30centralposz50-p1-seed1.slcio
 # if desired, pick a detector model, default is ILD_l5_o1_v02
@@ -26,7 +26,6 @@ export SINGULARITY_CACHEDIR=/beegfs/desy/user/akorol/container/cache/
 # store the current directory for later
 starting_dir=$(pwd)
 
-cd /beegfs/desy/user/akorol/projects/PC_version/ddfastshowerml
 
 singularity instance start -H $PWD --bind /cvmfs:/cvmfs,/beegfs/desy/user/akorol/projects/2_sim_calo/Regular_detector/ILDConfig/StandardConfig/production/lcgeo/v00-16-06:/RegularLcgio/,$steer_dir:/user_steer,$data_dir:/user_data /beegfs/desy/user/akorol/singularity_images/ubuntu22_wmesa_latest.sif instance1
 
