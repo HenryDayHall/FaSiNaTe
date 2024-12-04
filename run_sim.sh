@@ -15,20 +15,24 @@ steer_dir=/home/dayhallh/training/physical_recos
 # name of your model, must be a valid model in the steering file
 model_name=cc  # g4 cc bibae
 # Where you want the output to go
-output_dir=/gpfs/dust/maxwell/user/dayhallh/physical_recos/sim_output
+output_dir=/data/dust/user/dayhallh/physical_recos/sim_output
 # Where your models are
 model_dir=/beegfs/desy/user/akorol/projects/PC_version/ddfastshowerml/models
 # Your singularity, created with create_singularity.sh if needed
-singularity_path=./singularity_dir/ubuntu22_latest.sif
-export SINGULARITY_TMPDIR=./singularity_dir/tmp/
-export SINGULARITY_CACHEDIR=./singularity_dir/cache/
+singularity_path=/data/dust/user/dayhallh/physical_recos/singularity/ubuntu22_latest.sif
+export SINGULARITY_TMPDIR=/data/dust/user/dayhallh/physical_recos/singularity/tmp/
+export SINGULARITY_CACHEDIR=/data/dust/user/dayhallh/physical_recos/singularity/cache/
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # store the current directory for later
 starting_dir=$(pwd)
 
-cd /beegfs/desy/user/akorol/projects/PC_version/ddfastshowerml
-singularity instance start -H $PWD --bind /cvmfs:/cvmfs,/beegfs/desy/user/akorol/projects/2_sim_calo/Regular_detector/ILDConfig/StandardConfig/production/lcgeo/v00-16-06:/RegularLcgio/,$steer_dir:/user_steer,$output_dir:/user_output $singularity_path instance1
+#cd /beegfs/desy/user/akorol/projects/PC_version/ddfastshowerml
+
+cd ddfastshowerml
+
+#singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$lcgeo:/RegularLcgio/,$steer_dir:/user_steer,$output_dir:/user_output $singularity_path instance1
+singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$steer_dir:/user_steer,$output_dir:/user_output $singularity_path instance1
 
 
 echo "-- Running DDSim ..."

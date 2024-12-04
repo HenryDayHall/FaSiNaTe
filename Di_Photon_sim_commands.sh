@@ -2,7 +2,7 @@
 
 ## commands to be run in singularity container
 
-source setup_env_stable.sh;
+source /user_steer/setup_env_stable2.sh;
 
 ### check build et al. are up to date and additional source
 #cd build;
