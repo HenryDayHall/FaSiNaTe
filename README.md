@@ -96,7 +96,12 @@ make -j4 install
 exit
 ```
 
-Then stop the singularity instance with `singularity instance stop instance1`.
+Then stop the singularity instance with 
+
+```bash
+singularity instance stop instance1
+```
+
 You should only need to do this build once.
 
 Assuming this build went smoothly, the last stage of setting up is to modify the paths in `run_sim.sh`.
