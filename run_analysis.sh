@@ -13,7 +13,7 @@
 
 # Change these to your files/directories ~~~~~~~~~~~~~~~
 # Folder with ddml_diphoton_analysis repository in it
-steer_dir=/home/dayhallh/training/physical_recos
+repo_dir=/home/dayhallh/training/physical_recos
 # Where to find input and output, will be mounted to /user_data inside the container
 data_dir=/gpfs/dust/maxwell/user/dayhallh/physical_recos
 # Need to pick an input file, this also determines the output file (rec->ana)
@@ -30,11 +30,11 @@ $starting_dir=$PWD
 
 cd /home/dayhallh/training/physical_recos/ddml_diphoton_analysis
 
-singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$steer_dir:/user_steer,$data_dir:/user_data $singularity_path instance1
+singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$repo_dir:/user_repo,$data_dir:/user_data $singularity_path instance1
 
 echo "-- Running Marlin ..."
 
-singularity run instance://instance1 /user_steer/ddml_diphoton_analysis/DDML_DiPhoton_Analysis_commands.sh $input_file -n $n_events
+singularity run instance://instance1 /user_repo/ddml_diphoton_analysis/DDML_DiPhoton_Analysis_commands.sh $input_file -n $n_events
 
 echo "-- Done."
 # stop the instance

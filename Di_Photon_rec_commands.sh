@@ -2,7 +2,7 @@
 
 ## commands to be run in singularity container
 
-source /user_steer/setup_env_stable.sh;
+source /user_repo/setup_env_stable.sh;
 
 ### check build et al. are up to date and additional source
 #cd build;
@@ -48,7 +48,7 @@ if [ ! -d $output_dir ]; then
 fi
 #### Reconstruction for Di-Photon samples E2020
 
-prod_dir=/user_steer/ILDConfig/StandardConfig/production/
+prod_dir=/user_repo/ILDConfig/StandardConfig/production/
 with_gaps=./MarlinStdReco_WITH_GAPS.xml
 
 cp $with_gaps $prod_dir

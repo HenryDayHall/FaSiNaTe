@@ -5,7 +5,7 @@
 #
 #
 
-source /cvmfs/ilc.desy.de/key4hep/releases/ca872f9c34/x86_64-ubuntu22.04-gcc11.3.0-opt/key4hep-stack/2023-09-28-hmnio4/setup.sh
+source /cvmfs/sw.hsf.org/key4hep/setup.sh -r 2024-11-28
 
 echo "Finding torch"
 TORCH_PATH=$(dirname $(python -c 'import torch; print(f"{torch.__file__}")'))

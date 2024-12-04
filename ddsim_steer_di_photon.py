@@ -38,11 +38,7 @@ SIM.enableG4Gun = False
 SIM.enableGun = False
 # InputFiles for simulation
 # .stdhep, .slcio, .HEPEvt, .hepevt, .hepmc, .pairs files are supported
-SIM.inputFiles = (
-    "/beegfs/desy/user/akorol/projects/PC_version/ddfastshowerml/"
-    "Di_Photons_gen_files/Di_Photon_E2020/"
-    "ILD-gen-E2020pdg22maxSep30centralPosZ50-p1.slcio"
-)
+SIM.inputFiles = ""
 # []
 # Macro file to execute for runType 'run' or 'vis'
 SIM.macroFile = None  #

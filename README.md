@@ -3,12 +3,13 @@
 This repository includes tools and guidance to run a full simulation and reconstruction with a model
 that has been created in a similar manner to the [CaloClouds](https://gitlab.desy.de/ftx-sft/generative/point-cloud-diffusion).
 It's an agglomeration of work done by Peter McKeown and Anatolii Korol.
-There are roughly 4 steps;
+There are roughly 5 steps;
 
 1. Compile to model into c++ *TODO*
-2. Simulate events, using the model you compiled, see `run_sim.sh`.
-3. Reconstruct the simulated events, see `run_rec.sh`.
-4. Perform analysis on the events. Only a photon separation analysis is currently described. *TODO*
+2. Create a sample of inputs to start events from, see `run_sam.sh`.
+3. Simulate events, using the model you compiled, see `run_sim.sh`.
+4. Reconstruct the simulated events, see `run_rec.sh`.
+5. Perform analysis on the events. Only a photon separation analysis is currently described. *TODO*
 To use the repository, you must clone recursively, because you need the submodules.
 
 ```bash
@@ -22,11 +23,30 @@ git submodule update --init --recursive
 ```
 
 Below, you can read a bit more about how to run each of these steps and what they are expected to produce.
-The folder this repository has been cloned into is referred to as `steer_dir`.
+The folder this repository has been cloned into is referred to as `repo_dir`.
 
 ## Compiling a model
 
 *TODO*
+
+
+## Making the input sample
+
+Here I'll describe one specific example that Peter wrote for the di-photon separation analysis that
+he and Anatolii were doing.
+You will likely want to change this step, to fit your analysis needs.
+
+A complete example of this can be found in `Di_Photon_Input_slcio.py`.
+Start by making a director to store the input file, then call like;
+
+```bash
+source setup_env_stable.sh
+mkdir /data/dust/user/dayhallh/physical_recos/inputs
+python3 Di_Photon_Input_slcio.py --pdg 22 --maxSep 30 --centralPosZ 50 --Emax 20 --Emin 20 --outdir /data/dust/user/dayhallh/physical_recos/inputs
+```
+
+This should yield a `gen-E2020pdg22maxSep30centralPosZ50-p1.csv` (the log) and, more interestingly, a `ILD-gen-E2020pdg22maxSep30centralPosZ50-p1.slcio`.
+That is the file that is used to specify the position and direction of the incident particles in the simulation.
 
 
 ## Simulating events
@@ -71,20 +91,11 @@ then further down you must modify the paths/variables in this block;
 
 ```bash
 # Change these to your files/directories ~~~~~~~~~~~~~~~
-# With a Di_Photon_sim_commands.sh and your steering file;
-steer_dir=/home/dayhallh/training/physical_recos
-# name of your model, must be a valid model in the steering file
-model_name=cc  # g4 cc bibae
-# Where you want the output to go
-output_dir=/data/dust/user/dayhallh/physical_recos/sim_output
-# Where your models are
-model_dir=/beegfs/desy/user/akorol/projects/PC_version/ddfastshowerml/models
-# Your singularity, created with create_singularity.sh if needed
-singularity_path=/data/dust/user/dayhallh/physical_recos/singularity/ubuntu22_latest.sif
-export SINGULARITY_TMPDIR=/data/dust/user/dayhallh/physical_recos/singularity/tmp/
-export SINGULARITY_CACHEDIR=/data/dust/user/dayhallh/physical_recos/singularity/cache/
+< Stuff to modify >
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ```
 
 Now you can source this file to run the simulation. Or submit it to slurm with `sbatch run_sim.sh`.
 
+
+## Reconstructing events

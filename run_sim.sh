@@ -10,14 +10,17 @@
 ##SBATCH --nodelist="max-wn063"         # you can select specific nodes, if necessary
 
 # Change these to your files/directories ~~~~~~~~~~~~~~~
-# With a Di_Photon_sim_commands.sh and your steering file;
-steer_dir=/home/dayhallh/training/physical_recos
+# directory of the analysis_chain repository
+repo_dir=/home/dayhallh/training/physical_recos
 # name of your model, must be a valid model in the steering file
 model_name=cc  # g4 cc bibae
-# Where you want the output to go
-output_dir=/data/dust/user/dayhallh/physical_recos/sim_output
-# Where your models are
-model_dir=/beegfs/desy/user/akorol/projects/PC_version/ddfastshowerml/models
+# Where your models are, some will have been dowloaded when you compiled ddfastshowerml
+# or maybe you have your own you want to test.
+model_dir=/home/dayhallh/training/physical_recos/ddfastshowerml/models
+# Where the input is found, and where the output will be left
+data_dir=/data/dust/user/dayhallh/physical_recos/
+# Where to find the input slcio with incident particles in the data_dir
+input_file=inputs/ILD-gen-E2020pdg22maxSep30centralPosZ50-p1.slcio
 # Your singularity, created with create_singularity.sh if needed
 singularity_path=/data/dust/user/dayhallh/physical_recos/singularity/ubuntu22_latest.sif
 export SINGULARITY_TMPDIR=/data/dust/user/dayhallh/physical_recos/singularity/tmp/
@@ -31,15 +34,13 @@ starting_dir=$(pwd)
 
 cd ddfastshowerml
 
-#singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$lcgeo:/RegularLcgio/,$steer_dir:/user_steer,$output_dir:/user_output $singularity_path instance1
-singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$steer_dir:/user_steer,$output_dir:/user_output $singularity_path instance1
+#singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$lcgeo:/RegularLcgio/,$repo_dir:/user_repo,$output_dir:/user_output $singularity_path instance1
+singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$repo_dir:/user_repo,$data_dir:/user_data $singularity_path instance1
 
 
 echo "-- Running DDSim ..."
-echo "Steering directory: $steer_dir"
 
-# singularity run instance://instance1 /user_steer/CaloClouds_Di_Photon_sim_commands.sh
-singularity exec instance://instance1 /user_steer/Di_Photon_sim_commands.sh $model_dir $model_name
+singularity exec instance://instance1 /user_repo/Di_Photon_sim_commands.sh $model_dir $model_name $input_file
 
 echo "-- Done."
 # stop the instance

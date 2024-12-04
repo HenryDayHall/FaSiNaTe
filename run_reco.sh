@@ -12,7 +12,7 @@
 
 # Change these to your files/directories ~~~~~~~~~~~~~~~
 # With a Di_Photon_rec_commands.sh and a ddfastshowerml repository and setup_stable_env.sh in the same directory
-steer_dir=/home/dayhallh/training/physical_recos
+repo_dir=/home/dayhallh/training/physical_recos
 # Where to find input and output, will be mounted to /user_data inside the container
 data_dir=/data/dust/user/dayhallh/physical_recos
 # Need to pick an input file, this also determines the output file (sim->rec)
@@ -29,12 +29,12 @@ export SINGULARITY_CACHEDIR=./singularity_dir/cache/
 starting_dir=$(pwd)
 
 
-singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$steer_dir:/user_steer,$data_dir:/user_data $singularity_path instance1
+singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$repo_dir:/user_repo,$data_dir:/user_data $singularity_path instance1
 
 
 echo "-- Running Marlin ..."
 
-singularity run instance://instance1 /user_steer/Di_Photon_rec_commands.sh $input_file $detector_model
+singularity run instance://instance1 /user_repo/Di_Photon_rec_commands.sh $input_file $detector_model
 
 echo "-- Done."
 # stop the instance
