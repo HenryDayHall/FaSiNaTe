@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ## commands to be run in singularity container
-source /user_repo/setup_env_stable.sh;
+source /user_repo/setup_env_stable2.sh;
 
 source install/bin/thisDDML.sh;
 cd ./scripts/;
@@ -33,5 +33,9 @@ if [ ! -f $input_file ]; then
     fi
 fi
 echo "Starting the simulation from the input file: $input_file";
+
+output_file_base=$(basename $input_file);
+output_file_dir=/user_data/sim_output/$2_output_files/;
+output_file=$output_file_dir$output_file_base;
 # run the simulation
-ddsim --steeringFile /user_repo/ddsim_steer_di_photon.py --compactFile $lcgeo_DIR/ILD/compact/ILD_l5_o1_v02/ILD_l5_o1_v02.xml --inputFiles $input_file;
+ddsim --steeringFile /user_repo/ddsim_steer_di_photon.py --compactFile $lcgeo_DIR/ILD/compact/ILD_l5_o1_v02/ILD_l5_o1_v02.xml --inputFiles $input_file --outputFile $output_file;

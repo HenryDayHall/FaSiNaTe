@@ -9,11 +9,12 @@ There are roughly 5 steps;
 2. Create a sample of inputs to start events from, see `run_sam.sh`.
 3. Simulate events, using the model you compiled, see `run_sim.sh`.
 4. Reconstruct the simulated events, see `run_rec.sh`.
-5. Perform analysis on the events. Only a photon separation analysis is currently described. *TODO*
+5. Perform analysis on the events. Only a photon separation analysis is currently described.
+
 To use the repository, you must clone recursively, because you need the submodules.
 
 ```bash
-git clone --recurse-submodules TODO
+git clone --recurse-submodules https://gitlab.desy.de/ftx-sft/generative/analysis_chain.git
 ```
 
 Or if you have already cloned the repository, from inside the repository do
@@ -96,6 +97,25 @@ then further down you must modify the paths/variables in this block;
 ```
 
 Now you can source this file to run the simulation. Or submit it to slurm with `sbatch run_sim.sh`.
+It will produce output under `sim_output` in the data directory you specified in `run_sim.sh`.
 
 
 ## Reconstructing events
+
+The simulated events need to be parsed by standard reconstructions algorithms.
+This can be controlled from the `run_rec.sh` script, and has fewer dependances than simulation.
+
+As with `run_sim.sh`, open `run_reco.sh` and fix the variables in the upper block to match your
+environment.
+Source this file to run the reconstruction, or submit it to slurm with `sbatch run_rec.sh`.
+
+It will produce output under `rec_output` in the data directory you specified in `run_rec.sh`.
+
+## Analysing the events
+
+The output of the reconstruction is a `.csv` file, and should be fairly intuitive.
+For the default photon separation reconstruction presented here, a plotting script is included.
+The script is called `Di_Photon_Analysis_Plots.py`.
+
+It's use is fairly rudimentary, and you will have to edit the paths used to find the `.csv` files produced by the output to match your environment.
+This plotting script is not flexible and is indented more as inspiration, than for actual use.

@@ -11,7 +11,7 @@
 
 
 # Change these to your files/directories ~~~~~~~~~~~~~~~
-# With a Di_Photon_rec_commands.sh and a ddfastshowerml repository and setup_stable_env.sh in the same directory
+# directory of the analysis_chain repository
 repo_dir=/home/dayhallh/training/physical_recos
 # Where to find input and output, will be mounted to /user_data inside the container
 data_dir=/data/dust/user/dayhallh/physical_recos
@@ -20,9 +20,9 @@ input_file=sim_output/di_photons_g4_output_files/ild-sim-e2020pdg22maxsep30centr
 # if desired, pick a detector model, default is ILD_l5_o1_v02
 # detector_model=ILD_l5_o1_v02
 # Your singularity, created with create_singularity.sh if needed
-singularity_path=./singularity_dir/ubuntu22_latest.sif
-export SINGULARITY_TMPDIR=./singularity_dir/tmp/
-export SINGULARITY_CACHEDIR=./singularity_dir/cache/
+singularity_path=/data/dust/user/dayhallh/physical_recos/singularity/ubuntu22_latest.sif
+export SINGULARITY_TMPDIR=/data/dust/user/dayhallh/physical_recos/singularity/tmp/
+export SINGULARITY_CACHEDIR=/data/dust/user/dayhallh/physical_recos/singularity/cache/
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # store the current directory for later

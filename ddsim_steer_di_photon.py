@@ -48,11 +48,8 @@ SIM.numberOfEvents = 5000  # 100
 # SIM.outputFile = "dummyOutput_edm4hep.root" ##"dummyOutput.slcio"
 
 # original seed path
-# This line should differ between versions
-SIM.outputFile = (
-    f"/user_output/di_photons_{sim_model}_output_files/"
-    "ild-sim-e2020pdg22maxsep30centralposz50-p1-seed1.slcio"
-)
+# This will be set with a cli argument
+SIM.outputFile = ""
 
 # second seed path
 # sim.outputfile = ('/beegfs/desy/user/mckeownp/ddml/pc_version/ddfastshowerml/'
