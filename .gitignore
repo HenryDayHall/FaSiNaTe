@@ -5,4 +5,4 @@ singularity_dir/
 singularity_dir
 build/
 plots/
-.bashhistory
+.bash_history
