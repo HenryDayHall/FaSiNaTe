@@ -37,7 +37,8 @@ output_file_base=$(basename $input_file);
 output_file_dir=/user_data/sim_output/$2_output_files/;
 mkdir -p $output_file_dir;
 
-output_file=$output_file_dir$output_file_base;
+current_datetime=$(date +"%Y%m%d_%H%M%S")
+output_file=${output_file_dir}${DDSIM_MODEL}_${current_datetime}.slcio;
 
 # run the simulation
 ddsim --steeringFile /user_repo/ddsim_steer_di_photon.py --compactFile $lcgeo_DIR/ILD/compact/ILD_l5_o1_v02/ILD_l5_o1_v02.xml --inputFiles $input_file --outputFile $output_file;

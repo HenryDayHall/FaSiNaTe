@@ -54,6 +54,5 @@ with_gaps=./MarlinStdReco_WITH_GAPS.xml
 cp $with_gaps $prod_dir
 cd $prod_dir
 
-echo Marlin $with_gaps --constant.DetectorModel=$detector_model --constant.OutputBaseName=$output_base --global.LCIOInputFiles=$input_file --constant.RunBeamCalReco=false;
-Marlin $with_gaps --constant.DetectorModel=$detector_model --constant.OutputBaseName=$output_base --global.LCIOInputFiles=$input_file --constant.RunBeamCalReco=false;
-
+echo Marlin $with_gaps --constant.DetectorModel=$detector_model --constant.OutputBaseName=/user_data/$output_base --global.LCIOInputFiles=/user_data/$input_file --constant.RunBeamCalReco=false;
+Marlin $with_gaps --constant.DetectorModel=$detector_model --constant.OutputBaseName=/user_data/$output_base --global.LCIOInputFiles=/user_data/$input_file --constant.RunBeamCalReco=false;
