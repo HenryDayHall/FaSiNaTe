@@ -9,9 +9,9 @@ cd ./scripts/;
 export OMP_NUM_THREADS=1;
 
 # check we have enough arguments
-if [ "$#" -ne 2 ]; then
+if [ "$#" -ne 3 ]; then
     echo "Illegal number of parameters";
-    echo "Usage: ./Di_Photon_sim_commands.sh <model name> <input file>";
+    echo "Usage: ./Di_Photon_sim_commands.sh <model name> <input file> <current_datetime>";
     exit 1;
 fi
 export DDSIM_MODEL_FOLDER=/model_dir
@@ -37,7 +37,7 @@ output_file_base=$(basename $input_file);
 output_file_dir=/user_data/output/$2/;
 mkdir -p $output_file_dir;
 
-current_datetime=$(date +"%Y%m%d_%H%M%S")
+current_datetime=$3
 output_file=${output_file_dir}${DDSIM_MODEL}_${current_datetime}_SIM.slcio;
 
 # run the simulation
@@ -56,5 +56,5 @@ Marlin $prod_dir/MarlinStdReco_WITH_GAPS.xml --constant.DetectorModel=ILD_l5_o1_
 cd /user_repo/ddml_diphoton_analysis
 
 # write parameters for the analysis
-output_file=/user_repo/tmp_ddml_diphoton_params
+output_file=/user_repo/tmp_ddml_diphoton_params_${current_datetime}
 echo "${output_base_name}_REC.slcio ${output_base_name}_Analysis.csv" > $output_file

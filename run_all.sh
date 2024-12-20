@@ -9,6 +9,8 @@
 ##SBATCH --mail-type=FAIL
 ##SBATCH --nodelist="max-wn063"         # you can select specific nodes, if necessary
 
+current_datetime=$(date +"%Y%m%d_%H%M%S")
+
 # Change these to your files/directories ~~~~~~~~~~~~~~~
 # directory of the analysis_chain repository
 repo_dir=/data/dust/user/akorol/projects/analysis_chain
@@ -40,14 +42,14 @@ cd ddfastshowerml
 singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$repo_dir:/user_repo,$data_dir:/user_data,$model_dir:/model_dir $singularity_path instance1
 
 
-singularity exec instance://instance1 /user_repo/Di_Photon_full_chain_commands.sh $model_name $input_file
+singularity exec instance://instance1 /user_repo/Di_Photon_full_chain_commands.sh $model_name $input_file $current_datetime
 # stop the instance
 singularity instance stop instance1
 
 
 cd $starting_dir
-read input_file analysis_file < tmp_ddml_diphoton_params
-rm tmp_ddml_diphoton_params
+read input_file analysis_file < tmp_ddml_diphoton_params_${current_datetime}
+rm tmp_ddml_diphoton_params_${current_datetime}
 
 cd ddml_diphoton_analysis
 singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$repo_dir:/user_repo,$data_dir:/user_data $singularity_path instance2
