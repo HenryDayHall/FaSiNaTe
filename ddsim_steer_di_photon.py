@@ -43,7 +43,7 @@ SIM.inputFiles = ""
 # Macro file to execute for runType 'run' or 'vis'
 SIM.macroFile = None  #
 # number of events to simulate, used in batch mode
-SIM.numberOfEvents = 5000  # 100
+SIM.numberOfEvents = 1500  # 100
 # Outputfile from the simulation,only lcio output is supported
 # SIM.outputFile = "dummyOutput_edm4hep.root" ##"dummyOutput.slcio"
 
@@ -333,7 +333,8 @@ SIM.random.luxury = 1
 SIM.random.replace_gRandom = True
 
 # Original seed
-SIM.random.seed = "12345"  # None
+# SIM.random.seed = "12345"  # None
+SIM.random.seed = None
 
 # Second seed
 # SIM.random.seed = '72943'
@@ -485,7 +486,7 @@ def aiDanceTorch(kernel):
     elif sim_model == "cc":
         ml_file = os.path.join(model_folder, "CC3_SF_2A.pt")
         ml_model = "CaloCloudsTwoAngleModelPolyhedraBarrelTorchModel/BarrelModelTorch"
-        ml_model_1 = "CaloCloudsTwoAngleModelPolyhedraBarrelTorchModel/EndcapModelTorch"
+        ml_model_1 = "CaloCloudsTwoAngleModelEndcapTorchModel/EndcapModelTorch"
         ml_correct_angles = False
     else:
         ml_file = os.path.join(model_folder, "francisca_gan_jit.pt")
