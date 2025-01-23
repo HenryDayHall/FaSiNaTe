@@ -11,14 +11,14 @@ import os
 
 print("This is the script at; /home/dayhallh/training/physical_recos")
 # Get the model to use ~~~~~~~~~~~~~~~~~~~~~~~~
-sim_model = os.environ.get("DDSIM_MODEL").lower()
+sim_model = os.environ.get("DDSIM_MODEL").lower().strip()
 # convert to the short name
-sim_model = {"geant4": "g4", "cc": "cc"}.get(sim_model, sim_model)
-known_models = ["g4", "cc", "bibae"]
+sim_model = {"geant4": "g4", "caloclouds": "cc"}.get(sim_model, sim_model)
+known_models = ["g4", "cc", "bibae", "cco", "cca4", "cca2", "cca10", "cco10", "cciio2", "cciio10", "cciia2", "cciia10"]
 if sim_model not in known_models:
     print(
         "Please set the DDSIM_MODEL environment variable to one of "
-        + ", ".join(known_models)
+        + ", ".join(known_models) + ". Cannot process " + os.environ.get("DDSIM_MODEL")
     )
     exit(1)
 print(f"Using model: {sim_model}")
@@ -43,7 +43,8 @@ SIM.inputFiles = ""
 # Macro file to execute for runType 'run' or 'vis'
 SIM.macroFile = None  #
 # number of events to simulate, used in batch mode
-SIM.numberOfEvents = 1500  # 100
+# SIM.numberOfEvents = 10_000
+SIM.numberOfEvents = 10_000
 # Outputfile from the simulation,only lcio output is supported
 # SIM.outputFile = "dummyOutput_edm4hep.root" ##"dummyOutput.slcio"
 
@@ -333,8 +334,8 @@ SIM.random.luxury = 1
 SIM.random.replace_gRandom = True
 
 # Original seed
-# SIM.random.seed = "12345"  # None
-SIM.random.seed = None
+#SIM.random.seed = None
+SIM.random.seed = "12345"  # None
 
 # Second seed
 # SIM.random.seed = '72943'
@@ -455,7 +456,7 @@ def aiDanceTorch(kernel):
     import os
 
     sim_model = os.environ.get("DDSIM_MODEL").lower()
-    sim_model = {"geant4": "g4", "cc": "cc"}.get(sim_model, sim_model)
+    sim_model = {"geant4": "g4", "CC": "cc"}.get(sim_model, sim_model)
     model_folder = os.environ.get("DDSIM_MODEL_FOLDER")
 
     ild = True
@@ -483,8 +484,10 @@ def aiDanceTorch(kernel):
         )
         ml_model_1 = "RegularGridTwoAngleBIBAEModelEndcapTorchModel/EndcapModelTorch"
         ml_correct_angles = False
-    elif sim_model == "cc":
-        ml_file = os.path.join(model_folder, "CC3_SF_2A.pt")
+    elif sim_model.startswith("cc"):
+        ml_file_end = {"cc":"CC3_SF_2A", "cco": "CC3_SF_O", "cca2": "CC3_SF_A2", "cca4": "CC3_SF_A4", "cca10": "CC3_SF_A10", "cco10": "CC3_SF_O10", "cciio2": "CC3_SF_IIO2", "cciio10": "CC3_SF_II_O10", "cciia2": "CC3_SF_II_A2", "cciia10": "CC3_SF_II_A10"}
+        ml_file = os.path.join(model_folder, ml_file_end.get(sim_model) + ".pt")
+
         ml_model = "CaloCloudsTwoAngleModelPolyhedraBarrelTorchModel/BarrelModelTorch"
         ml_model_1 = "CaloCloudsTwoAngleModelEndcapTorchModel/EndcapModelTorch"
         ml_correct_angles = False

@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --time 2-24:05:00
+#SBATCH --time 2-00:00:00
 #SBATCH --nodes 1
 #SBATCH --partition maxcpu
 #SBATCH --job-name sim
 #SBATCH --constraint='EPYC&7402' 
-#SBATCH --output=/gpfs/dust/maxwell/user/dayhallh/physical_recos/job_logs/sim_%j.out
-#SBATCH --error=/gpfs/dust/maxwell/user/dayhallh/physical_recos/job_logs/sim_%j.err
+#SBATCH --output=/data/dust/user/dayhallh/physical_recos/job_logs/sim_%j.out
+#SBATCH --error=/data/dust/user/dayhallh/physical_recos/job_logs/sim_%j.err
 #SBATCH --mail-type=FAIL
 ##SBATCH --nodelist="max-wn063"         # you can select specific nodes, if necessary
 
@@ -13,7 +13,7 @@
 # directory of the analysis_chain repository
 repo_dir=/home/dayhallh/training/physical_recos
 # name of your model, must be a valid model in the steering file
-model_name=cc  # g4 cc bibae
+model_name=cciiO10  # g4 cc bibae
 # Where your models are, some will have been dowloaded when you compiled ddfastshowerml
 # or maybe you have your own you want to test.
 model_dir=/home/dayhallh/training/physical_recos/ddfastshowerml/models

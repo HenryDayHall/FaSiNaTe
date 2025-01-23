@@ -20,7 +20,7 @@ from pyro.nn import ConditionalDenseNN, DenseNN, PyroModule, PyroSample
 # Our libraries
 os.sys.path.append("../point-cloud-diffusion/")
 from configs import Configs
-from pointcloud.config_varients import caloclouds_3_simple_shower
+from pointcloud.config_varients import caloclouds_3_simple_shower, caloclouds_3
 from pointcloud.models.custom_pyro import ConditionalAffineCouplingTanH
 from pointcloud.models.shower_flow import compile_HybridTanH_model
 from pointcloud.models import shower_flow
@@ -36,8 +36,11 @@ out_path = "/home/dayhallh/training/physical_recos/inference_out"
 if not os.path.exists(out_path):
     os.makedirs(out_path)
 
+plotting = True
 fig_num = 0
 title = ""
+
+
 def save_fig(xlabel="", ylabel=""):
     global fig_num
     global title
@@ -244,6 +247,10 @@ def get_showerflow_1():
         "/data/dust/user/akorol/maxwell.merged/logs/point-clouds-angular"
         "/SF_new/angular_ShowerFlow_best.pth"
     )
+    model_path = (
+        "/data/dust/user/dayhallh/point-cloud-diffusion-data/showerFlow/sim-E1261AT600AP180-180/"
+        "ShowerFlow_original_nb10_inputs36893488147419103231_best.pth"
+    )
 
     return flow_model, flow_transforms, model_path
 
@@ -257,31 +264,42 @@ def get_showerflow_2():
     # shower_flow_num_blocks = 2
 
     configs = caloclouds_3_simple_shower.Configs()
+    # configs = caloclouds_3.Configs()
     # only if you are on a machine without CUDA
     configs.device = "cpu"
     # point to your events, because then functions that check the metadata check the right metadata
     configs.dataset_path = "/data/dust/user/akorol/data/AngularShowers_RegularDetector/hdf5_for_CC/sim-E1261AT600AP180-180_file_{}slcio.hdf5"
     configs.n_dataset_files = 88
+    configs.shower_flow_num_blocks = 10
+    configs.shower_flow_fixed_input_norms = True
     # This lets you algorithmically get the input and conditioning dimensions. Then if we change them (taking out cog_z for example) you don't need to change other code.
     cond_mask = showerflow_utils.get_cond_mask(configs)
     input_mask = showerflow_utils.get_input_mask(configs)
+    print(np.sum(input_mask))
     # The version is the operations inside a block, you can also see it in the saved model name
-    version = "alt1"
+    version = "original"
     constructor = shower_flow.versions_dict[version]
     # Get ourselves an untrained model with the right architecture
     flow_model, flow_distrubtion, flow_transforms = constructor(
-        num_blocks=2,
+        num_blocks=configs.shower_flow_num_blocks,
         num_inputs=np.sum(input_mask),
         num_cond_inputs=np.sum(cond_mask),
         device=configs.device,
     )
     # load the weights
     model_path = (
-        "/data/dust/user/dayhallh/point-cloud-diffusion-data/showerFlow/sim-E1261AT600AP180-180/"
-        "ShowerFlow_alt1_nb2_"  # block version and number of blocks
-        "inputs8070450532247928831_"  # input mask representaiton
-        "fnorms_best.pth"  # fnorms = Not normalising by layer with highest value, etc.
+       "/data/dust/user/dayhallh/point-cloud-diffusion-data/showerFlow/sim-E1261AT600AP180-180/"
+       "ShowerFlow_original_nb10_"  # block version and number of blocks
+       "inputs8070450532247928831_"  # input mask representaiton
+       "fnorms_best.pth"  # fnorms = Not normalising by layer with highest value, etc.
     )
+    #model_path = (
+    #    "/data/dust/user/dayhallh/point-cloud-diffusion-data/showerFlow/sim-E1261AT600AP180-180/"
+    #    "ShowerFlow_original_nb10_"
+    #    "inputs8070450532247928831_"  # input mask representaiton
+    #    "fnorms_best.pth"  # fnorms = Not normalising by layer with highest value, etc.
+    #)
+    assert os.path.exists(model_path), f"Model path {model_path} does not exist"
 
     return flow_model, flow_transforms, model_path
 
@@ -292,11 +310,11 @@ class Inferrer(nn.Module):
 
         self.energy_max = 127  # max energy of the dataset in GeV
         #         self.max_num_points = 8150 # 8150 max num points to match occupansy
-        self.max_num_points = 7864
+        self.max_num_points = 7864  # n_points_rescale
         self.scale_factor = 0.85
         #         self.max_num_points = 6000
 
-        self.vis_energy_max = 3.4 * 1000  # in MeV
+        self.vis_energy_max = 3.4 * 1000  # vis_energy_rescale in MeV
         self.scale_factor = (
             1  # need to extend to energy and angle depended scale factor
         )
@@ -342,7 +360,9 @@ class Inferrer(nn.Module):
         )
         #         self.layer_bottom_pos = self.layer_bottom_pos - self.EIR
         self.cell_thickness = 0.5250244140625  # in mm
-        self.z_positions = self.layer_bottom_pos + self.cell_thickness / 2
+        # TODO this must be 0 to 30
+        # self.z_positions = self.layer_bottom_pos + self.cell_thickness / 2
+        self.z_positions = torch.arange(30, dtype=torch.float)
         self.dist_to_layers = self.layer_bottom_pos + self.cell_thickness / 2
 
         #         self.z_positions = torch.arange(30, dtype=torch.float)
@@ -411,19 +431,41 @@ class Inferrer(nn.Module):
 
         cond_feats = torch.cat([e, p], -1)
 
-        cog_x = samples[:, 0] * self.std_cog[0] + self.mean_cog[0]
-        cog_y = samples[:, 1] * self.std_cog[1] + self.mean_cog[1]
+        # for 62 inputs  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        cog_x_idx = 0
+        cog_y_idx = 1
+        # for 65 inputs  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        # cog_x_idx = 2
+        # cog_y_idx = 3
+        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+        cog_x = samples[:, cog_x_idx] * self.std_cog[0] + self.mean_cog[0]
+        cog_y = samples[:, cog_y_idx] * self.std_cog[1] + self.mean_cog[1]
+
+        # for 62 inputs  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         clusters_per_layer_gen = (
-            torch.clip(samples[:, 2:32], 0, None)
-            * self.max_num_points
-            / 30
-            * self.scale_factor
+               torch.clip(samples[:, -60:-30], 0, None)
+           * self.max_num_points
+           / 30
         ).int()  #  B,30
         e_per_layer_gen = (
-            torch.clip(samples[:, 32:], 0, None) * self.vis_energy_max / 30
+               torch.clip(samples[:, -30:], 0, None) * self.vis_energy_max / 30
         )
-
+        # for 65 inputs  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        # total_clusters = torch.clip(
+        #     samples[:, 0] * self.max_num_points * self.scale_factor, 0, self.max_num_points
+        # )
+        # clusters_per_layer_gen = torch.clip(samples[:, -60:-30], 0, 1)
+        # clusters_per_layer_gen = (
+        #     clusters_per_layer_gen * total_clusters / clusters_per_layer_gen.sum(-1)
+        # ).int()
+        # gev_to_mev = 1000
+        # total_energy = (
+        #     torch.clip(samples[:, 1], 0, None) * gev_to_mev * self.vis_energy_max
+        # )
+        # e_per_layer_gen = torch.clip(samples[:, -30:], 0, None)
+        # e_per_layer_gen = e_per_layer_gen * total_energy / e_per_layer_gen.sum(-1)
+        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         num_clusters = (clusters_per_layer_gen.sum() * self.scale_factor).int()
 
         with torch.no_grad():
@@ -830,21 +872,26 @@ def get_distilled_1():
         save_fig("t", "sigma")
 
     checkpoint_path = os.path.join(
-        cfg.logdir,
-        "CD_ClusteredDS_Pretrained2024_03_26__23_13_09",
-        "ckpt_0.000000_1210000.pt",
+            #"/data/dust/user/dayhallh/point-cloud-diffusion-logs/sim-E1261AT600AP180-180/Anatoliis_cc.pt"
+            "/data/dust/user/dayhallh/point-cloud-diffusion-logs/sim-E1261AT600AP180-180/Anatoliis_cc_2.pt"
+        #cfg.logdir,
+        #"CD_ClusteredDS_Pretrained2024_03_26__23_13_09",
+        #"ckpt_0.000000_1210000.pt",
+        # "CD_ClusteredDS_Pretrained2024_03_27__00_23_43",
+        # "ckpt_0.000000_2140000.pt",
     )
 
     return CaloClouds_2, Denoiser, checkpoint_path
 
 
-sf_getters = [get_showerflow_1, get_showerflow_2]
-df_getters = [get_undistilled_1, get_distilled_1]
+# sf_getters = [get_showerflow_1, get_showerflow_2]
+sf_getters = [get_showerflow_2]
+df_getters = [get_distilled_1]
 for sf, sf_getter in enumerate(sf_getters):
 
-    flow_model, flow_transforms, sf_model_path = getter()
+    flow_model, flow_transforms, sf_model_path = sf_getter()
 
-    loaded = torch.load(sf_model_path, map_location=configs.device)
+    loaded = torch.load(sf_model_path, map_location=cfg.device)
     flow_model.load_state_dict(loaded["model"])
 
     flow_model.eval()
@@ -854,6 +901,7 @@ for sf, sf_getter in enumerate(sf_getters):
     direction = torch.FloatTensor(1, 3).uniform_(0, 1)
     context = torch.cat((cond_E, direction), 1)
     num_inputs = 62
+    # num_inputs = 65
 
     with torch.no_grad():
         pyro_trace = poutine.trace(Flow_run(flow_transforms, context)).get_trace()

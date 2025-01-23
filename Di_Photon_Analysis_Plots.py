@@ -1,59 +1,337 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-import os
+
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib as mpl
-from matplotlib.ticker import MultipleLocator
-
 import pandas as pd
+import os
+import string
+
+fig_num = 0
+title = ""
+out_path = "./analysis_plots"
+if not os.path.exists(out_path):
+    os.makedirs(out_path)
 
 
-# Geant4 input paths
-paths = {}
-
-# these are on the straight line (sep to 30 mm)
-paths["G4"] = [
-    f"/gpfs/dust/ilc/user/mckeownp/DiPhotonAnalysis/DDML_DiPhoton_Analysis/output/G4_Di_Photon_E2020_SEED{i}.csv"
-    for i in range(1, 4)
-]
-
-# 1, 2, 3
-path_format = "/home/akorol/projects_gpfs/PC_version/ddml_diphoton_analysis/output/CD_ClusteredDS_Pretrained2024_03_27__00_23_43_ckpt_0.000000_2150000_ShowerFlow_alt1_nb2_calib_cog_seed{}_REC.csv"
-# 1
-path_format = "/gpfs/dust/maxwell/user/dayhallh/physical_recos/ana_output/di_photons_g4_output_files/ild-ana-e2020pdg22maxsep30centralposz50-p1-seed{}_ILD_l5_o1_v02_REC_diPhotonAnalysis.csv"
-paths["CaloClouds"] = [
-    path_format.format(1) for i in range(1, 4)
-]
-
-#paths["L2LFlows"] = [
-#    f"/home/akorol/projects_gpfs/PC_version/ddml_diphoton_analysis/output/BiBAE_TwoAngles_seed{i}_REC.csv"
-#    for i in range(1, 4)
-#]
-#
-#paths["L2LFlowsx9"] = [
-#    f"/home/akorol/projects_gpfs/PC_version/ddml_diphoton_analysis/output/L2LFlowsx9_Di_Photon_E2020_SEED{i}.csv"
-#    for i in range(1, 4)
-#]
-
-models = list(paths.keys())  # ensure fixed order
-# Create Pandas dataframes
+def save_fig(xlabel="", ylabel=""):
+    global fig_num
+    global title
+    if title:
+        safe_title = title.translate(dict(zip(string.punctuation, ""))).replace(
+            " ", "_"
+        )
+        save_name = f"{fig_num}_{safe_title}.png"
+    else:
+        save_name = f"{fig_num}.png"
+    if xlabel:
+        plt.xlabel(xlabel)
+    if ylabel:
+        plt.ylabel(ylabel)
+    plt.savefig(os.path.join(out_path, save_name))
+    plt.close()
+    fig_num += 1
 
 
-# Geant4
-dataframes = {name: [pd.read_csv(path) for path in paths[name]] for name in models}
-
-print("The keys of the first G4 dataframe are: ")
-print(dataframes["G4"][0].keys())
+mckeownp_base_path = "/data/dust/user/mckeownp/af-ilc.merged/DiPhotonAnalysis/DDML_DiPhoton_Analysis/output"
+akorol_base_path_2 = "/data/dust/user/akorol/projects/analysis_chain/output"
+henry_base_path = "/data/dust/user/dayhallh/physical_recos/rec_output"
 
 
-# Functions- separate to other notebook
-def ratio_correlated_error(
+paths = {
+    "30_mm": {
+        "G4": {
+            #"SEED1": f"{mckeownp_base_path}/G4_Di_Photon_E2020_SEED1.csv",
+            #"SEED2": f"{mckeownp_base_path}/G4_Di_Photon_E2020_SEED2.csv",
+            #"SEED3": f"{mckeownp_base_path}/G4_Di_Photon_E2020_SEED3.csv",
+            # "SEED1": f"{henry_base_path}/g4_20250112_200139_ILD_l5_o1_v02_REC_diPhotonAnalysis.csv",
+            "SEED1": f"{henry_base_path}/g4_output_files/g4_20250113_170817_ILD_l5_o1_v02_REC_diPhotonAnalysis.csv",
+        },
+        #"G4O": {
+        #    "SEED1": f"{henry_base_path}/g4_output_files/g4_20250113_170817_ILD_l5_o1_v02_REC_diPhotonAnalysis.csv",
+        #    },
+
+        "G4_RB": {
+            "SEED2": f"{mckeownp_base_path}/G4_Di_Photon_E2020_SEED2.csv",
+        },
+        "CaloClouds_clone": {
+            "SEED1": f"{henry_base_path}/ccO_output_files/ccO_20250111_064152_ILD_l5_o1_v02_REC_diPhotonAnalysis.csv",
+        },
+        "CaloClouds_A2": {
+            #"SEED1": f"{henry_base_path}/ccA2_output_files/ccA2_20250111_050025_ILD_l5_o1_v02_REC_diPhotonAnalysis.csv",
+            "SEED1": f"{henry_base_path}/../output/ILD-gen-E2020pdg22maxSep30centralPosZ50-p1/cciiA2_20250122_180621_Analysis.csv"
+        },
+        "CaloClouds_A4": {
+            "SEED1": f"{henry_base_path}/ccA4_output_files/ccA4_20250110_180746_ILD_l5_o1_v02_REC_diPhotonAnalysis.csv",
+        },
+        "CaloClouds_A10": {
+            #"SEED1": f"{henry_base_path}/ccA10_output_files/ccA10_20250114_210118_ILD_l5_o1_v02_REC_diPhotonAnalysis.csv",
+            "SEED1": f"{henry_base_path}/../output/ILD-gen-E2020pdg22maxSep30centralPosZ50-p1/cciiA10_20250122_210243_Analysis.csv"
+        },
+        "CaloClouds_O10": {
+            "SEED1": f"{henry_base_path}/../output/ILD-gen-E2020pdg22maxSep30centralPosZ50-p1/cciiO10_20250122_210258_Analysis.csv"
+
+        },
+
+        "BiBAE": {},
+        "L2LFlows": {
+            "SEED1": f"{mckeownp_base_path}/L2LFlows_Di_Photon_E2020_SEED1.csv",
+            "SEED2": f"{mckeownp_base_path}/L2LFlows_Di_Photon_E2020_SEED2.csv",
+            "SEED3": f"{mckeownp_base_path}/L2LFlows_Di_Photon_E2020_SEED3.csv",
+        },
+        "L2LFlows_x9": {
+            "SEED1": f"{mckeownp_base_path}/L2LFlowsx9_Di_Photon_E2020_SEED1.csv",
+            "SEED2": f"{mckeownp_base_path}/L2LFlowsx9_Di_Photon_E2020_SEED2.csv",
+            "SEED3": f"{mckeownp_base_path}/L2LFlowsx9_Di_Photon_E2020_SEED3.csv",
+        },
+    },
+    "90_mm": {
+        "G4": {
+            "SEED1": f"{akorol_base_path_2}/ILD-gen-E2020pdg22maxSep90centralPosZ70-p1.slcio/g4_20250108_221926_Analysis.csv"
+        },
+        "CaloClouds": {
+            "SEED1": f"{akorol_base_path_2}/ILD-gen-E2020pdg22maxSep90centralPosZ70-p1.slcio/cc_20250113_113930_Analysis.csv"
+        },
+        "BiBAE": {
+            "SEED1": f"{akorol_base_path_2}/ILD-gen-E2020pdg22maxSep90centralPosZ70-p1.slcio/cc_20250108_204626_Analysis.csv",  # CaloClouds3_CD_small_2025_01_07__08_26_02_ckpt_6135000.pt CM
+        },
+        "L2LFlows": {},
+        "L2LFlows_x9": {},
+        "G4_RB": {},
+    },
+    "90_mm_endcap": {
+        "G4": {
+            "SEED1": f"{akorol_base_path_2}/ILD-endcap-angled-gen-E2020pdg22maxSep90centralXYZ-0-740-2411.7_p1.slcio/g4_20250110_190531_Analysis.csv",
+        },
+        "CaloClouds": {
+            "SEED1": f"{akorol_base_path_2}/ILD-endcap-angled-gen-E2020pdg22maxSep90centralXYZ-0-740-2411.7_p1.slcio/cc_20250110_191738_Analysis.csv",  # 20 steps small
+        },
+        "BiBAE": {
+            "SEED1": f"{akorol_base_path_2}/ILD-endcap-angled-gen-E2020pdg22maxSep90centralXYZ-0-740-2411.7_p1.slcio/bibae_20250110_191808_Analysis.csv",
+        },
+    },
+}
+
+
+linestyle = {
+    "G4": "-",
+    "G4_RB": "--",
+    "CaloClouds": "--",
+    "CaloClouds_clone": "--",
+    "CaloClouds_A2": "--",
+    "CaloClouds_A4": "--",
+    "CaloClouds_A10": "--",
+    "CaloClouds_O10": "--",
+    "CaloClouds_II_A2": "--",
+    "CaloClouds_II_A10": "--",
+    "CaloClouds_II_O10": "--",
+    "BiBAE": "--",
+    "L2LFlows": "--",
+    "L2LFlows_x9": "--",
+}
+colors = {
+    "G4": "gray",
+    "G4_RB": "tab:red",
+    "CaloClouds": "tab:orange",
+    "CaloClouds_clone": "tab:orange",
+    "CaloClouds_A2": "tab:green",
+    "CaloClouds_A4": "turquoise",
+    "CaloClouds_A10": "steelblue",
+    "CaloClouds_O10": "hotpink",
+    "CaloClouds_II_A2": "red",
+    "CaloClouds_II_A10": "purple",
+    "CaloClouds_II_O10": "orange",
+    #"CaloClouds_II_A2": "tab:green",
+    #"CaloClouds_II_A10": "steelblue",
+    #"CaloClouds_II_O10": "steelblue",
+    "BiBAE": "tab:blue",
+    "L2LFlows": "violet",
+    "L2LFlows_x9": "darkviolet",
+}
+labels = {
+    "G4": "Geant4",
+    "G4_RB": "Geant4 R_B-field",
+    "CaloClouds": "CaloClouds3",
+    "CaloClouds_clone": "CaloClouds3 (clone)",
+    "CaloClouds_A2": "CaloClouds3 (alt1, 2 blocks)",
+    "CaloClouds_A4": "CaloClouds3 (alt1, 4 blocks)",
+    "CaloClouds_A10": "CaloClouds3 (alt1, 10 blocks)",
+    "CaloClouds_O10": "CaloClouds3 (alt1, 10 blocks)",
+    "CaloClouds_II_A2": "CaloClouds3 (alt1, 2 blocks)",
+    "CaloClouds_II_A10": "CaloClouds3 (alt1, 10 blocks)",
+    "CaloClouds_II_O10": "CaloClouds3 (alt1, 10 blocks)",
+    "BiBAE": "BiBAE",
+    "L2LFlows": "L2LFlows",
+    "L2LFlows_x9": "L2LFlows (x9)",
+}
+hatch = {
+    "G4": None,
+    "G4_RB": None,
+    "CaloClouds": None,
+    "CaloClouds_clone": None,
+    "CaloClouds_A2": None,
+    "CaloClouds_A4": None,
+    "CaloClouds_A10": None,
+    "CaloClouds_O10": None,
+    "CaloClouds_II_A2": None,
+    "CaloClouds_II_A10": None,
+    "CaloClouds_II_O10": None,
+    "BiBAE": None,
+    "L2LFlows": None,
+    "L2LFlows_x9": None,
+}
+
+
+sep = "30_mm"
+# sep = "90_mm_endcap"
+# sep = "90_mm"
+# sep = "90_mm_endcap"
+# models = ["G4", "CaloClouds", "BiBAE", "L2LFlows_x9"]
+models = ["G4", "CaloClouds_A2", "CaloClouds_A10", "CaloClouds_O10"]
+data = {}
+for model in models:
+    data[model] = {}
+    for seed in paths[sep][model]:
+        data[model][seed] = pd.read_csv(paths[sep][model][seed])[:]
+        print(data[model][seed]["True_photon_separation (mm)"][0])
+    if not data[model]:
+        del data[model]
+
+
+def plot_type_A(g4_kwargs=None, model_kwargs=None):
+    fig = plt.figure(figsize=(9, 7))
+    fig.patch.set_facecolor("white")
+
+    if g4_kwargs is None:
+        g4_kwargs = {}
+    if model_kwargs is None:
+        model_kwargs = {}
+
+    g4_kwargs["bins"] = g4_kwargs.get("bins", 100)
+    g4_kwargs["range"] = g4_kwargs.get("range", (-40, 40))
+    g4_kwargs["color"] = g4_kwargs.get("color", colors["G4"])
+    g4_kwargs["histtype"] = g4_kwargs.get("histtype", "stepfilled")
+
+    h = plt.hist(
+        data["G4"]["SEED1"].PFO_1_E + data["G4"]["SEED1"].PFO_2_E - 40, **g4_kwargs
+    )
+
+    model_kwargs["histtype"] = model_kwargs.get("histtype", "step")
+    model_kwargs["lw"] = model_kwargs.get("lw", 1.5)
+    model_kwargs["linestyle"] = model_kwargs.get("linestyle", "-")
+    for model in models:
+        if model == "G4":
+            continue
+        plt.hist(
+            data[model]["SEED1"].PFO_1_E + data[model]["SEED1"].PFO_2_E - 40,
+            bins=h[1],
+            color=colors[model],
+            **model_kwargs,
+        )
+    return fig
+
+
+try:
+    title = "Plot 1"
+    fig = plot_type_A()
+    save_fig(xlabel="Sum particles - 40", ylabel="Counts")
+    do_type_A = True
+except Exception as e:
+    print(e)
+    do_type_A = False
+    pass
+
+
+if do_type_A:
+    fig = plot_type_A()
+    plt.yscale("log")
+    save_fig(xlabel="Sum particles - 40", ylabel="Counts")
+
+
+def get_stats(df, bins=15, bins_range=(0, int(sep.split("_")[0]))):
+    if "nPFOs" in df.columns:
+        true_sep = df["True_photon_separation (mm)"].values
+        nPFOs = df["nPFOs"].values
+        nPFOPhotons = df["nPFOPhotons"].values
+    else:
+        true_sep = df["True_photon_separation (mm)"].values
+        nPFOs = df[" nPFOs"].values
+        nPFOPhotons = df[" nPFOPhotons"].values
+
+    photon_counts, bin_edges = np.histogram(
+        true_sep, weights=nPFOPhotons, bins=bins, range=bins_range
+    )
+    particles_counts, bin_edges = np.histogram(
+        true_sep, weights=nPFOs, bins=bins, range=bins_range
+    )
+    event_counts, _ = np.histogram(true_sep, bins=bin_edges)
+
+    avg_num_photons = photon_counts / event_counts
+    avg_num_particles = particles_counts / event_counts
+
+    photon_counts, bin_edges = np.histogram(
+        true_sep, weights=nPFOPhotons == 2, bins=bins, range=bins_range
+    )
+
+    return avg_num_photons, avg_num_particles, bin_edges
+
+
+bins = 18
+bins_range = (0, int(sep.split("_")[0]))
+
+
+num_rec_photons = {}
+num_rec_particles = {}
+for model in data:
+    num_rec_photons[model] = []
+    num_rec_particles[model] = []
+    for seed in data[model]:
+        avg_num_photons, avg_num_particles, bin_edges = get_stats(
+            data[model][seed], bins, bins_range
+        )
+        num_rec_photons[model].append(avg_num_photons)
+        num_rec_particles[model].append(avg_num_particles)
+
+
+# mean = np.mean(num_rec_photons['G4'], axis=0)
+# std = np.std(num_rec_photons['G4'], axis=0)
+width = np.diff(bin_edges)[0]
+bin_centers = bin_edges[:-1] + width / 2
+
+
+avg_rec_photons = {}
+avg_rec_particles = {}
+
+for model in num_rec_photons:
+
+    mean_photons = np.mean(num_rec_photons[model], axis=0)
+    std_phtons = np.std(num_rec_photons[model], axis=0)
+    avg_rec_photons[model] = (mean_photons, std_phtons)
+
+    mean_particles = np.mean(num_rec_particles[model], axis=0)
+    std_particles = np.std(num_rec_particles[model], axis=0)
+    avg_rec_particles[model] = (mean_particles, std_particles)
+
+
+avg_rec_photons = {}
+avg_rec_particles = {}
+
+for model in num_rec_photons:
+
+    mean_photons = np.mean(num_rec_photons[model], axis=0)
+    std_phtons = np.std(num_rec_photons[model], axis=0)
+    avg_rec_photons[model] = (mean_photons, std_phtons)
+
+    mean_particles = np.mean(num_rec_particles[model], axis=0)
+    std_particles = np.std(num_rec_particles[model], axis=0)
+    avg_rec_particles[model] = (mean_particles, std_particles)
+
+
+def get_ratio_correlated_error(
     error_numerator, numerator, error_denominator, denominator, correlation_coef=1
 ):
-    # calculate errors for ratio of two correlated points.
-    # Automatically assumes perfect correlation
+    # calculate errors for ratio of two correlated points. Automatically assumes perfect correlation
     ratio = numerator / denominator
     error_ratio = ratio * np.sqrt(
         (error_numerator / numerator) ** 2
@@ -63,680 +341,645 @@ def ratio_correlated_error(
         * (error_numerator / numerator)
         * (error_denominator / denominator)
     )
+    # error_ratio = np.sqrt((error_numerator/denominator)**2 - numerator*error_denominator**2/denominator**2)
     return error_ratio
 
 
-def get_True_diphoton_sep(data_frame_arr):
-    # Extract true diphoton separation.
-    # Input: dataframe = array of dataframes for each seed
-    # Output: array of each seed true photon separations
-
-    keys = data_frame_arr[0].keys()
-    sep_key = next(key for key in keys if "true_photon_separation" in key.lower())
-    True_sep = [
-        data_frame[sep_key] for data_frame in data_frame_arr
-    ]
-    return True_sep
+def get_ratio_uncorrelated_error(a, sigma_a, b, sigma_b):
+    f = a / b
+    sigma_f = np.sqrt((sigma_a / a) ** 2 + (sigma_b / b) ** 2)
+    return sigma_f
 
 
-def get_nPFOs_diphoton_sep(data_frame_arr):
-    # Extract nPFOs
-    # Input: dataframe = array of dataframes for each seed
-    # Output: array of each seed nPFOs
+def plot(data, ylabel="Avg. No. Reconstructed Particles"):
 
-    keys = data_frame_arr[0].keys()
-    pfo_key = next(key for key in keys if "npfos" in key.lower())
-    nPFOS = [data_frame[pfo_key] for data_frame in data_frame_arr]
+    mean_ref, std_ref = data["G4"]
 
-    return nPFOS
-
-
-def get_nPFOPhotons_diphoton_sep(data_frame_arr):
-    # Extract nPFOPhotons
-    # Input: dataframe = array of dataframes for each seed
-    # Output: array of each seed nPFOs
-
-    keys = data_frame_arr[0].keys()
-    nPFOPhotons_key = next(
-        key for key in keys if "npfophotons" in key.lower()
-    )
-    nPFOPhotons = [data_frame[nPFOPhotons_key] for data_frame in data_frame_arr]
-
-    return nPFOPhotons
-
-
-def get_fraction_fragment_energy_diphoton_sep(data_frame_arr):
-    # Extract fraction_fragment_energy
-    # Input: dataframe = array of dataframes for each seed
-    # Output: array of each seed nPFOs
-    keys = data_frame_arr[0].keys()
-    fraction_fragment_energy_key = next(
-        key for key in keys if "fraction_fragment_energy" in key.lower()
-    )
-
-    fraction_fragment_energy = [
-        data_frame[fraction_fragment_energy_key] for data_frame in data_frame_arr
-    ]
-
-    return fraction_fragment_energy
-
-
-def get_PFO_separation_diphoton_sep(data_frame_arr):
-    # Extract fraction_fragment_energy
-    # Input: dataframe = array of dataframes for each seed
-    # Output: array of each seed nPFOs
-    keys = data_frame_arr[0].keys()
-    pfo_sep_key = next(
-        key for key in keys if "pfo_separation" in key.lower()
-    )
-    PFO_separation = [
-        data_frame[pfo_sep_key] for data_frame in data_frame_arr
-    ]
-
-    return PFO_separation
-
-
-# Extract True separations
-di_photon_True_sep = {
-    model: get_True_diphoton_sep(dataframes[model]) for model in models
-}
-
-
-# Extract nPFOs
-di_photon_nPFOs = {model: get_nPFOs_diphoton_sep(dataframes[model]) for model in models}
-
-
-# Extract nPFOPhotons
-di_photon_nPFOPhotons = {
-    model: get_nPFOPhotons_diphoton_sep(dataframes[model]) for model in models
-}
-print("nPFOPhotons")
-for model in models:
-    for seed, nPFOPhotons in enumerate(di_photon_nPFOPhotons[model]):
-        print(f"\tSeed {seed}: {nPFOPhotons.value_counts(normalize=False)}")
-
-# Extract fraction_fragment_energy
-di_photon_fragment_energy = {
-    model: get_fraction_fragment_energy_diphoton_sep(dataframes[model])
-    for model in models
-}
-
-
-# Extract PFO_separation
-di_photon_PFO_separation = {
-    model: get_PFO_separation_diphoton_sep(dataframes[model]) for model in models
-}
-
-
-# Plotting config
-if True:
-    font = {"family": "serif", "size": 19}
-    mpl.rc("font", **font)
-    plt.style.use("classic")
-    mpl.rc("font", **font)
-    lightcyan = (0.1, 0.9, 0.9, 0.2)
-    lightred = (1, 0.1, 0.1, 0.3)
-    lightgreen = (0.1, 1, 0.3, 0.3)
-    lightblue = (0.1, 0.1, 0.9, 0.2)
-    lightgrey = (0.1, 0.1, 0.1, 0.3)
-    lightorange = (1.0, 0.5, 0.25, 0.3)
-
-    very_dark_grey = (0.1, 0.1, 0.1, 0.8)
-
-    color_list = []
-    """
-    color_list.append('dimgrey')
-    color_list.append('blue')
-    color_list.append('green')
-    """
-
-    # color_list.append('blue')
-    color_list.append(very_dark_grey)  # 'dimgrey')
-    color_list.append("darkorange")
-    # color_list.append('red')
-    color_list.append("tab:blue")
-    color_list.append("darkviolet")
-    color_list.append("green")
-    # color_list.append('tab:blue')
-    # color_list.append('tab:orange')
-    # color_list.append('darkviolet')
-    # color_list.append('green')
-
-    fillcolor_list = []
-    fillcolor_list.append(lightgrey)
-    fillcolor_list.append(lightorange)
-    fillcolor_list.append(lightblue)
-    fillcolor_list.append(lightorange)
-    fillcolor_list.append(lightgrey)
-    fillcolor_list.append(lightblue)
-
-    linewidth_list = []
-    linewidth_list.append(2)
-    linewidth_list.append(2)
-    linewidth_list.append(2)
-    linewidth_list.append(2)
-    linewidth_list.append(2)
-    linewidth_list.append(2)
-
-    linestyle_list = []
-    linestyle_list.append("-")
-    linestyle_list.append("--")
-    linestyle_list.append("--")
-    linestyle_list.append("--")
-    linestyle_list.append("-")
-    linestyle_list.append(
-        (0, (3, 1, 1, 1))
-    )  # ('densely dashdotted',    (0, (3, 1, 1, 1))),
-    linestyle_list.append("--")
-    linestyle_list.append(
-        (0, (3, 1, 1, 1))
-    )  # ('densely dashdotted',    (0, (3, 1, 1, 1))),
-    linestyle_list.append("--")
-    linestyle_list.append(
-        (0, (3, 1, 1, 1))
-    )  # ('densely dashdotted',    (0, (3, 1, 1, 1))),
-
-
-model_title = []
-model_title.append("CaloClouds2A")
-# model_title.append('L2LFlows')
-model_title.append("BiBAE")
-model_title.append("L2LFlowsx9")
-model_title.append("EDM")
-
-
-# For using training G4 version in ratio
-def plot_Weighted_hist_errors(
-    data_real,
-    data_fake,
-    weights_real,
-    weights_fake,
-    bins,
-    minE,
-    maxE,
-    ymin,
-    ymax,
-    name,
-    xtitle,
-    ytitle,
-    typ,
-    p_typ,
-    title_1,
-    model_title,
-    min_loc=5,
-    maj_loc=10,
-    log=False,
-    norm=False,
-    sub_min=0.0,
-    sub_max=2.0,
-    save_title=None,
-):
-
-    figSE, (axSE, axSub) = plt.subplots(
+    fig, axes = plt.subplots(
         2,
         1,
         sharex=True,
         figsize=(7, 9),
         gridspec_kw={"height_ratios": [3, 1], "hspace": 0.1},
     )
+    fig.patch.set_facecolor("white")
+    axes[0].set_ylim(0.5, 3.5)
+    # axes[0].set_ylim(-0.3, 2.5)
+    axes[0].set_ylabel(ylabel)
+    axes[1].set_ylim(0.9, 1.1)
+    axes[1].set_xlabel("$d_{\\gamma \\gamma sep}$ (mm)", fontsize=35)
+    axes[1].set_ylabel("Ratio to G4")
 
-    if norm:
-        pSEa = axSE.hist(
-            data_real,
-            bins=bins,
-            range=[minE, maxE],
-            density=None,
-            weights=np.ones_like(data_real) / (float(len(data_real))),
-            edgecolor=color_list[0],
-            label="orig",
-            linewidth=0,  # linewidth_list[0],
-            color=fillcolor_list[0],
-            linestyle=linestyle_list[0],
-            histtype="step",
-        )  # 'stepfilled')
-
-    else:
-        pSEa = [
-            np.histogram(data, bins=bins, range=[minE, maxE], density=None)
-            for data in data_real
-        ]
-
-        # Now calculate the weighted histograms
-        pSEa_weighted = [
-            np.histogram(
-                data, bins=bins, range=[minE, maxE], density=None, weights=weights
-            )
-            for data, weights in zip(data_real, weights_real)
-        ]
-
-        print(np.shape(pSEa[0][0]))
-
-        # average = weighted_hist/(hist)
-        # array of histogramsm, shape: (nbins, nrepeats)
-        pSEa_arr = np.concatenate(
-            [
-                np.asarray(weighted[0] / hist[0]).reshape((-1, 1))
-                for hist, weighted in zip(pSEa, pSEa_weighted)
-            ],
-            axis=1,
-        )
-
-        pSEa_arr_avg = np.mean(pSEa_arr, axis=1)
-        pSEa_arr_std = np.std(pSEa_arr, axis=1)
-
-        #             print("G4 mean: ", pSEa_arr_avg)
-        #             print("G4 std: ", pSEa_arr_std)
-        #             return pSEa_arr_avg, pSEa_arr_std
-
-        # Histogram of the mean
-        # Append extra element at the end to fill entire histogram bar (i.e. add horizontal step to vertical step for bin)
-        xs = np.append(pSEa[0][1][:-1], pSEa[0][1][-1] + 1)
-        pSEa_mean = axSE.step(
-            x=xs,
-            y=np.append(pSEa_arr_avg, pSEa_arr_avg[-1]),
-            color=very_dark_grey,
-            linewidth=linewidth_list[0],
-            where="post",
-        )
-        print(pSEa[0][1][:-1])
-        print(pSEa[0][1][-1])
-
-        # Error bars in the main plot
-        pSEa_err = pSEa_arr_std  # np.sqrt(pSEa[0])
-        pSEa_err_mean = pSEa_err  # /(np.sqrt(3))
-
-        pSErr = axSE.bar(
-            x=xs[:-1],
-            height=2 * pSEa_err,
-            bottom=(pSEa_arr_avg - pSEa_err),
-            width=np.diff(pSEa[0][1]),
-            align="edge",
-            linewidth=0,
-            color="slategrey",
-            alpha=0.34,
-            zorder=-1,
-        )
-        # width=np.diff(pSEa1[1]), align='edge', linewidth=0, color=very_dark_grey, alpha=0.15, zorder=-1)
-
-        eps = 1e-5  # to avoid numerical error
-
-        # ratio for real is straight line at 1
-        pSuba = axSub.plot(
-            np.linspace(minE, maxE, 1000),
-            np.ones(1000),
-            linewidth=linewidth_list[0],
-            color=very_dark_grey,
-        )
-
-        # mask elements equal to zero
-        pSEa_err[pSEa_err == 0] = eps
-        pSEa_err_mean[pSEa_err_mean == 0] = eps
-        pSEa_arr_avg[pSEa_arr_avg == 0] = eps
-
-    axSE.plot(
-        (0.32, 0.38),
-        (0.86 - 0.02, 0.86 - 0.02),
-        linewidth=linewidth_list[3],
-        linestyle=linestyle_list[0],
-        transform=axSE.transAxes,
-        color=color_list[0],
+    axes[0].hist(
+        bin_centers,
+        bins=bin_edges,
+        weights=mean_ref,
+        histtype="step",
+        linestyle=linestyle["G4"],
+        color=colors["G4"],
+        lw=1.5,
     )
-    axSE.text(
-        0.40,
-        0.86,
-        title_1,
-        horizontalalignment="left",
-        verticalalignment="top",
-        transform=axSE.transAxes,
-        color=color_list[0],
+    axes[0].bar(
+        bin_centers,
+        height=std_ref * 2,
+        bottom=mean_ref - std_ref,
+        alpha=0.3,
+        width=width,
+        color=colors["G4"],
+        linewidth=0,
     )
+    axes[1].axhline(1, color="black", lw=1.5)
 
-    #         axSE.axhline(2, color='red')
+    for model in data:
+        if model == "G4":
+            continue
 
-    fake_err_ratio_list = []
-    for j in range(len(data_fake[0])):
-        if norm:
-            pSpnEb = axSE.hist(
-                data_fake[0][j],
-                bins=pSEa[0][1],
-                range=None,
-                density=None,
-                weights=np.ones_like(data_fake[j]) / (float(len(data_fake[j]))),
-                edgecolor=color_list[j + 1],
-                label="orig",
-                linewidth=linewidth_list[
-                    j + 1
-                ],  # 1.0, #linewidth_list[0], #linewidth_list[j+1],
-                linestyle=linestyle_list[
-                    j + 1
-                ],  # linestyle_list[0], #linestyle_list[j+1],
+        # main plot
+        mean, std = data[model]
+        try:
+            axes[0].hist(
+                bin_centers,
+                bins=bin_edges,
+                weights=mean,
                 histtype="step",
+                linestyle=linestyle[model],
+                color=colors[model],
+                lw=1.5,
             )
+        except Exception as e:
+            import ipdb
 
-        else:
-            pSEb = [
-                np.histogram(data[j], bins=pSEa[0][1], range=[minE, maxE], density=None)
-                for data in data_fake
-            ]
-
-            pSEb_weighted = [
-                np.histogram(
-                    data[j],
-                    bins=pSEa[0][1],
-                    range=[minE, maxE],
-                    density=None,
-                    weights=weights[j],
-                )
-                for data, weights in zip(data_fake, weights_fake)
-            ]
-            # average = weighted_hist/(hist)
-            # array of histogramsm, shape: (nbins, nrepeats)
-            pSEb_arr = np.concatenate(
-                [
-                    np.asarray(pSEb_weighted[i][0] / pSEb[i][0]).reshape((-1, 1))
-                    for i in range(len(data_fake))
-                ],
-                axis=1,
-            )
-
-            pSEb_arr_avg = np.mean(pSEb_arr, axis=1)
-            pSEb_arr_std = np.std(pSEb_arr, axis=1)
-
-            # Histogram of the mean
-            pSEb_mean = axSE.step(
-                x=xs,
-                y=np.append(pSEb_arr_avg, pSEb_arr_avg[-1]),
-                color=color_list[j + 1],
-                linestyle=linestyle_list[j + 1],
-                linewidth=linewidth_list[j + 1],
-                where="post",
-            )
-
-            # Error bars in the main plot
-            pSEb_err = pSEb_arr_std  # np.sqrt(pSEa[0])
-            pSEb_err_mean = pSEb_err  # /(np.sqrt(3))
-
-            colour = {0: "darkorange", 1: "tab:blue", 2: "darkviolet"}
-            alpha = {0: 0.34, 1: 0.28, 2: 0.28}
-            pSErr = axSE.bar(
-                x=xs[:-1],
-                height=2 * pSEb_err,
-                bottom=(pSEb_arr_avg - pSEb_err),
-                width=np.diff(pSEa[0][1]),
-                align="edge",
-                linewidth=0,
-                color=colour[j],
-                alpha=alpha[j],
-                zorder=-1,
-            )
-
-            # sub plot
-            pSubb = axSub.step(
-                x=xs,
-                y=np.append(
-                    pSEb_arr_avg / pSEa_arr_avg, pSEb_arr_avg[-1] / pSEa_arr_avg[-1]
-                ),
-                color=color_list[j + 1],
-                linewidth=linewidth_list[j + 1],
-                where="post",
-                linestyle=linestyle_list[j + 1],
-            )
-
-            pSEb_arr_avg[pSEb_arr_avg == 0] = eps
-            pSEb_err_mean[pSEb_err_mean == 0] = eps
-
-            # get model with correlated uncertainties
-            # using the standard error on the mean! 3 measurements assumed
-            fake_err_ratio = ratio_correlated_error(
-                error_numerator=pSEb_err_mean,
-                numerator=pSEb_arr_avg,
-                error_denominator=pSEa_err_mean,
-                denominator=pSEa_arr_avg,
-                correlation_coef=0,
-            )  # 1)
-            # print(pSEb_arr_avg/pSEa_arr_avg)
-            # print(fake_err_ratio)
-
-            fake_err_ratio_clip = np.clip(fake_err_ratio, sub_min, sub_max)
-
-            # mask out ratios that are almost zero for the error (i.e close to numerical precision)
-            ratio = pSEb_arr_avg / pSEa_arr_avg
-            fake_err_ratio[ratio < 1e-4] = 1e4
-
-            fake_err_ratio_list.append(
-                (pSEb_err_mean, pSEb_arr_avg, pSEa_err_mean, pSEa_arr_avg)
-            )
-
-            pSpnEb_subErr = axSub.bar(
-                x=xs[:-1],
-                height=2 * fake_err_ratio_clip,
-                bottom=(ratio - fake_err_ratio_clip),
-                width=np.diff(pSEa[0][1]),
-                align="edge",
-                linewidth=0,
-                color=colour[j],
-                alpha=alpha[j],
-                zorder=-1,
-            )
-
-        axSE.plot(
-            (0.32, 0.38),
-            (0.86 - 0.02 - (j + 1) * 0.06, 0.86 - 0.02 - (j + 1) * 0.06),
-            linewidth=linewidth_list[j + 1],
-            linestyle=linestyle_list[j + 1],
-            transform=axSE.transAxes,
-            color=color_list[j + 1],
-        )
-        axSE.text(
-            0.40,
-            0.86 - (j + 1) * 0.06,
-            model_title[j],
-            horizontalalignment="left",
-            verticalalignment="top",
-            transform=axSE.transAxes,
-            color=color_list[j + 1],
+            ipdb.set_trace()
+            print(e)
+        axes[0].bar(
+            bin_centers,
+            height=std * 2,
+            bottom=mean - std,
+            alpha=0.3,
+            width=width,
+            color=colors[model],
+            linewidth=0,
         )
 
-    axSE.text(
-        0.23,  # 0.10,#0.6,
-        0.98,
-        typ,
-        horizontalalignment="left",
-        verticalalignment="top",
-        transform=axSE.transAxes,
+        # sub pplot
+
+        # error_R = get_ratio_correlated_error(mean, std, mean_ref, std_ref)
+        error_R = get_ratio_correlated_error(std, mean, std_ref, mean_ref, 0)
+
+        axes[1].hist(
+            bin_centers,
+            bins=bin_edges,
+            weights=mean / mean_ref,
+            histtype="step",
+            linestyle=linestyle[model],
+            color=colors[model],
+            lw=1.5,
+        )
+        axes[1].bar(
+            bin_centers,
+            height=error_R * 2,
+            bottom=mean / mean_ref - error_R,
+            alpha=0.3,
+            width=width,
+            color=colors[model],
+            linewidth=0,
+        )
+
+        print(model, abs(mean - mean_ref).sum())
+
+
+title = "Avg. No. Reconstructed Particles"
+fig = plot(avg_rec_photons, ylabel="Avg. No. Reconstructed Particles")
+save_fig()
+
+
+# # Refactored
+#
+
+
+def get_stats(df, bins=15, bins_range=(0, int(sep.split("_")[0]))):
+    if "nPFOs" in df.columns:
+        true_sep = df["True_photon_separation (mm)"].values
+        nPFOs = df["nPFOs"].values
+        nPFOPhotons = df["nPFOPhotons"].values
+    else:
+        true_sep = df["True_photon_separation (mm)"].values
+        nPFOs = df[" nPFOs"].values
+        nPFOPhotons = df[" nPFOPhotons"].values
+
+    photon_counts, bin_edges = np.histogram(
+        true_sep, weights=nPFOPhotons, bins=bins, range=bins_range
+    )
+    particles_counts, bin_edges = np.histogram(
+        true_sep, weights=nPFOs, bins=bins, range=bins_range
+    )
+    event_counts, _ = np.histogram(true_sep, bins=bin_edges)
+
+    avg_num_photons = photon_counts / event_counts
+    avg_num_particles = particles_counts / event_counts
+
+    successe_counts, bin_edges = np.histogram(
+        true_sep, weights=(nPFOPhotons == 2).astype(int), bins=bins, range=bins_range
     )
 
-    axSE.text(
-        0.4,  # 0.62,#0.6,
-        0.92,
-        p_typ,
-        horizontalalignment="left",
-        verticalalignment="top",
-        transform=axSE.transAxes,
+    n = event_counts
+    p = successe_counts / n
+    q = 1 - p
+
+    var = event_counts * p * q
+    std = np.sqrt(var)
+
+    return photon_counts / n, std / n
+
+
+eff_rec_photons = {}
+eff_rec_particles = {}
+
+for model in data:
+    eff_rec_photons[model] = {"mean": [], "std": []}
+    for seed in data[model]:
+        expected_counts, std = get_stats(data[model][seed], bins, bins_range)
+        eff_rec_photons[model]["mean"].append(expected_counts)
+        eff_rec_photons[model]["std"].append(std)
+
+        # num_rec_particles[model].append(avg_num_particles)
+
+
+df_photons = {}
+for model in data:
+    df_photons[model] = []
+    for seed in data[model]:
+        df_photons[model].append(data[model][seed])
+
+
+df_combined = {}
+for model in df_photons:
+    df_combined[model] = pd.concat(df_photons[model]).reset_index(drop=True)
+
+
+eff_rec_photons = {}
+eff_rec_particles = {}
+
+for model in data:
+    eff_rec_photons[model] = {"eff": [], "std": []}
+    expected_counts, std = get_stats(df_combined[model], bins, bins_range)
+    eff_rec_photons[model]["eff"] = expected_counts
+    eff_rec_photons[model]["std"] = std
+
+
+data = {}
+for model in eff_rec_photons:
+    mean_rec_photons = eff_rec_photons[model]["eff"]
+    std = eff_rec_photons[model]["std"]
+    data[model] = (mean_rec_photons, std)
+
+
+def plot(data, ylabel="Avg. No. Reconstructed Particles"):
+
+    mean_ref, std_ref = data["G4"]
+
+    fig, axes = plt.subplots(
+        2,
+        1,
+        sharex=True,
+        figsize=(7, 9),
+        gridspec_kw={"height_ratios": [3, 1], "hspace": 0.1},
     )
+    fig.patch.set_facecolor("white")
+    # axes[0].set_ylim(0.5,3)
+    # axes[0].set_ylim(0, 100)
+    axes[0].set_ylabel(ylabel)
+    axes[1].set_ylim(0.9, 1.1)
+    axes[1].set_xlabel("$d_{\\gamma \\gamma sep}$ (mm)", fontsize=35)
+    axes[1].set_ylabel("Ratio to G4")
 
-    figSE.patch.set_facecolor("white")
+    axes[0].hist(
+        bin_centers,
+        bins=bin_edges,
+        weights=mean_ref,
+        histtype="step",
+        linestyle=linestyle["G4"],
+        color="black",
+        lw=1,
+    )
+    axes[0].bar(
+        bin_centers,
+        height=std_ref * 2,
+        bottom=mean_ref - std_ref,
+        alpha=0.3,
+        width=width,
+        color=colors["G4"],
+        linewidth=0,
+    )
+    axes[1].axhline(1, color="black", lw=1.5)
 
-    axSE.xaxis.set_minor_locator(MultipleLocator(min_loc))
-    axSE.xaxis.set_major_locator(MultipleLocator(maj_loc))
-    #     axSE.set_xticks([0, 10, 20, 30])
-    axSE.set_xticks([0, 10, 20, 30, 40, 50, 60, 70, 80, 90])
+    for model in data:
+        if model == "G4":
+            continue
 
-    # axSE.set_xlim([minE, (maxE-(minE+maxE)/bins)])
-    axSE.set_xlim([minE, maxE])
-    print((maxE - (minE + maxE) / bins))
-
-    axSE.set_ylabel(ytitle, fontsize=20)
-
-    if log:
-        axSE.set_yscale("log")
-    axSub.set_xlabel(xtitle, family="serif", fontsize=34)
-    axSub.set_ylabel("Ratio to G4", family="serif", fontsize=20)
-    axSE.set_ylim([ymin, ymax])
-
-    #     axSub.set_ylim([0, 2])
-    #     axSub.set_ylim([0.2, 1.8])
-    axSub.set_ylim([0.8, 1.2])
-    axSub.xaxis.set_minor_locator(MultipleLocator(0.1))
-    axSub.yaxis.set_major_locator(MultipleLocator(0.2))
-    plt.tight_layout()
-    if save_title is not None:
-        figSE.savefig(
-            "./plots/" + save_title + ".png", bbox_inches="tight"
+        # main plot
+        mean, std = data[model]
+        axes[0].hist(
+            bin_centers,
+            bins=bin_edges,
+            weights=mean,
+            histtype="step",
+            linestyle=linestyle[model],
+            color=colors[model],
+            lw=2,
+        )
+        axes[0].bar(
+            bin_centers,
+            height=std * 2,
+            bottom=mean - std,
+            alpha=0.3,
+            width=width,
+            color=colors[model],
+            linewidth=0,
+            hatch=hatch[model],
         )
 
+        # sub pplot
 
-#     return fake_err_ratio_list
+        error_R = get_ratio_uncorrelated_error(mean_ref, std_ref, mean, std)
+        # error_R = get_ratio_correlated_error(std, mean, std_ref, mean_ref, 1)
+
+        axes[1].hist(
+            bin_centers,
+            bins=bin_edges,
+            weights=mean / mean_ref,
+            histtype="step",
+            linestyle=linestyle[model],
+            color=colors[model],
+            lw=2,
+        )
+        axes[1].bar(
+            bin_centers,
+            height=error_R * 2,
+            bottom=mean / mean_ref - error_R,
+            alpha=0.3,
+            width=width,
+            color=colors[model],
+            linewidth=0,
+            hatch=hatch[model],
+        )
+
+        kl = calculate_kl_divergence(mean_ref, mean) * 10000
+        print(
+            model,
+            f"KL: {round(kl, 3)} * 1e-4",
+        )
+        # print(model, abs(mean_ref - mean).sum())
+
+    axes[0].set_ylim(0.5, 3.5)
+    axes[0].axhline(2, color="red")
+    return fig
 
 
-# Some comments!
-# - All these histograms will be weighted
-# - Need to also account for this in the ratio plot...
+def get_ratio_uncorrelated_error(a, sigma_a, b, sigma_b):
+    # f = a / b
+    f = b / a
+    sigma_f = f * np.sqrt((sigma_a / a) ** 2 + (sigma_b / b) ** 2)
+    return sigma_f
 
 
-n_seeds = len(di_photon_True_sep["G4"])
-True_sep_diPhoton_arr = [
-    [di_photon_True_sep[model][i] for model in models if model != "G4"]
-    for i in range(n_seeds)
-]
+def calculate_kl_divergence(hist1, hist2):
+
+    # Normalize histograms to get probability distributions
+    p = hist1 / np.sum(hist1)
+    q = hist2 / np.sum(hist2)
+
+    # Avoid division by zero and log of zero
+    epsilon = 1e-10
+    p = np.clip(p, epsilon, 1.0)
+    q = np.clip(q, epsilon, 1.0)
+
+    # Calculate KL divergence
+    kl_divergence = np.sum(p * np.log(p / q))
+
+    return kl_divergence
 
 
-nPFOs_diPhoton_arr = [
-    [di_photon_nPFOs[model][i] for model in models if model != "G4"]
-    for i in range(n_seeds)
-]
+title = "Avg. No. Reconstructed Photons"
+fig = plot(data, ylabel="Avg. No. Reconstructed Photons")
+save_fig()
 
-os.makedirs("plots", exist_ok=True)
 
-plot_Weighted_hist_errors(
-    di_photon_True_sep["G4"],
-    True_sep_diPhoton_arr,
-    di_photon_nPFOs["G4"],
-    nPFOs_diPhoton_arr,
-    15,
-    0,
-    30,
-    0.5,
-    3.0,
-    "Photon Energy",
-    "$d_{\\gamma \\gamma sep}$ (mm)",
-    "Avg. No. Reconstructed Particles",
-    "ILD Di-Photons",
-    "$E_{\\gamma1}$=20GeV, $E_{\\gamma2}$=20GeV",
-    "Geant4",
-    model_title,
-    min_loc=0.8,
-    maj_loc=5,
-    log=False,
-    norm=False,
-    save_title="a",
+std_runs = []
+for n in range(100):
+    runs = []
+    for i in range(n):
+        n_photons = np.random.choice([1, 2], 500, p=[0.5, 0.5])
+        runs.append(np.mean(n_photons))
+    std_runs.append(np.std(runs) / np.sqrt(n))
+
+
+title = "Standard Error"
+plt.plot(std_runs, lw=0.5)
+save_fig(ylabel="Standard Error")
+
+
+n_events = 1000
+bins = 15
+positions = np.random.random(n_events)
+positions_2 = np.random.random(n_events)
+positions_2 = positions
+
+
+def get_photons(positions):
+    photons_in_event = []
+    for p in positions:
+        n_photons = np.random.choice([1, 2], 1, p=[(1 - p), p])
+        photons_in_event.append(n_photons)
+    photons_in_event = np.concatenate(photons_in_event)
+    return photons_in_event
+
+
+photons_in_event = get_photons(positions)
+
+photons_in_event = []
+positions_list = []
+for i in range(100):
+    positions = np.random.random(n_events)
+    photons_in_event.append(get_photons(positions))
+    positions_list.append(positions)
+
+
+def get_stats(positions, photons_in_event, bins):
+    photon_counts, bin_edges = np.histogram(
+        positions, weights=photons_in_event, bins=bins, range=(0, 1)
+    )
+    event_counts, _ = np.histogram(positions, bins=bin_edges)
+
+    n = event_counts
+    successe_counts, _ = np.histogram(
+        positions, weights=(photons_in_event == 2).astype(int), bins=bin_edges
+    )
+    p = successe_counts / event_counts
+    q = 1 - p
+    std = np.sqrt(n * p * q) / event_counts
+
+    return photon_counts / event_counts, std, bin_edges
+
+
+avg_photons_list = []
+for i in range(100):
+    avg_photons, std, bin_edges = get_stats(
+        positions_list[i], photons_in_event[i], bins
+    )
+    avg_photons_list.append(avg_photons)
+
+
+avg_photons = np.mean([avg_photons_list[i] for i in range(50)], axis=0)
+avg_photons_2 = np.mean([avg_photons_list[i] for i in range(50, 100)], axis=0)
+
+std = np.std([avg_photons_list[i] for i in range(3)], axis=0)
+std_2 = np.std([avg_photons_list[i] for i in range(3, 6)], axis=0)
+
+
+width = np.diff(bin_edges)[0]
+bin_centers = bin_edges[:-1] + width / 2
+
+
+fig, axes = plt.subplots(
+    2,
+    1,
+    sharex=True,
+    figsize=(7, 9),
+    gridspec_kw={"height_ratios": [3, 1], "hspace": 0.1},
 )
 
-plt.close()
-
-plot_Weighted_hist_errors(
-    di_photon_True_sep["G4"],
-    True_sep_diPhoton_arr,
-    di_photon_nPFOs["G4"],
-    nPFOs_diPhoton_arr,
-    15,
-    0,
-    30,
-    0.5,
-    3.0,
-    "Photon Energy",
-    "$d_{\\gamma \\gamma sep}$ (mm)",
-    "Avg. No. Reconstructed Photons",
-    "ILD Di-Photons",
-    "$E_{\\gamma1}$=20GeV, $E_{\\gamma2}$=20GeV",
-    "Geant4",
-    model_title,
-    min_loc=0.5,
-    maj_loc=4,
-    log=False,
-    norm=False,
-    save_title="b",
+axes[0].hist(
+    bin_centers,
+    bins=bin_edges,
+    weights=avg_photons,
+    histtype="step",
+    color="black",
+    lw=1,
+)
+axes[0].bar(
+    bin_centers,
+    height=std * 2,
+    bottom=avg_photons - std,
+    alpha=0.3,
+    width=width,
+    color="black",
+    linewidth=0,
 )
 
-plt.close()
-
-plot_Weighted_hist_errors(
-    di_photon_True_sep["G4"],
-    True_sep_diPhoton_arr,
-    di_photon_nPFOs["G4"],
-    nPFOs_diPhoton_arr,
-    15,
-    0,
-    30,
-    0.5,
-    3.0,
-    "Photon Energy",
-    "$d_{\\gamma \\gamma sep}$ (mm)",
-    "Avg. No. Reconstructed Photons",
-    "ILD Di-Photons",
-    "$E_{\\gamma1}$=20GeV, $E_{\\gamma2}$=20GeV",
-    "Geant4",
-    model_title,
-    min_loc=0.5,
-    maj_loc=4,
-    log=False,
-    norm=False,
-    save_title="c",
+axes[0].hist(
+    bin_centers,
+    bins=bin_edges,
+    weights=avg_photons_2,
+    histtype="step",
+    color="tab:orange",
+    lw=1,
+)
+axes[0].bar(
+    bin_centers,
+    height=std_2 * 2,
+    bottom=avg_photons_2 - std_2,
+    alpha=0.3,
+    width=width,
+    color="tab:orange",
+    linewidth=0,
 )
 
-plt.close()
-
-fraction_fragment_energy_diPhoton_arr = [
-    [di_photon_fragment_energy[model][i] for model in models if model != "G4"]
-    for i in range(n_seeds)
-]
-
-plot_Weighted_hist_errors(
-    di_photon_True_sep["G4"],
-    True_sep_diPhoton_arr,
-    di_photon_fragment_energy["G4"],
-    fraction_fragment_energy_diPhoton_arr,
-    15,
-    0,
-    90,
-    0,
-    0.3,
-    "Photon Energy",
-    "$d_{\\gamma \\gamma sep}$ (mm)",
-    "Avg. Fractional Fragment Energy",
-    "ILD Di-Photons",
-    "$E_{\\gamma1}$=20GeV, $E_{\\gamma2}$=20GeV",
-    "Geant4",
-    model_title,
-    min_loc=0.5,
-    maj_loc=4,
-    log=False,
-    norm=False,
-    save_title="d",
+true_mean = bin_centers + 1
+axes[0].hist(
+    bin_centers,
+    bins=bin_edges,
+    weights=true_mean,
+    histtype="step",
+    color="blue",
+    lw=1,
+    linestyle="--",
 )
 
-plt.close()
 
-fake_err_ratio_list = plot_Weighted_hist_errors(
-    di_photon_True_sep["G4"],
-    True_sep_diPhoton_arr,
-    di_photon_fragment_energy["G4"],
-    fraction_fragment_energy_diPhoton_arr,
-    15,
-    0,
-    30,
-    0,
-    0.3,
-    "Photon Energy",
-    "$d_{\\gamma \\gamma sep}$ (mm)",
-    "Avg. Fractional Fragment Energy",
-    "ILD Di-Photons",
-    "$E_{\\gamma1}$=20GeV, $E_{\\gamma2}$=20GeV",
-    "Geant4",
-    model_title,
-    min_loc=0.5,
-    maj_loc=4,
-    log=False,
-    norm=False,
-    save_title="e",
+error_R = get_ratio_uncorrelated_error(avg_photons_2, std_2, avg_photons, std)
+
+axes[1].hist(
+    bin_centers,
+    bins=bin_edges,
+    weights=avg_photons / avg_photons_2,
+    histtype="step",
+    color="tab:orange",
+    lw=1,
 )
+axes[1].bar(
+    bin_centers,
+    height=error_R * 2,
+    bottom=avg_photons / avg_photons_2 - error_R,
+    alpha=0.3,
+    width=width,
+    color="tab:orange",
+    linewidth=0,
+)
+
+n_overlap_bins = sum(abs(avg_photons / avg_photons_2 - 1) < error_R)
+print(n_overlap_bins)
+
+axes[1].axhline(1, color="black", lw=1.5)
+axes[0].set_ylim(0.7, 2.5)
+axes[1].set_ylim(0.95, 1.05)
+
+plt.show()
+
+
+fig, axes = plt.subplots(
+    2,
+    1,
+    sharex=True,
+    figsize=(7, 9),
+    gridspec_kw={"height_ratios": [3, 1], "hspace": 0.1},
+)
+
+axes[0].hist(
+    bin_centers,
+    bins=bin_edges,
+    weights=avg_photons,
+    histtype="step",
+    color="black",
+    lw=1,
+)
+axes[0].bar(
+    bin_centers,
+    height=std * 2,
+    bottom=avg_photons - std,
+    alpha=0.3,
+    width=width,
+    color="black",
+    linewidth=0,
+)
+
+axes[0].hist(
+    bin_centers,
+    bins=bin_edges,
+    weights=avg_photons_2,
+    histtype="step",
+    color="tab:orange",
+    lw=1,
+)
+axes[0].bar(
+    bin_centers,
+    height=std_2 * 2,
+    bottom=avg_photons_2 - std_2,
+    alpha=0.3,
+    width=width,
+    color="tab:orange",
+    linewidth=0,
+)
+
+true_mean = bin_centers + 1
+# axes[0].hist(bin_centers, bins=bin_edges, weights=true_mean, histtype='step', color='blue', lw=1, linestyle='--')
+
+
+error_R = get_ratio_uncorrelated_error(avg_photons_2, std_2, avg_photons, std)
+
+axes[1].hist(
+    bin_centers,
+    bins=bin_edges,
+    weights=avg_photons / avg_photons_2,
+    histtype="step",
+    color="tab:orange",
+    lw=1,
+)
+axes[1].bar(
+    bin_centers,
+    height=error_R * 2,
+    bottom=avg_photons / avg_photons_2 - error_R,
+    alpha=0.3,
+    width=width,
+    color="tab:orange",
+    linewidth=0,
+)
+
+n_overlap_bins = sum(abs(avg_photons / avg_photons_2 - 1) < error_R)
+print(n_overlap_bins)
+
+axes[1].axhline(1, color="black", lw=1.5)
+axes[0].set_ylim(0.7, 2.5)
+axes[1].set_ylim(0.95, 1.05)
+
+title = ""
+save_fig()
+
+
+fig, axes = plt.subplots(
+    2,
+    1,
+    sharex=True,
+    figsize=(7, 9),
+    gridspec_kw={"height_ratios": [3, 1], "hspace": 0.1},
+)
+
+axes[0].hist(
+    bin_centers,
+    bins=bin_edges,
+    weights=avg_photons,
+    histtype="step",
+    color="black",
+    lw=1,
+)
+axes[0].bar(
+    bin_centers,
+    height=std * 2,
+    bottom=avg_photons - std,
+    alpha=0.3,
+    width=width,
+    color="black",
+    linewidth=0,
+)
+
+axes[0].hist(
+    bin_centers,
+    bins=bin_edges,
+    weights=avg_photons_2,
+    histtype="step",
+    color="tab:orange",
+    lw=1,
+)
+axes[0].bar(
+    bin_centers,
+    height=std_2 * 2,
+    bottom=avg_photons_2 - std_2,
+    alpha=0.3,
+    width=width,
+    color="tab:orange",
+    linewidth=0,
+)
+
+true_mean = bin_centers + 1
+# axes[0].hist(bin_centers, bins=bin_edges, weights=true_mean, histtype='step', color='blue', lw=1, linestyle='--')
+
+
+error_R = get_ratio_uncorrelated_error(avg_photons_2, std_2, avg_photons, std)
+
+axes[1].hist(
+    bin_centers,
+    bins=bin_edges,
+    weights=avg_photons / avg_photons_2,
+    histtype="step",
+    color="tab:orange",
+    lw=1,
+)
+axes[1].bar(
+    bin_centers,
+    height=error_R * 2,
+    bottom=avg_photons / avg_photons_2 - error_R,
+    alpha=0.3,
+    width=width,
+    color="tab:orange",
+    linewidth=0,
+)
+
+n_overlap_bins = sum(abs(avg_photons / avg_photons_2 - 1) < error_R)
+print(n_overlap_bins)
+
+axes[1].axhline(1, color="black", lw=1.5)
+axes[0].set_ylim(0.7, 2.5)
+axes[1].set_ylim(0.95, 1.05)
+
+title = "Plot 6"
+save_fig()

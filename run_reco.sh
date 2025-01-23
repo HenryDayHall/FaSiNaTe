@@ -4,8 +4,8 @@
 #SBATCH --partition maxcpu
 #SBATCH --job-name reco
 #SBATCH --constraint='EPYC&7402' 
-#SBATCH --output=/gpfs/dust/maxwell/user/dayhallh/physical_recos/job_logs/rec_%j.out
-#SBATCH --error=/gpfs/dust/maxwell/user/dayhallh/physical_recos/job_logs/rec_%j.err
+#SBATCH --output=/data/dust/user/dayhallh/physical_recos/job_logs/rec_%j.out
+#SBATCH --error=/data/dust/user/dayhallh/physical_recos/job_logs/rec_%j.err
 #SBATCH --mail-type=FAIL
 ##SBATCH --nodelist="max-wn063"         # you can select specific nodes, if necessary
 
@@ -16,7 +16,17 @@ repo_dir=/home/dayhallh/training/physical_recos
 # Where to find input and output, will be mounted to /user_data inside the container
 data_dir=/data/dust/user/dayhallh/physical_recos
 # Need to pick an input file, this also determines the output file (sim->rec)
-input_file=sim_output/di_photons_g4_output_files/ild-sim-e2020pdg22maxsep30centralposz50-p1-seed1.slcio
+#input_file=sim_output/cc_output_files/cc_20250110_164526.slcio
+#input_file=sim_output/ccO_output_files/ccO_20250111_064152.slcio
+#input_file=sim_output/ccA4_output_files/ccA4_20250110_180746.slcio
+#input_file=sim_output/cc4_output_files/ccA4_20250110_180746.slcio
+#input_file=sim_output/g4_output_files/g4_20250112_200139.slcio
+#input_file=sim_output/g4_output_files/g4_20250113_170817.slcio
+#input_file=sim_output/ccA10_output_files/ccA10_20250114_210118.slcio
+#input_file=sim_output/ccO10_output_files/ccO10_20250121_152040.slcio
+#input_file=sim_output/cciiO10_output_files/cciiO10_20250122_120206.slcio
+input_file=sim_output/cciiA10_output_files/cciiA10_20250122_120328.slcio
+
 # if desired, pick a detector model, default is ILD_l5_o1_v02
 # detector_model=ILD_l5_o1_v02
 # Your singularity, created with create_singularity.sh if needed

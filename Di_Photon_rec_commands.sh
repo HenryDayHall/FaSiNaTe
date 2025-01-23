@@ -25,6 +25,10 @@ if [ ! -f $input_file ]; then
     if [ ! -f $input_file ]; then
         echo "Input file not found at $1 or $input_file"
         exit 1
+    else
+        echo "Found input file at $input_file"
+        # get the abs path
+        input_file=$(readlink -f $input_file)
     fi
 fi
 echo "Input file: $input_file"
@@ -54,5 +58,5 @@ with_gaps=./MarlinStdReco_WITH_GAPS.xml
 cp $with_gaps $prod_dir
 cd $prod_dir
 
-echo Marlin $with_gaps --constant.DetectorModel=$detector_model --constant.OutputBaseName=/user_data/$output_base --global.LCIOInputFiles=/user_data/$input_file --constant.RunBeamCalReco=false;
-Marlin $with_gaps --constant.DetectorModel=$detector_model --constant.OutputBaseName=/user_data/$output_base --global.LCIOInputFiles=/user_data/$input_file --constant.RunBeamCalReco=false;
+echo Marlin $with_gaps --constant.DetectorModel=$detector_model --constant.OutputBaseName=$output_base --global.LCIOInputFiles=$input_file --constant.RunBeamCalReco=false;
+Marlin $with_gaps --constant.DetectorModel=$detector_model --constant.OutputBaseName=$output_base --global.LCIOInputFiles=$input_file --constant.RunBeamCalReco=false;

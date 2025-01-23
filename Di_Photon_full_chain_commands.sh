@@ -31,10 +31,12 @@ if [ ! -f $input_file ]; then
         exit 1;
     fi
 fi
+# make it abs path
+input_file=$(realpath $input_file);
 echo "Starting the simulation from the input file: $input_file";
 
 output_file_base=$(basename $input_file);
-output_file_dir=/user_data/output/$2/;
+output_file_dir=/user_data/output/${output_file_base%.*}/;
 mkdir -p $output_file_dir;
 
 current_datetime=$3
