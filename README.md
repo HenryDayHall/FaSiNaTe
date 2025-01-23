@@ -5,11 +5,14 @@ that has been created in a similar manner to the [CaloClouds](https://gitlab.des
 It's an agglomeration of work done by Peter McKeown and Anatolii Korol.
 There are roughly 5 steps;
 
-1. Compile to model into c++ *TODO*
+1. Compile to model into c++, see `inference.py` (but you will need to implement changes).
 2. Create a sample of inputs to start events from, see `Di_Photon_Input_slcio.py`.
 3. Simulate events, using the model you compiled, see `run_sim.sh`.
-4. Reconstruct the simulated events, see `run_rec.sh`.
-5. Perform analysis on the events. Only a photon separation analysis is currently described.
+4. Reconstruct the simulated events, see `run_reco.sh`.
+5. Perform analysis on the events. Only a photon separation analysis is currently described, see `run_analysis.sh`.
+6. Plots from multiple analysis can be compared, an example is given in `Di_Photon_Analysis_Plots.py`.
+
+Steps 3, 4 and 5 can be run in sequence using `run_all.sh`, which chains the commands from `run_sim.sh`, `run_reco.sh` and `run_analysis.sh`. It's normally best to check each stage separately in your environment before running all of them together. It requires the same sort of modifications as steps 3, 4 and 5.
 
 To use the repository, you must clone recursively, because you need the submodules.
 
@@ -23,12 +26,25 @@ Or if you have already cloned the repository, from inside the repository do
 git submodule update --init --recursive
 ```
 
+Almost all of this process in built and run inside a singularity container.
+This isn't strictly necessary - at least on DESY's maxwell cluster, everything can be done directly in the shell. 
+However, since the `key4hep` setup in `setup_env_stable.sh` can only be run once, and can create unpredictable issues if run multiple times, using the singularity ensures a clean environment no matter how you run the scripts.
+Generally the `run_`...`.sh` scripts are designed to be submitted as slurm jobs, in which case you would have a clean environment anyway, but they can also be directly sourced.
+
 Below, you can read a bit more about how to run each of these steps and what they are expected to produce.
 The folder this repository has been cloned into is referred to as `repo_dir`.
 
 ## Compiling a model
 
-*TODO*
+The concept is to make a trace of the model using `poutine.trace`, which can then be run in the C++ simulation.
+Tracing a model has a few restrictions;
+
+- All the code for the model must be isolated in a single class.
+- The model must use only native python and torch functions.
+
+You can see an example of this in `inference.py`, which also produces a number of diagnostic plots.
+It takes no input arguments, all updates are made by modifying the scrip itself.
+If your model was produced from the same classes as the CaloClouds-2/3 models, you should be able to use this with minimal changes, otherwise, you will need to write your own inference class.
 
 
 ## Making the input sample
