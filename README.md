@@ -17,7 +17,7 @@ Steps 3, 4 and 5 can be run in sequence using `run_all.sh`, which chains the com
 To use the repository, you must clone recursively, because you need the submodules.
 
 ```bash
-git clone --recurse-submodules https://gitlab.desy.de/ftx-sft/generative/analysis_chain.git
+git clone --recurse-submodules git@gitlab.desy.de:ftx-sft/generative/analysis_chain.git
 ```
 
 Or if you have already cloned the repository, from inside the repository do
