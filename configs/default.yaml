@@ -84,11 +84,12 @@ scenarios:
       # Per energy.
       n_events: 3000
       # Directions in degrees, in the global ILD frame, from the IP into the
-      # front face of the stave, spread uniformly in solid angle.
+      # front face of the stave.
       theta_min_max: [43, 137]
       phi_min_max: [79, 109]
       gun_from_ip: true
-      spherical_distribution: true
+      # Spread so that the photons start uniformly over the front face.
+      distribution: surface
       # The i-th energy uses seed + i, so the samples are independent.
       seed: 0
 

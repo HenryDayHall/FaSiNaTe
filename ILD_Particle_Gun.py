@@ -14,6 +14,8 @@ import particle
 REPO_DIR = os.path.dirname(os.path.realpath(__file__))
 # Subfolder of paths.data_dir (see configs/default.yaml) that the gun writes to
 OUTPUT_SUBDIR = "input_single_particle_gun"
+# How the directions can be spread within the theta and phi ranges (see --distribution)
+DISTRIBUTIONS = ("spherical", "angular", "surface")
 
 
 def str_to_bool(text):
@@ -24,6 +26,11 @@ def str_to_bool(text):
     if lowered in ("0", "false", "f", "no", "n", "off"):
         return False
     raise argparse.ArgumentTypeError(f"expected a boolean, not '{text}'")
+
+
+def spherical_flag(text):
+    """The older --spherical_distribution flag, as a --distribution value."""
+    return "spherical" if str_to_bool(text) else "angular"
 
 
 def default_save_dir():
@@ -81,12 +88,6 @@ def get_parser():
             "configured paths.data_dir)",
         ),
         ("gun_from_ip", str_to_bool, True, "If true, gun emulates particle from the IP"),
-        (
-            "spherical_distribution",
-            str_to_bool,
-            True,
-            "If true, distribute momenta evenly on a sphere",
-        ),
     ]
     # optionally, all of the simple_args can be specified postionally
     for arg, arg_type, default, help_str in simple_args:
@@ -97,6 +98,21 @@ def get_parser():
             default=default,
             help=help_str,
         )
+    parser.add_argument(
+        "--distribution",
+        choices=DISTRIBUTIONS,
+        default="spherical",
+        help="How the directions are spread within the theta and phi ranges: "
+        "spherical, uniform in solid angle; angular, uniform in theta and phi; "
+        "surface, so that the gun positions are uniform over the calorimeter "
+        "surface (needs gun_from_ip)",
+    )
+    parser.add_argument(
+        "--spherical_distribution",
+        dest="distribution",
+        type=spherical_flag,
+        help="Older form of --distribution: true for spherical, false for angular",
+    )
 
     # ranged args have to be specified with flags
     # or we wouldn't know if you were specifying a range or a single value
@@ -153,7 +169,20 @@ def pick_momenta(parsed_args, mass):
     )
 
     # pick the momenta
-    if has_distribution and parsed_args.spherical_distribution:
+    if parsed_args.distribution == "surface":
+        if not parsed_args.gun_from_ip:
+            raise ValueError(
+                "The surface distribution needs gun_from_ip, so that the gun is where "
+                "the direction from the IP crosses the calorimeter surface"
+            )
+        theta, phi = gen_surface_momenta(
+            n_events,
+            parsed_args.theta_min_max,
+            parsed_args.phi_min_max,
+            parsed_args.theta,
+            parsed_args.phi,
+        )
+    elif has_distribution and parsed_args.distribution == "spherical":
         theta, phi = gen_spherical_momenta(
             n_events,
             parsed_args.theta_min_max,
@@ -228,6 +257,40 @@ def gen_spherical_momenta(n_points, theta_min_max, phi_min_max, theta=90.0, phi=
     return thetas, phis
 
 
+def gen_surface_momenta(n_points, theta_min_max, phi_min_max, theta=90.0, phi=90.0):
+    """
+    Generate directions from the IP that cross the calorimeter surface (the
+    plane y = const that pick_gun_position puts the gun on, the front face of
+    the top barrel stave) at points spread evenly over the part of it within
+    the theta and phi ranges.
+
+    A direction crosses the plane y = 1 at x = cot(phi), z = rho cot(theta),
+    with rho = sqrt(1 + x^2), so the area element there is
+    dx dz = rho dx d(cot(theta)): cot(theta) is uniform, and x = cot(phi) has a
+    density proportional to rho. The distance of the plane only scales this.
+
+    Parameters and returns are as for gen_spherical_momenta; the angles must be
+    strictly between 0 and 180 degrees.
+    """
+    theta_limits = np.radians(theta_min_max if theta_min_max is not None else (theta, theta))
+    phi_limits = np.radians(phi_min_max if phi_min_max is not None else (phi, phi))
+    for limits in (theta_limits, phi_limits):
+        if not np.all((limits > 0) & (limits < np.pi)):
+            raise ValueError(
+                "The surface distribution needs theta and phi strictly between "
+                "0 and 180 degrees, where the directions reach the top of the barrel"
+            )
+    cot_thetas = np.random.uniform(*np.sort(1 / np.tan(theta_limits)), size=n_points)
+    x_limits = np.sort(1 / np.tan(phi_limits))
+    rho_max = np.sqrt(1 + np.max(x_limits**2))
+    xs = np.empty(0)
+    while len(xs) < n_points:  # rejection sampling: keep x with probability rho / rho_max
+        proposed = np.random.uniform(*x_limits, size=n_points)
+        keep = np.random.uniform(0, rho_max, size=n_points) < np.sqrt(1 + proposed**2)
+        xs = np.concatenate([xs, proposed[keep]])
+    return np.arctan2(1, cot_thetas), np.arctan2(1, xs[:n_points])
+
+
 def momenta_to_pxyz(
     mass,
     thetas,
@@ -274,8 +337,8 @@ def get_file_name(parsed_args):
     )
     if parsed_args.gun_from_ip:
         base_name += "_ip"
-    if not parsed_args.spherical_distribution:
-        base_name += "_angular"
+    if parsed_args.distribution != "spherical":
+        base_name += f"_{parsed_args.distribution}"
     save_dir = parsed_args.save_dir or default_save_dir()
     file_path = os.path.join(save_dir, base_name + ".slcio")
     return file_path
