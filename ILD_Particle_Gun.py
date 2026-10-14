@@ -11,6 +11,37 @@ import argparse
 import h5py
 import particle
 
+REPO_DIR = os.path.dirname(os.path.realpath(__file__))
+# Subfolder of paths.data_dir (see configs/default.yaml) that the gun writes to
+OUTPUT_SUBDIR = "input_single_particle_gun"
+
+
+def str_to_bool(text):
+    """Parse a boolean command line value; argparse's type=bool treats "False" as True."""
+    lowered = text.strip().lower()
+    if lowered in ("1", "true", "t", "yes", "y", "on"):
+        return True
+    if lowered in ("0", "false", "f", "no", "n", "off"):
+        return False
+    raise argparse.ArgumentTypeError(f"expected a boolean, not '{text}'")
+
+
+def default_save_dir():
+    """
+    The input_single_particle_gun folder inside the configured data directory.
+
+    Inside a container started by the run_*.sh scripts the configuration is passed
+    in as FASINATE_* environment variables (as setup.sh does), so those win;
+    otherwise the configuration files are read with scripts/fasinate_config.py.
+    """
+    data_dir = os.environ.get("FASINATE_PATHS_DATA_DIR")
+    if not data_dir:
+        sys.path.insert(0, os.path.join(REPO_DIR, "scripts"))
+        from fasinate_config import load_config
+
+        data_dir = load_config()["paths"]["data_dir"]
+    return os.path.join(data_dir, OUTPUT_SUBDIR)
+
 
 class ParticleProperties:
     def __init__(self, pid, mass, charge):
@@ -22,6 +53,8 @@ class ParticleProperties:
     def from_parser(cls, parsed_args):
         pid = parsed_args.pid
         library_particle = particle.Particle.from_pdgid(pid)
+        if library_particle.mass is None or library_particle.charge is None:
+            raise ValueError(f"The particle package has no mass or charge for PDG ID {pid}")
         return cls(
             pid=pid,
             mass=library_particle.mass / 1000,
@@ -40,11 +73,17 @@ def get_parser():
         ("n_events", int, 100, "Number of events to generate"),
         ("pid", int, 22, "Particle Type"),
         ("seed", int, 0, "Random seed"),
-        ("save_dir", str, ".", "Directory to save the LCIO file"),
-        ("gun_from_ip", bool, True, "If true, gun emulates particle from the IP"),
+        (
+            "save_dir",
+            str,
+            None,
+            f"Directory to save the LCIO file (default: {OUTPUT_SUBDIR} in the "
+            "configured paths.data_dir)",
+        ),
+        ("gun_from_ip", str_to_bool, True, "If true, gun emulates particle from the IP"),
         (
             "spherical_distribution",
-            bool,
+            str_to_bool,
             True,
             "If true, distribute momenta evenly on a sphere",
         ),
@@ -80,7 +119,7 @@ def get_parser():
             action="store",
             type=float,
             nargs=2,
-            help="Minimum and maximum {range_property} {description}",
+            help=f"Minimum and maximum {range_property} {description}",
         )
 
     return parser
@@ -116,7 +155,11 @@ def pick_momenta(parsed_args, mass):
     # pick the momenta
     if has_distribution and parsed_args.spherical_distribution:
         theta, phi = gen_spherical_momenta(
-            n_events, parsed_args.theta_min_max, parsed_args.phi_min_max
+            n_events,
+            parsed_args.theta_min_max,
+            parsed_args.phi_min_max,
+            parsed_args.theta,
+            parsed_args.phi,
         )
     else:
         if parsed_args.theta_min_max is not None:
@@ -145,17 +188,26 @@ def pick_momenta(parsed_args, mass):
     return theta, phi, energy
 
 
-def gen_spherical_momenta(n_points, theta_min_max, phi_min_max):
+def gen_spherical_momenta(n_points, theta_min_max, phi_min_max, theta=90.0, phi=90.0):
     """
     Generate momenta that conform to theta and phi ranges,
     but are sampled evenly on the surface of a sphere.
 
+    Sampling cos(theta) and phi uniformly gives a uniform density on the sphere,
+    so the patch between the limits is sampled exactly, with no rejection loop.
+
     Parameters
     ----------
-    theta_min_max : tuple
+    n_points : int
+        Number of directions to generate.
+    theta_min_max : tuple or None
         The minimum and maximum theta angles in degrees.
-    phi_min_max : tuple
+        If None, every point has the fixed `theta`.
+    phi_min_max : tuple or None
         The minimum and maximum phi angles in degrees.
+        If None, every point has the fixed `phi`.
+    theta, phi : float
+        Fixed angles in degrees, used when the matching range is None.
 
     Returns
     -------
@@ -164,27 +216,16 @@ def gen_spherical_momenta(n_points, theta_min_max, phi_min_max):
     phi : array-like (n_events,)
         The phi angles in radians.
     """
-    theta = np.empty(n_points)
-    phi = np.empty(n_points)
-    needed = list(range(n_points))
-    while needed:  # simple rejection sampling
-        pxyz = np.random.uniform(-1, 1, size=(n_points, 3))
-        pxyz /= np.linalg.norm(pxyz, axis=1)[..., np.newaxis]
-        theta_here = np.arccos(pxyz[:, 2])
-        phi_here = np.arctan2(pxyz[:, 1], pxyz[:, 0])
-        in_range = (
-            (theta_here > np.radians(theta_min_max[0]))
-            * (theta_here < np.radians(theta_min_max[1]))
-            * (phi_here > np.radians(phi_min_max[0]))
-            * (phi_here < np.radians(phi_min_max[1]))
-        )
-        n_generated = np.sum(in_range)
-        n_needed = len(needed)
-        theta[needed[:n_generated]] = theta_here[in_range][:n_needed]
-        phi[needed[:n_generated]] = phi_here[in_range][:n_needed]
-        needed = needed[n_generated:]
-
-    return theta, phi
+    if theta_min_max is None:
+        thetas = np.full(n_points, np.radians(theta))
+    else:
+        cos_limits = np.cos(np.radians(theta_min_max))
+        thetas = np.arccos(np.random.uniform(cos_limits[0], cos_limits[1], size=n_points))
+    if phi_min_max is None:
+        phis = np.full(n_points, np.radians(phi))
+    else:
+        phis = np.radians(np.random.uniform(*phi_min_max, size=n_points))
+    return thetas, phis
 
 
 def momenta_to_pxyz(
@@ -201,10 +242,10 @@ def momenta_to_pxyz(
     mass : float
         The mass of the particle in GeV.
     thetas : array-like (n_events,) or float
-        The theta angles of the particles in degrees.
+        The theta angles of the particles in radians.
         If a float, all particles have the same theta.
     phis : array-like (n_events,) or float
-        The phi angles of the particles in degrees.
+        The phi angles of the particles in radians.
         If a float, all particles have the same phi.
     energies : array-like (n_events,)
         The energies of the particles units of GeV.
@@ -224,9 +265,9 @@ def get_file_name(parsed_args):
         min_max_name = f"{range_name}_min_max"
         if getattr(parsed_args, min_max_name) is not None:
             min_max = getattr(parsed_args, min_max_name)
-            summary = f"{range_name[:2]}{int(min_max[0])}-{int(min_max[1])}"
+            summary = f"{range_name[:2]}{min_max[0]:g}-{min_max[1]:g}"
         else:
-            summary = f"{range_name[:2]}{int(getattr(parsed_args, range_name))}"
+            summary = f"{range_name[:2]}{getattr(parsed_args, range_name):g}"
         summaries.append(summary)
     base_name = (
         f"p{parsed_args.pid}_" + "_".join(summaries) + f"_seed{parsed_args.seed}"
@@ -235,7 +276,8 @@ def get_file_name(parsed_args):
         base_name += "_ip"
     if not parsed_args.spherical_distribution:
         base_name += "_angular"
-    file_path = os.path.join(parsed_args.save_dir, base_name + ".slcio")
+    save_dir = parsed_args.save_dir or default_save_dir()
+    file_path = os.path.join(save_dir, base_name + ".slcio")
     return file_path
 
 
@@ -244,6 +286,12 @@ def pick_gun_position(gun_from_ip, pxyz, calorimeter_surface_y=1804.7):
     The gun may be a fixed point, or it may be at the IP
     """
     if gun_from_ip:
+        if np.any(pxyz[:, 1] <= 0):
+            raise ValueError(
+                "With gun_from_ip, every particle needs a positive y momentum to reach "
+                f"the calorimeter surface at y={calorimeter_surface_y} mm; "
+                "keep phi strictly between 0 and 180 degrees and theta away from 0 and 180"
+            )
         distance_to_surface = calorimeter_surface_y / pxyz[:, 1]
         gun_pos = distance_to_surface[:, None] * pxyz
     else:
@@ -287,7 +335,7 @@ def pxyz_to_lcio(
 
     # write a RunHeader
     run = IMPL.LCRunHeaderImpl()
-    run.parameters().setValue("Generator", "${lcgeo}_DIR/examples/lcio_particle_gun.py")
+    run.parameters().setValue("Generator", os.path.basename(__file__))
     run.parameters().setValue("PDG", particle_properties.pid)
     run.parameters().setValue("Charge", particle_properties.charge)
     run.parameters().setValue("Mass", particle_properties.mass)
@@ -349,6 +397,7 @@ def run(parse_args):
     gun_position = pick_gun_position(parse_args.gun_from_ip, pxyzs)
 
     outfile = get_file_name(parse_args)
+    os.makedirs(os.path.dirname(os.path.abspath(outfile)), exist_ok=True)
     print(f"Writing to {outfile}")
     pxyz_to_lcio(
         outfile,
