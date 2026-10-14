@@ -12,11 +12,7 @@
 
 
 # Change these to your files/directories ~~~~~~~~~~~~~~~
-# Folder with ddml_diphoton_analysis repository in it
-repo_dir=/home/dayhallh/training/physical_recos
-# Where to find input and output, will be mounted to /user_data inside the container
-data_dir=/data/dust/user/dayhallh/physical_recos
-# Need to pick an input file, this also determines the output file (rec->ana)
+# Need to pick an input file in the data_dir, this also determines the output file (rec->ana)
 #input_file=rec_output/cc_output_files/cc_20250110_164526_ILD_l5_o1_v02_REC.slcio
 #input_file=rec_output/ccO_output_files/ccO_20250111_064152_ILD_l5_o1_v02_REC.slcio
 #input_file=rec_output/ccA2_output_files/ccA2_20250111_050025_ILD_l5_o1_v02_REC.slcio
@@ -30,16 +26,24 @@ input_file=rec_output/cciiA2_output_files/cciiA2_20250122_120327_ILD_l5_o1_v02_R
 #input_file=rec_output/g4_output_files/g4_20250113_170817_ILD_l5_o1_v02_REC.slcio
 # Need to say how many events to process
 n_events=10000
-# Your singularity, created with create_singularity.sh if needed
-singularity_path=./singularity_dir/ubuntu22_latest.sif
-export SINGULARITY_TMPDIR=./singularity_dir/tmp/
-export SINGULARITY_CACHEDIR=./singularity_dir/cache/
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# Paths come from the configuration (configs/default.yaml, overridden by
+# configs/local.yaml; see the README). Run this from the repository root;
+# sbatch starts jobs in the directory you submit from.
+source "${FASINATE_REPO_DIR:-$PWD}/scripts/load_config.sh" || { return 1 2>/dev/null || exit 1; }
+# Folder with the ddml_diphoton_analysis repository in it
+repo_dir=$FASINATE_REPO_DIR
+# mounted to /user_data inside the container
+data_dir=$FASINATE_PATHS_DATA_DIR
+singularity_path=$FASINATE_CONTAINER_IMAGE
+export SINGULARITY_TMPDIR=$FASINATE_CONTAINER_TMP_DIR
+export SINGULARITY_CACHEDIR=$FASINATE_CONTAINER_CACHE_DIR
 
 singularity_path=$(realpath $singularity_path)
 starting_dir=$PWD
 
-cd /home/dayhallh/training/physical_recos/ddml_diphoton_analysis
+cd $repo_dir/ddml_diphoton_analysis
 
 singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$repo_dir:/user_repo,$data_dir:/user_data $singularity_path instance1
 

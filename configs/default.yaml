@@ -1,0 +1,65 @@
+# FaSiNaTe configuration defaults.
+#
+# Don't edit this file for your own setup. Put the settings you want to change
+# in configs/local.yaml (git-ignored, read automatically) or in a file named by
+# $FASINATE_CONFIG. An override file only needs the keys it changes, e.g.
+#
+#   paths:
+#     data_dir: /data/dust/user/$USER/fasinate
+#
+# In values, ${section.key} refers to another setting and $VAR or ${VAR} to an
+# environment variable. Relative paths are relative to the repository root.
+# Print the merged result with: python3 scripts/fasinate_config.py
+
+paths:
+  # Where external software (DDML, the container image) is cloned and built.
+  software_dir: external
+  # Inputs, simulation and reconstruction outputs, and analysis results.
+  # Point this at a filesystem with plenty of space.
+  data_dir: data
+  # Folder the steering file loads models from (mounted as /model_dir).
+  # Building DDML downloads its reference models into its models/ folder;
+  # put your own traced models there too, or point this somewhere else.
+  model_dir: ${ddml.source_dir}/models
+
+ddml:
+  repository: https://github.com/key4hep/DDML.git
+  branch: python-inference
+  # Commit to build instead of the head of `branch`. Pin it (quoted, full
+  # hash) for benchmark runs.
+  commit: null
+  # On rebuild, fast-forward the clone to the head of `branch` (or fetch `commit`).
+  update: true
+  source_dir: ${paths.software_dir}/DDML
+  build_dir: ${ddml.source_dir}/build
+  install_dir: ${ddml.source_dir}/install
+  # Written by scripts/build_ddml.sh. Sourcing it sets up the Key4hep release
+  # DDML was built against, then DDML itself; the run scripts use it for ddsim.
+  env_file: ${paths.software_dir}/env/ddml.sh
+  jobs: 4
+  # Build the embedded-Python inference backend (DDML_ENABLE_EMBEDDED_PYINFERENCE).
+  embedded_python: true
+  # Download DDML's reference models while building (needs HTTPS access to CERN).
+  download_models: true
+  # Extra CMake arguments, e.g. [-DCMAKE_BUILD_TYPE=Release]
+  cmake_args: []
+
+key4hep:
+  setup_script: /cvmfs/sw.hsf.org/key4hep/setup.sh
+  # Release passed to the setup script with -r, e.g. "2026-05-13". `latest` is
+  # resolved when DDML is built and the resolved date goes into ddml.env_file,
+  # so runs always use the stack DDML was built against. Pin it for benchmarks.
+  release: latest
+
+container:
+  # Build DDML inside an Apptainer/Singularity image with /cvmfs mounted. Set
+  # to false if the shell already runs a supported OS with /cvmfs (e.g. in CI).
+  # The run_*.sh scripts always use the container.
+  enabled: true
+  # A local .sif file, or a URI such as docker://...
+  image: ${paths.software_dir}/containers/key4hep-alma9.sif
+  # Where scripts/build_ddml.sh pulls `image` from if that file doesn't exist.
+  # Recent Key4hep releases are built for AlmaLinux 9 and Ubuntu 24.04, not 22.04.
+  pull_from: docker://ghcr.io/key4hep/key4hep-images/alma9:latest
+  tmp_dir: ${paths.software_dir}/containers/tmp
+  cache_dir: ${paths.software_dir}/containers/cache

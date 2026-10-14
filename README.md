@@ -26,6 +26,8 @@ Or if you have already cloned the repository, from inside the repository do
 git submodule update --init --recursive
 ```
 
+[DDML](https://github.com/key4hep/DDML), which runs the model inside the simulation, is not a submodule; `scripts/build_ddml.sh` builds it (see [Simulating events](#simulating-events)).
+
 Almost all of this process in built and run inside a singularity container.
 This isn't strictly necessary - at least on DESY's maxwell cluster, everything can be done directly in the shell. 
 However, since the `key4hep` setup in `setup_env_stable.sh` can only be run once, and can create unpredictable issues if run multiple times, using the singularity ensures a clean environment no matter how you run the scripts.
@@ -33,6 +35,35 @@ Generally the `run_`...`.sh` scripts are designed to be submitted as slurm jobs,
 
 Below, you can read a bit more about how to run each of these steps and what they are expected to produce.
 The folder this repository has been cloned into is referred to as `repo_dir`.
+
+## Configuration
+
+Settings shared by the scripts are in `configs/default.yaml`:
+where external software is cloned and built (`paths.software_dir`),
+where inputs and outputs go (`paths.data_dir`),
+where the steering file finds models (`paths.model_dir`),
+which DDML and Key4hep release to build, and which container image to use.
+
+Don't edit `default.yaml` for your own setup.
+Put the settings you change in `configs/local.yaml`, which git ignores and the scripts read automatically, e.g.
+
+```yaml
+paths:
+  software_dir: /data/dust/user/$USER/fasinate/external
+  data_dir: /data/dust/user/$USER/fasinate/data
+```
+
+Settings can refer to each other (`${paths.software_dir}`) and to environment variables (`$USER`), and relative paths are relative to the repository.
+To layer another file on top, e.g. for a site or a CI job, list it in `FASINATE_CONFIG`; `scripts/build_ddml.sh` also takes `--config FILE` and `--set section.key=value`.
+Check the result with
+
+```bash
+python3 scripts/fasinate_config.py                      # all settings
+python3 scripts/fasinate_config.py --get paths.data_dir  # one setting
+```
+
+This needs Python 3 with PyYAML (`python3 -m pip install --user pyyaml` if it's missing).
+The `run_*.sh` scripts load the configuration through `scripts/load_config.sh`, so run them from the repository root (or set `FASINATE_REPO_DIR`).
 
 ## Compiling a model
 
@@ -68,61 +99,41 @@ That is the file that is used to specify the position and direction of the incid
 
 ## Simulating events
 
-For compatibility reasons, we need an ubuntu 22 image.
-Let's label the folder for the image as `singularity_dir`.
-A known working image can be created with;
+The simulation runs the model inside `ddsim` through [DDML](https://github.com/key4hep/DDML).
+Build DDML's `python-inference` branch once with
 
 ```bash
-# starting in a file system with plenty of space
-mkdir singularity_dir
-cd singularity_dir
-singularity pull docker://ghcr.io/key4hep/key4hep-images/ubuntu22:latest
-mkdir cache
-mkdir tmp
+scripts/build_ddml.sh    # add --dry-run to see the settings and steps first
 ```
 
-You should now have a file called `ubuntu22_latest.sif`.
+Following the [configuration](#configuration), this
 
-In addition you need to compile `ddfastshowerml`.
-This is a submodule of this repository, so you should already have a copy.
-There are instructions for compiling in the `ddfastshowerml/README.md`,
-but it's important that the version of key4hep you use to build with is the same one you run with.
-Also, since we are running in a container, you also need to build in a container
-(it sometimes works without, but it's not very reliable).
+1. clones DDML into `ddml.source_dir`, or fast-forwards an existing clone (or checks out `ddml.commit`, if set);
+2. pulls the container image to `container.image` if it isn't there yet;
+3. builds and installs DDML inside that container, in a clean shell, against the Key4hep release `key4hep.release`;
+4. writes `ddml.env_file`, which sets up that same Key4hep release and then DDML, and checks that it works.
 
-In short;
-ensure you start with a clean shell, in which no python environment has ever been activated.
-It's a bit inclined to get confused.
-Then the commands are;
+The Key4hep release you build with must be the one you run with.
+The environment file records the release DDML was built against (also when `key4hep.release` is `latest`), and the simulation scripts source it inside the container.
+At the end, the script prints the DDML commit and Key4hep release it used, ready to paste into `configs/local.yaml` to pin them.
+Re-run it after changing either; `--clean` starts from an empty build directory.
+
+Recent Key4hep releases are built for AlmaLinux 9 and Ubuntu 24.04 rather than Ubuntu 22.04, so the default image is `ghcr.io/key4hep/key4hep-images/alma9`.
+
+The build downloads DDML's reference models into `models/` in the DDML clone, which is the default `paths.model_dir`, mounted as `/model_dir` for the steering file.
+Put your own traced models there too, or point `paths.model_dir` at the folder that has them.
+
+If your clone still has the old `ddfastshowerml` submodule, build DDML first, then keep the models you added to it (they aren't tracked anywhere) before removing it:
 
 ```bash
-singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$repo_dir:/user_repo $singularity_path instance1
-singularity instance shell instance://instance1
+cp -n ddfastshowerml/models/*.pt "$(python3 scripts/fasinate_config.py --get paths.model_dir)"/
+rm -rf ddfastshowerml .git/modules/ddfastshowerml
+git config --remove-section submodule.ddfastshowerml
 ```
 
-This will change your prompt to `Singularity>`, or something like that.
-
-```bash
-source setup_env_stable.sh
-cd ddfastshowerml
-mkdir build
-cd build
-cmake ..
-make -j4 install
-exit
-```
-
-Then stop the singularity instance with 
-
-```bash
-singularity instance stop instance1
-```
-
-You should only need to do this build once.
-
-Assuming this build went smoothly, the last stage of setting up is to modify the paths in `run_sim.sh`.
+The last stage of setting up is to choose what to simulate in `run_sim.sh`.
 Looking at the top of the file, you can see some example instructions for SLURM jobs, which you may want to modify,
-then further down you must modify the paths/variables in this block;
+then further down you set the model and input file in this block;
 
 ```bash
 # Change these to your files/directories ~~~~~~~~~~~~~~~
@@ -130,20 +141,20 @@ then further down you must modify the paths/variables in this block;
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ```
 
-Now you can source this file to run the simulation. Or submit it to slurm with `sbatch run_sim.sh`.
-It will produce output under `sim_output` in the data directory you specified in `run_sim.sh`.
+Now you can source this file, from the repository root, to run the simulation. Or submit it to slurm with `sbatch run_sim.sh`.
+It will produce output under `sim_output` in `paths.data_dir`.
 
 
 ## Reconstructing events
 
 The simulated events need to be parsed by standard reconstructions algorithms.
-This can be controlled from the `run_rec.sh` script, and has fewer dependances than simulation.
+This can be controlled from the `run_reco.sh` script, and has fewer dependances than simulation.
 
-As with `run_sim.sh`, open `run_reco.sh` and fix the variables in the upper block to match your
-environment.
-Source this file to run the reconstruction, or submit it to slurm with `sbatch run_rec.sh`.
+As with `run_sim.sh`, open `run_reco.sh` and choose the input file in the upper block;
+the paths come from the configuration.
+Source this file to run the reconstruction, or submit it to slurm with `sbatch run_reco.sh`.
 
-It will produce output under `rec_output` in the data directory you specified in `run_rec.sh`.
+It will produce output under `rec_output` in `paths.data_dir`.
 
 ## Analysing the events
 

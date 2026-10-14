@@ -6,3 +6,8 @@ singularity_dir
 build/
 plots/
 .bash_history
+# personal settings, and the default places for external software and data
+configs/local.yaml
+/external/
+/data/
+__pycache__/
