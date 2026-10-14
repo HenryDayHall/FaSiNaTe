@@ -2,14 +2,7 @@
 
 ## commands to be run in singularity container
 
-source /user_repo/setup_env_stable.sh;
-
-### check build et al. are up to date and additional source
-#cd build;
-#cmake ..;
-#make -j$(nproc) install;
-#source install/bin/thisDDML.sh;
-#cd ./scripts/;
+source /user_repo/setup.sh || exit 1;
 
 # first argument is the input file
 if [ -n "$1" ]; then

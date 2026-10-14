@@ -1,8 +1,7 @@
 #!/bin/bash
 
 ## commands to be run in singularity container
-# Key4hep + DDML environment written by scripts/build_ddml.sh; run_sim.sh passes its path.
-source "${FASINATE_DDML_ENV_FILE:?is not set, run this through run_sim.sh}" || exit 1;
+source /user_repo/setup.sh || exit 1;
 cd "$DDML_SOURCE_DIR/scripts/" || exit 1;
 
 export OMP_NUM_THREADS=1;

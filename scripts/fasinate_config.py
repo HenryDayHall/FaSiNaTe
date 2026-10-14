@@ -27,6 +27,8 @@ From Python:
 
 import argparse
 import datetime
+import hashlib
+import json
 import os
 import re
 import shlex
@@ -81,7 +83,26 @@ def shell_assignments(config):
     # Directories a container needs to see (at the same path) to use the DDML build.
     lines.append("export FASINATE_DDML_BIND_PATHS="
                  + shlex.quote(",".join(ddml_bind_paths(config))))
+    lines.append("export FASINATE_DDML_BUILD_STAMP=" + ddml_build_stamp(config))
     return "\n".join(lines)
+
+
+def ddml_build_stamp(config):
+    """Short hash of the settings that decide what DDML is built from and against.
+
+    build_ddml.sh writes it into the env file, and setup.sh rebuilds when it no
+    longer matches. Paths are left out, so the stamp doesn't change where the
+    repository is mounted somewhere else (e.g. /user_repo in a container).
+    """
+    flat = dict(_flatten(config))
+    image = flat["container.image"]
+    values = [flat[key] for key in (
+        "ddml.repository", "ddml.branch", "ddml.commit", "ddml.embedded_python",
+        "ddml.download_models", "ddml.cmake_args", "key4hep.setup_script",
+        "key4hep.release", "container.enabled")]
+    values.append(image if "://" in image else os.path.basename(image))
+    text = json.dumps(values, default=_to_str)
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
 def ddml_bind_paths(config):

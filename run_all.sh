@@ -30,12 +30,14 @@ model_dir=$FASINATE_PATHS_MODEL_DIR
 singularity_path=$FASINATE_CONTAINER_IMAGE
 export SINGULARITY_TMPDIR=$FASINATE_CONTAINER_TMP_DIR
 export SINGULARITY_CACHEDIR=$FASINATE_CONTAINER_CACHE_DIR
+# setup.sh in the container needs DDML built for this configuration
+"$repo_dir/scripts/build_ddml.sh" --if-needed || { return 1 2>/dev/null || exit 1; }
 
 # store the current directory for later
 starting_dir=$(pwd)
 
-# The DDML build from scripts/build_ddml.sh is mounted at the same path as outside;
-# Di_Photon_full_chain_commands.sh sources its environment file, $FASINATE_DDML_ENV_FILE.
+# The DDML build is mounted at the same path as outside, and setup.sh in the
+# containers uses the configuration loaded here, which passes through to it.
 #singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$lcgeo:/RegularLcgio/,$repo_dir:/user_repo,$output_dir:/user_output $singularity_path instance1
 singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$FASINATE_DDML_BIND_PATHS,$repo_dir:/user_repo,$data_dir:/user_data,$model_dir:/model_dir $singularity_path instance2
 
@@ -50,9 +52,9 @@ read input_file analysis_file < tmp_ddml_diphoton_params_${current_datetime}
 rm tmp_ddml_diphoton_params_${current_datetime}
 
 cd ddml_diphoton_analysis
-singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$repo_dir:/user_repo,$data_dir:/user_data $singularity_path instance3
+singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$FASINATE_DDML_BIND_PATHS,$repo_dir:/user_repo,$data_dir:/user_data $singularity_path instance3
 
-singularity run instance://instance3 /user_repo/ddml_diphoton_analysis/DDML_DiPhoton_Analysis_commands.sh $input_file -n 15000 -o $analysis_file -x /user_repo/ddml_diphoton_analysis/xml/steer.xml
+singularity run instance://instance3 /user_repo/ddml_diphoton_analysis/DDML_DiPhoton_Analysis_commands.sh $input_file -n 15000 -o $analysis_file -x /user_repo/ddml_diphoton_analysis/xml/steer.xml -e /user_repo/setup.sh
 # stop the instance
 singularity instance stop instance3
 

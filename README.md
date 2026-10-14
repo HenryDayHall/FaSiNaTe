@@ -26,11 +26,11 @@ Or if you have already cloned the repository, from inside the repository do
 git submodule update --init --recursive
 ```
 
-[DDML](https://github.com/key4hep/DDML), which runs the model inside the simulation, is not a submodule; `scripts/build_ddml.sh` builds it (see [Simulating events](#simulating-events)).
+[DDML](https://github.com/key4hep/DDML), which runs the model inside the simulation, is not a submodule; `setup.sh` builds it the first time you need it (see [Setting up the environment](#setting-up-the-environment)).
 
 Almost all of this process in built and run inside a singularity container.
 This isn't strictly necessary - at least on DESY's maxwell cluster, everything can be done directly in the shell. 
-However, since the `key4hep` setup in `setup_env_stable.sh` can only be run once, and can create unpredictable issues if run multiple times, using the singularity ensures a clean environment no matter how you run the scripts.
+However, since the `key4hep` setup in `setup.sh` can only be run once, and can create unpredictable issues if run multiple times, using the singularity ensures a clean environment no matter how you run the scripts.
 Generally the `run_`...`.sh` scripts are designed to be submitted as slurm jobs, in which case you would have a clean environment anyway, but they can also be directly sourced.
 
 Below, you can read a bit more about how to run each of these steps and what they are expected to produce.
@@ -65,6 +65,34 @@ python3 scripts/fasinate_config.py --get paths.data_dir  # one setting
 This needs Python 3 with PyYAML (`python3 -m pip install --user pyyaml` if it's missing).
 The `run_*.sh` scripts load the configuration through `scripts/load_config.sh`, so run them from the repository root (or set `FASINATE_REPO_DIR`).
 
+## Setting up the environment
+
+Every step runs in the same environment: a Key4hep release with its ML libraries, plus a build of DDML's `python-inference` branch, which runs the model inside `ddsim`.
+Get it in a clean bash shell with
+
+```bash
+source setup.sh
+```
+
+This reads the configuration, builds DDML if there's no build for this configuration yet, then sets up the Key4hep release DDML was built against, and DDML itself.
+Source it only once per shell, because the Key4hep setup can only run once.
+
+The build is done by `scripts/build_ddml.sh`, which
+
+1. clones DDML into `ddml.source_dir`, or fast-forwards an existing clone (or checks out `ddml.commit`, if set);
+2. pulls the container image to `container.image` if it isn't there yet;
+3. builds and installs DDML inside that container, in a clean shell, against the Key4hep release `key4hep.release`;
+4. writes `ddml.env_file`, which `setup.sh` sources, and checks that it works.
+
+`setup.sh` and the `run_*.sh` scripts run it with `--if-needed`, so it only builds when there's no build matching the configuration:
+changing the DDML commit or branch, the build options, the Key4hep release or the container image means a rebuild.
+Run `scripts/build_ddml.sh` yourself to update DDML to the head of its branch; `--dry-run` shows what it would do, and `--clean` starts from an empty build directory.
+At the end, it prints the DDML commit and Key4hep release it used, ready to paste into `configs/local.yaml` to pin them.
+
+DDML is built inside the container, so source `setup.sh` in that container, or on a host with the same OS (AlmaLinux, Rocky or RHEL 9 for the default image); elsewhere it stops and says which platform DDML was built for.
+Recent Key4hep releases are built for AlmaLinux 9 and Ubuntu 24.04 rather than Ubuntu 22.04, so the default image is `ghcr.io/key4hep/key4hep-images/alma9`.
+In the containers the `run_*.sh` scripts start, the commands source `/user_repo/setup.sh`, which uses the configuration passed in from outside.
+
 ## Compiling a model
 
 The concept is to make a trace of the model using `poutine.trace`, which can then be run in the C++ simulation.
@@ -88,7 +116,7 @@ A complete example of this can be found in `Di_Photon_Input_slcio.py`.
 Start by making a director to store the input file, then call like;
 
 ```bash
-source setup_env_stable.sh
+source setup.sh
 mkdir /data/dust/user/dayhallh/physical_recos/inputs
 python3 Di_Photon_Input_slcio.py --pdg 22 --maxSep 30 --centralPosZ 50 --Emax 20 --Emin 20 --outdir /data/dust/user/dayhallh/physical_recos/inputs
 ```
@@ -99,31 +127,12 @@ That is the file that is used to specify the position and direction of the incid
 
 ## Simulating events
 
-The simulation runs the model inside `ddsim` through [DDML](https://github.com/key4hep/DDML).
-Build DDML's `python-inference` branch once with
+The simulation runs the model inside `ddsim` through [DDML](https://github.com/key4hep/DDML), in the environment from [`setup.sh`](#setting-up-the-environment).
 
-```bash
-scripts/build_ddml.sh    # add --dry-run to see the settings and steps first
-```
-
-Following the [configuration](#configuration), this
-
-1. clones DDML into `ddml.source_dir`, or fast-forwards an existing clone (or checks out `ddml.commit`, if set);
-2. pulls the container image to `container.image` if it isn't there yet;
-3. builds and installs DDML inside that container, in a clean shell, against the Key4hep release `key4hep.release`;
-4. writes `ddml.env_file`, which sets up that same Key4hep release and then DDML, and checks that it works.
-
-The Key4hep release you build with must be the one you run with.
-The environment file records the release DDML was built against (also when `key4hep.release` is `latest`), and the simulation scripts source it inside the container.
-At the end, the script prints the DDML commit and Key4hep release it used, ready to paste into `configs/local.yaml` to pin them.
-Re-run it after changing either; `--clean` starts from an empty build directory.
-
-Recent Key4hep releases are built for AlmaLinux 9 and Ubuntu 24.04 rather than Ubuntu 22.04, so the default image is `ghcr.io/key4hep/key4hep-images/alma9`.
-
-The build downloads DDML's reference models into `models/` in the DDML clone, which is the default `paths.model_dir`, mounted as `/model_dir` for the steering file.
+Building DDML downloads its reference models into `models/` in the DDML clone, which is the default `paths.model_dir`, mounted as `/model_dir` for the steering file.
 Put your own traced models there too, or point `paths.model_dir` at the folder that has them.
 
-If your clone still has the old `ddfastshowerml` submodule, build DDML first, then keep the models you added to it (they aren't tracked anywhere) before removing it:
+If your clone still has the old `ddfastshowerml` submodule, build DDML first (`scripts/build_ddml.sh`), then keep the models you added to it (they aren't tracked anywhere) before removing it:
 
 ```bash
 cp -n ddfastshowerml/models/*.pt "$(python3 scripts/fasinate_config.py --get paths.model_dir)"/
@@ -142,7 +151,7 @@ then further down you set the model and input file in this block;
 ```
 
 Now you can source this file, from the repository root, to run the simulation. Or submit it to slurm with `sbatch run_sim.sh`.
-It will produce output under `sim_output` in `paths.data_dir`.
+It builds DDML first if needed, and will produce output under `sim_output` in `paths.data_dir`.
 
 
 ## Reconstructing events
@@ -151,7 +160,7 @@ The simulated events need to be parsed by standard reconstructions algorithms.
 This can be controlled from the `run_reco.sh` script, and has fewer dependances than simulation.
 
 As with `run_sim.sh`, open `run_reco.sh` and choose the input file in the upper block;
-the paths come from the configuration.
+the paths come from the configuration, and it runs in the same environment as the simulation.
 Source this file to run the reconstruction, or submit it to slurm with `sbatch run_reco.sh`.
 
 It will produce output under `rec_output` in `paths.data_dir`.

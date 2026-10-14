@@ -33,8 +33,8 @@ ddml:
   source_dir: ${paths.software_dir}/DDML
   build_dir: ${ddml.source_dir}/build
   install_dir: ${ddml.source_dir}/install
-  # Written by scripts/build_ddml.sh. Sourcing it sets up the Key4hep release
-  # DDML was built against, then DDML itself; the run scripts use it for ddsim.
+  # Written by scripts/build_ddml.sh and sourced by setup.sh: it sets up the
+  # Key4hep release DDML was built against, then DDML itself.
   env_file: ${paths.software_dir}/env/ddml.sh
   jobs: 4
   # Build the embedded-Python inference backend (DDML_ENABLE_EMBEDDED_PYINFERENCE).
