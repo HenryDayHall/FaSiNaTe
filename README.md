@@ -42,7 +42,8 @@ Settings shared by the scripts are in `configs/default.yaml`:
 where external software is cloned and built (`paths.software_dir`),
 where inputs and outputs go (`paths.data_dir`),
 where the steering file finds models (`paths.model_dir`),
-which DDML and Key4hep release to build, and which container image to use.
+which DDML and Key4hep release to build, which container image to use,
+and the benchmark: the `scenarios` to simulate and the `observables` to measure on them.
 
 Don't edit `default.yaml` for your own setup.
 Put the settings you change in `configs/local.yaml`, which git ignores and the scripts read automatically, e.g.
@@ -108,7 +109,19 @@ If your model was produced from the same classes as the CaloClouds-2/3 models, y
 
 ## Making the input sample
 
-Here I'll describe one specific example that Peter wrote for the di-photon separation analysis that
+Each benchmark scenario in the configuration says how its input events are made.
+Make the inputs of all of them, or of the ones you name, with
+
+```bash
+./generate_input.sh                # every scenario
+./generate_input.sh single_photon  # just this one
+```
+
+It runs in the same environment as the simulation, building DDML first if needed.
+The single photon scenario gives one `.slcio` file per energy, each with an `.h5` file of the true energies, momenta and gun positions, in `input_single_particle_gun` under `paths.data_dir`.
+To try a scenario with fewer events, override it in `configs/local.yaml`, e.g. `scenarios: {single_photon: {input: {n_events: 10}}}`; the file names don't include the number of events, so this replaces the full samples.
+
+For other inputs, here I'll describe one specific example that Peter wrote for the di-photon separation analysis that
 he and Anatolii were doing.
 You will likely want to change this step, to fit your analysis needs.
 

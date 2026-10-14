@@ -63,3 +63,47 @@ container:
   pull_from: docker://ghcr.io/key4hep/key4hep-images/alma9:latest
   tmp_dir: ${paths.software_dir}/containers/tmp
   cache_dir: ${paths.software_dir}/containers/cache
+
+# The benchmark. Each scenario is a set of events that every shower simulator
+# simulates and that are then reconstructed; each observable is measured on the
+# reconstructed events and compared to Geant4. The first ones follow the paper
+# "A First Full Physics Benchmark for Highly Granular Calorimeter Surrogates".
+scenarios:
+  # Single photons from the IP into one stave of the ECAL barrel, at fixed
+  # energies (the paper's single particle dataset).
+  single_photon:
+    # How ./generate_input.sh makes the input events. A particle_gun input runs
+    # ILD_Particle_Gun.py for each energy, which writes an .slcio file (and an
+    # .h5 file of the true momenta) to input_single_particle_gun in
+    # paths.data_dir; the other keys are the gun's options.
+    input:
+      type: particle_gun
+      pid: 22
+      # GeV, a file each.
+      energies: [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+      # Per energy.
+      n_events: 3000
+      # Directions in degrees, in the global ILD frame, from the IP into the
+      # front face of the stave, spread uniformly in solid angle.
+      theta_min_max: [43, 137]
+      phi_min_max: [79, 109]
+      gun_from_ip: true
+      spherical_distribution: true
+      # The i-th energy uses seed + i, so the samples are independent.
+      seed: 0
+
+observables:
+  # Mean energy of the reconstructed hits against their distance from the
+  # shower axis, the incident particle's line of flight (the paper's shower
+  # profiles).
+  radial_profile:
+    # The scenarios it is measured on.
+    scenarios: [single_photon]
+    # In mm; one profile out to each radius, the second resolving the core.
+    max_radius: [100, 30]
+    # How it is compared to Geant4, as in the paper's summary table.
+    metric: jensen_shannon
+  # Mean energy of the reconstructed hits in each ECAL layer.
+  longitudinal_profile:
+    scenarios: [single_photon]
+    metric: jensen_shannon
