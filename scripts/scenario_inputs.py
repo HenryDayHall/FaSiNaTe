@@ -17,7 +17,8 @@ scenario's input.type says how its input is made:
                 Every other key is passed on as --KEY VALUE (a list as several
                 values; null keeps the gun's default).
 
-New input types go in GENERATORS.
+New input types go in GENERATORS, and in INPUT_FILES so that
+simulate_models.sh can find the files they make.
 """
 
 import argparse
@@ -59,13 +60,30 @@ def _flags(options):
     return args
 
 
+def particle_gun_files(commands):
+    """The .slcio files that particle_gun's commands write.
+
+    The names come from ILD_Particle_Gun.py itself, so this needs the
+    environment the gun runs in (pyLCIO and friends), the one from setup.sh.
+    """
+    if REPO_DIR not in sys.path:
+        sys.path.insert(0, REPO_DIR)
+    import ILD_Particle_Gun as gun
+
+    parser = gun.get_parser()
+    # Each command is python3, the script, then the gun's options.
+    return [gun.get_file_name(parser.parse_args(command[2:])) for command in commands]
+
+
 GENERATORS = {"particle_gun": particle_gun}
+# For each input type, the files its commands make.
+INPUT_FILES = {"particle_gun": particle_gun_files}
 
 
-def input_commands(config, names=()):
-    """Lines of shell: a comment naming each scenario, then its commands."""
+def scenario_commands(config, names=()):
+    """(name, input type, commands) for every scenario, or the ones named."""
     scenarios = config["scenarios"]
-    lines = []
+    result = []
     for name in names or scenarios:
         if name not in scenarios:
             raise ConfigError("there is no scenario '%s'; the configuration has: %s"
@@ -77,8 +95,16 @@ def input_commands(config, names=()):
         if kind not in GENERATORS:
             raise ConfigError("scenarios.%s.input.type is %r; the known types are: %s"
                               % (name, kind, ", ".join(GENERATORS)))
+        result.append((name, kind, GENERATORS[kind](name, options)))
+    return result
+
+
+def input_commands(config, names=()):
+    """Lines of shell: a comment naming each scenario, then its commands."""
+    lines = []
+    for name, kind, commands in scenario_commands(config, names):
         lines.append("# %s (%s)" % (name, kind))
-        for command in GENERATORS[kind](name, options):
+        for command in commands:
             lines.append(" ".join(shlex.quote(arg) for arg in command))
     return lines
 

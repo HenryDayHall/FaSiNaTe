@@ -7,7 +7,7 @@ There are roughly 5 steps;
 
 1. Compile to model into c++, see `inference.py` (but you will need to implement changes).
 2. Create a sample of inputs to start events from, see `Di_Photon_Input_slcio.py`.
-3. Simulate events, using the model you compiled, see `run_sim.sh`.
+3. Simulate events with each model, see `simulate_models.sh` (or `run_sim.sh` for the older steering file).
 4. Reconstruct the simulated events, see `run_reco.sh`.
 5. Perform analysis on the events. Only a photon separation analysis is currently described, see `run_analysis.sh`.
 6. Plots from multiple analysis can be compared, an example is given in `Di_Photon_Analysis_Plots.py`.
@@ -141,6 +141,38 @@ That is the file that is used to specify the position and direction of the incid
 ## Simulating events
 
 The simulation runs the model inside `ddsim` through [DDML](https://github.com/key4hep/DDML), in the environment from [`setup.sh`](#setting-up-the-environment).
+
+### Simulating the benchmark with each model
+
+Each model is described by a file in `models/`, e.g. `models/caloclouds3.yaml`, which records:
+
+- `representation`: how the model represents a shower, e.g. `point_cloud`;
+- `fixed_at_training`: the factors fixed when it was trained, which it has no input for, e.g. the detector (and the compact file to simulate it in) and the particle;
+- `context`: the factors it is given for each shower, e.g. the energy and direction, with their units and training ranges;
+- `ddml`: how to run it, as DDML presets (from `python/ddml/configs.py` in DDML) passed to `ddsim --ml-model`, and the weights it loads, with their md5 sum.
+
+`simulate_models.sh` simulates the input of every scenario with every model, following DDML's README:
+
+```bash
+./simulate_models.sh --dry-run                       # what would be simulated, and what is done already
+./simulate_models.sh                                 # every model, every scenario
+./simulate_models.sh -s single_photon caloclouds3    # one scenario, one model
+./simulate_models.sh -n 10 caloclouds3               # a quick test: the first 10 events of each input
+sbatch simulate_models.sh                            # as a slurm job, from the repository root
+```
+
+It always uses the DDML build from `scripts/build_ddml.sh` (building it first if needed) and gets its environment by sourcing `setup.sh` in a clean shell, inside the container unless `container.enabled` is false.
+Before simulating, it checks that the DDML libraries, the `ddml` Python package and each preset's plugin come from that build, and that each model's weights match their md5 sum.
+
+Each simulation writes `sim_output/<scenario>/<model>/<input name>.slcio` under `paths.data_dir`, with the `ddsim` log next to it.
+Simulations whose output exists are skipped, so after a timeout or a failure, run it again to do the rest; `--force` simulates them again.
+`ddsim` writes to a hidden file that is only renamed once it succeeds, so an output is always complete.
+With `-n N`, the outputs are named `<input name>_n<N>.slcio`, so a test never counts as a full simulation.
+Other input files can be simulated with `-i FILE`, which writes to `sim_output/custom/<model>/`.
+
+All models use DDML's `scripts/ddsim_steer.py`. DDML's README names `ddsim_steer_cc3.py` for CaloClouds3, but that file only exists on DDML's `henry-all-showers` branch, and imports a function DDML has since replaced; apart from the particle gun settings, which an input file overrides, it is the same as `ddsim_steer.py`.
+
+### Simulating with your own steering file
 
 Building DDML downloads its reference models into `models/` in the DDML clone, which is the default `paths.model_dir`, mounted as `/model_dir` for the steering file.
 Put your own traced models there too, or point `paths.model_dir` at the folder that has them.
