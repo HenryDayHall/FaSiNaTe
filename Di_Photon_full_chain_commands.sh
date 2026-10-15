@@ -1,10 +1,8 @@
 #!/bin/bash
 
 ## commands to be run in singularity container
-source /user_repo/setup_env_stable.sh;
-
-source install/bin/thisDDML.sh;
-cd ./scripts/;
+source /user_repo/setup.sh || exit 1;
+cd "$DDML_SOURCE_DIR/scripts/" || exit 1;
 
 export OMP_NUM_THREADS=1;
 

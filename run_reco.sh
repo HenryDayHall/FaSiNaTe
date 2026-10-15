@@ -11,11 +11,7 @@
 
 
 # Change these to your files/directories ~~~~~~~~~~~~~~~
-# directory of the analysis_chain repository
-repo_dir=/home/dayhallh/training/physical_recos
-# Where to find input and output, will be mounted to /user_data inside the container
-data_dir=/data/dust/user/dayhallh/physical_recos
-# Need to pick an input file, this also determines the output file (sim->rec)
+# Need to pick an input file in the data_dir, this also determines the output file (sim->rec)
 #input_file=sim_output/cc_output_files/cc_20250110_164526.slcio
 #input_file=sim_output/ccO_output_files/ccO_20250111_064152.slcio
 #input_file=sim_output/ccA4_output_files/ccA4_20250110_180746.slcio
@@ -29,17 +25,28 @@ input_file=sim_output/cciiA10_output_files/cciiA10_20250122_120328.slcio
 
 # if desired, pick a detector model, default is ILD_l5_o1_v02
 # detector_model=ILD_l5_o1_v02
-# Your singularity, created with create_singularity.sh if needed
-singularity_path=/data/dust/user/dayhallh/physical_recos/singularity/ubuntu22_latest.sif
-export SINGULARITY_TMPDIR=/data/dust/user/dayhallh/physical_recos/singularity/tmp/
-export SINGULARITY_CACHEDIR=/data/dust/user/dayhallh/physical_recos/singularity/cache/
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# Paths come from the configuration (configs/default.yaml, overridden by
+# configs/local.yaml; see the README). Run this from the repository root;
+# sbatch starts jobs in the directory you submit from.
+source "${FASINATE_REPO_DIR:-$PWD}/scripts/load_config.sh" || { return 1 2>/dev/null || exit 1; }
+repo_dir=$FASINATE_REPO_DIR
+# mounted to /user_data inside the container
+data_dir=$FASINATE_PATHS_DATA_DIR
+singularity_path=$FASINATE_CONTAINER_IMAGE
+export SINGULARITY_TMPDIR=$FASINATE_CONTAINER_TMP_DIR
+export SINGULARITY_CACHEDIR=$FASINATE_CONTAINER_CACHE_DIR
+# setup.sh in the container needs DDML built for this configuration
+"$repo_dir/scripts/build_ddml.sh" --if-needed || { return 1 2>/dev/null || exit 1; }
 
 # store the current directory for later
 starting_dir=$(pwd)
 
 
-singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$repo_dir:/user_repo,$data_dir:/user_data $singularity_path instance1
+# The DDML build is mounted at the same path as outside, and setup.sh in the
+# container uses the configuration loaded here, which passes through to it.
+singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$FASINATE_DDML_BIND_PATHS,$repo_dir:/user_repo,$data_dir:/user_data $singularity_path instance1
 
 
 echo "-- Running Marlin ..."
