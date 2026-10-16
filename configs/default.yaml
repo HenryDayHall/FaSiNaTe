@@ -72,6 +72,26 @@ geant4:
   # in models/*.yaml).
   compact: ILD/compact/ILD_l5_o1_v02/ILD_l5_o1_v02.xml
 
+# Reconstruction of the simulations (reconstruct_simulation.sh): ILD's standard
+# reconstruction, ILDReconstruction.py from ILDConfig, run with Gaudi (k4run)
+# in the environment setup.sh gives. Each simulation is reconstructed in the
+# detector it was simulated in.
+reconstruction:
+  # Key4hep releases don't include ILDConfig, so reconstruct_simulation.sh
+  # clones it here. The ILDConfig submodule is too old for recent releases.
+  ildconfig:
+    repository: https://github.com/iLCSoft/ILDConfig.git
+    branch: master
+    # Commit to check out instead of the head of `branch`. Pin it (quoted, full
+    # hash) for benchmark runs; an existing clone is otherwise left as it is.
+    commit: null
+    source_dir: ${paths.software_dir}/ILDConfig
+  # Extra arguments for ILDReconstruction.py, e.g. [--lcioOutput, "on"] or
+  # [--cmsEnergy, "250"]. --usingParticleGun is added for particle_gun
+  # scenarios, and --noBeamCalReco always, as in the earlier Marlin
+  # reconstruction.
+  extra_args: []
+
 # The benchmark. Each scenario is a set of events that every shower simulator
 # simulates and that are then reconstructed; each observable is measured on the
 # reconstructed events and compared to Geant4. The first ones follow the paper

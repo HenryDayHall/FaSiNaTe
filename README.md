@@ -8,7 +8,7 @@ There are roughly 5 steps;
 1. Compile to model into c++, see `inference.py` (but you will need to implement changes).
 2. Create a sample of inputs to start events from, see `Di_Photon_Input_slcio.py`.
 3. Simulate events with each model, see `simulate_models.sh`, and with Geant4 as the reference, see `simulate_geant4.sh` and `slurm_simulate_geant4.sh`.
-4. Reconstruct the simulated events, see `run_reco.sh`.
+4. Reconstruct the simulated events, see `reconstruct_simulation.sh`.
 5. Perform analysis on the events. Only a photon separation analysis is currently described, see `run_analysis.sh`.
 6. Plots from multiple analysis can be compared, an example is given in `Di_Photon_Analysis_Plots.py`.
 
@@ -222,14 +222,31 @@ It builds DDML first if needed, and will produce output under `sim_output` in `p
 
 ## Reconstructing events
 
-The simulated events need to be parsed by standard reconstructions algorithms.
-This can be controlled from the `run_reco.sh` script, and has fewer dependances than simulation.
+The simulated events are reconstructed with ILD's standard reconstruction, run with Gaudi rather than Marlin:
+ILDConfig's `ILDReconstruction.py` under `k4run`, as in the Key4hep tutorial [ILD Simulation and Reconstruction with Key4hep](https://key4hep.github.io/key4hep-doc/main/tutorials/key4hep-tutorials/gaudi_ild_reco/README.html).
+`reconstruct_simulation.sh` reconstructs every finished simulation it finds of the scenarios in the configuration, by every model in `models/` and by Geant4:
 
-As with `run_sim.sh`, open `run_reco.sh` and choose the input file in the upper block;
-the paths come from the configuration, and it runs in the same environment as the simulation.
-Source this file to run the reconstruction, or submit it to slurm with `sbatch run_reco.sh`.
+```bash
+./reconstruct_simulation.sh --dry-run                     # what would be reconstructed, and what is done already
+./reconstruct_simulation.sh                               # every simulator, every scenario
+./reconstruct_simulation.sh -s single_photon geant4       # one scenario, one simulator (a model name, or geant4)
+./reconstruct_simulation.sh <data_dir>/sim_output/single_photon/caloclouds3/<name>.root   # one simulation
+./reconstruct_simulation.sh -n 10 caloclouds3             # a quick test: the first 10 events of each
+sbatch reconstruct_simulation.sh                          # as a slurm job, from the repository root
+```
 
-It will produce output under `rec_output` in `paths.data_dir`.
+Each simulation `sim_output/<scenario>/<simulator>/<name>.root` (`.edm4hep.root` for Geant4) under `paths.data_dir` is reconstructed to `rec_output/<scenario>/<simulator>/<name>_REC.edm4hep.root`, with `<name>_AIDA.root`, `<name>_PfoAnalysis.root` and the log, `<name>.log`, next to it.
+As with the simulation, reconstructions whose output exists are skipped (`--force` redoes them), `k4run` writes to hidden files that are only renamed once it succeeds, and with `-n N` the outputs are named `<name>_n<N>...`.
+A simulation file outside `sim_output` is reconstructed to `rec_output/custom/files/`.
+
+Each simulation is reconstructed in the detector it was simulated in: the model's `fixed_at_training.detector.compact_file`, or `geant4.compact`; `--compact FILE` overrides this.
+`--noBeamCalReco` is always passed, as in the earlier Marlin reconstruction, and `--usingParticleGun` for `particle_gun` scenarios; add other arguments for `ILDReconstruction.py` to `reconstruction.extra_args` in the configuration, e.g. `[--lcioOutput, "on"]` to also write LCIO.
+
+Key4hep releases don't include ILDConfig, and the `ILDConfig` submodule is too old for recent releases, so the script clones ILDConfig to `reconstruction.ildconfig.source_dir` the first time it runs.
+An existing clone is left as it is; pin `reconstruction.ildconfig.commit` for benchmark runs, and the script checks that commit out.
+Like `simulate_geant4.sh`, it reconstructs right there in a shell that has sourced `setup.sh`, and otherwise sets up the environment itself, inside the container unless `container.enabled` is false.
+
+`run_reco.sh` and `Di_Photon_rec_commands.sh` are the earlier Marlin reconstruction, with `MarlinStdReco_WITH_GAPS.xml`; apart from a hard-coded k4geo path, that steering file is the standard one, whose gap hits the Gaudi reconstruction uses too.
 
 ## Analysing the events
 
