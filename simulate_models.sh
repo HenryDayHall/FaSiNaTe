@@ -16,8 +16,8 @@
 #   -h, --help           show this help
 #
 # Each simulation writes
-#   <paths.data_dir>/sim_output/<scenario>/<model>/<input name>.slcio
-# (<input name>_n<N>.slcio with --events), with its log next to it, and is
+#   <paths.data_dir>/sim_output/<scenario>/<model>/<input name>.root
+# (<input name>_n<N>.root with --events), with its log next to it, and is
 # skipped if that output exists. ddsim writes to a hidden file that is only
 # renamed once ddsim succeeds, so an output is always complete. Make the
 # scenarios' inputs first with ./generate_input.sh.
@@ -105,8 +105,8 @@ simulate_all() {
 simulate_one() {
     local model=$1 scenario=$2 input=$3 output=$4 compact=$5 presets=$6 events=$7
     local dir=${output%/*} name=${output##*/}
-    local log=${output%.slcio}.log
-    local partial=$dir/.${name%.slcio}.${HOSTNAME%%.*}.$$.slcio
+    local log=${output%.root}.log
+    local partial=$dir/.${name%.root}.${HOSTNAME%%.*}.$$.root
     local preset status start why
     local preset_list=() ml_models=()
 
