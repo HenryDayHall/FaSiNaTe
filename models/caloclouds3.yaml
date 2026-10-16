@@ -63,3 +63,10 @@ ddml:
   # CC3_BARREL, loads that one, models/CC3_paper_checkpoint.pt.
   weights: models/CC3_SF_2A.pt
   weights_md5: "2ad56d91577686071a20278825d48c7e"
+
+# How plot_observables.sh draws this model: a colour and a line style
+# (matplotlib's), as in the benchmark paper. Every model needs a line style of
+# its own, as well as a colour, so the curves can be told apart without colour.
+plot:
+  color: "#e8710a"
+  linestyle: "-"

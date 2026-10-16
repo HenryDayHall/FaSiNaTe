@@ -9,7 +9,7 @@ There are roughly 5 steps;
 2. Create a sample of inputs to start events from, see `Di_Photon_Input_slcio.py`.
 3. Simulate events with each model, see `simulate_models.sh`, and with Geant4 as the reference, see `simulate_geant4.sh` and `slurm_simulate_geant4.sh`.
 4. Reconstruct the simulated events, see `reconstruct_simulation.sh`.
-5. Perform analysis on the events. Only a photon separation analysis is currently described, see `run_analysis.sh`.
+5. Measure the benchmark observables on the reconstructed events, see `observables_from_reconstruction.sh`, and plot them against Geant4, see `plot_observables.sh`. The older photon separation analysis is described in `run_analysis.sh`.
 6. Plots from multiple analysis can be compared, an example is given in `Di_Photon_Analysis_Plots.py`.
 
 Steps 3, 4 and 5 can be run in sequence using `run_all.sh`, which chains the commands from `run_sim.sh`, `run_reco.sh` and `run_analysis.sh`. It's normally best to check each stage separately in your environment before running all of them together. It requires the same sort of modifications as steps 3, 4 and 5.
@@ -247,7 +247,41 @@ Like `scripts/build_ddml.sh`, `setup.sh` runs it with `--if-needed` whenever it 
 Run it yourself to update the clone to the head of its branch (`--dry-run` shows what it would do), and pin `detector_configs.ildconfig.commit` for benchmark runs; it prints the commit to paste into `configs/local.yaml`.
 Like `simulate_geant4.sh`, it reconstructs right there in a shell that has sourced `setup.sh`, and otherwise sets up the environment itself, inside the container unless `container.enabled` is false.
 
-`run_reco.sh` and `Di_Photon_rec_commands.sh` are the earlier Marlin reconstruction, with `MarlinStdReco_WITH_GAPS.xml`; apart from a hard-coded k4geo path, that steering file is the standard one, whose gap hits the Gaudi reconstruction uses too.
+This replaces the earlier Marlin reconstruction with `MarlinStdReco_WITH_GAPS.xml`; apart from a hard-coded k4geo path, that steering file was the standard one, whose gap hits the Gaudi reconstruction uses too.
+
+## Measuring and plotting the observables
+
+The benchmark's observables are listed under `observables` in the configuration, each with the scenarios it is measured on.
+The first ones are the shower profiles of the paper "A First Full Physics Benchmark for Highly Granular Calorimeter Surrogates", measured on its single photon dataset (the `single_photon` scenario):
+
+- `radial_profile`: the mean energy of the reconstructed ECAL hits against the distance from the incident photon's line of flight to the centre of the hit's cell, once out to 100 mm and once, resolving the core, out to 30 mm;
+- `longitudinal_profile`: the mean energy of the reconstructed ECAL hits in each layer, read from the hits' cellIDs.
+
+`observables_from_reconstruction.sh` measures them for every simulator (each model, and Geant4) whose reconstruction is finished, that is, every input of every scenario they use has its `_REC.edm4hep.root` file:
+
+```bash
+./observables_from_reconstruction.sh --dry-run        # which simulators are finished, and what is measured already
+./observables_from_reconstruction.sh                  # every finished simulator
+./observables_from_reconstruction.sh caloclouds3 geant4
+./observables_from_reconstruction.sh -n 10            # from the reconstructions of reconstruct_simulation.sh -n 10
+```
+
+For each simulator it writes `observables/<simulator>.npz` under `paths.data_dir`, with every profile per input file as the sums over events of each bin's energy and of its square, and the number of events, so that the mean energy per event in each bin and its statistical uncertainty can be worked out, for all energies together or each on its own (`scripts/observables.py` lists the keys).
+Before it measures a simulator, it checks whether that file already has every key the configuration asks for, with the same settings and from the same reconstructed files, and skips the simulator if so; `--force` measures it again.
+It reads the EDM4hep files with uproot in the environment from `setup.sh`, so it runs like the simulation scripts, in the container unless `container.enabled` is false.
+The layer of each hit comes from the `layer` field of its cellID, decoded with the encoding stored in the reconstructed file or, failing that, from the detector geometry; `observables.longitudinal_profile.cell_id_encoding` sets it by hand.
+If more than 1% of a file's hits decode to a layer outside 0 to `max_layer`, it warns, since that usually means the encoding is wrong.
+
+`plot_observables.sh` then draws every profile it finds, with all the simulators that have it on the same axes, as in the paper's figures: Geant4 as a grey filled histogram, each model as a line in its own colour and line style (set under `plot` in `models/<model>.yaml`), each with its statistical uncertainty as a band, and below, each model's relative deviation from Geant4.
+The legend gives each model's Jensen-Shannon divergence from Geant4 (the observable's `metric`), and `metrics.csv` lists them all.
+
+```bash
+./plot_observables.sh                  # every measurement found, to observables/plots/
+./plot_observables.sh caloclouds3      # just this model, against Geant4
+./plot_observables.sh -d copied/observables -o figures   # e.g. on a laptop, from copied .npz files
+```
+
+It runs with your own `python3` if that has numpy and matplotlib, and otherwise in the environment from `setup.sh`.
 
 ## Analysing the events
 

@@ -130,18 +130,37 @@ scenarios:
       # The i-th energy uses seed + i, so the samples are independent.
       seed: 0
 
+# Measured on the reconstructed events of each simulator by
+# ./observables_from_reconstruction.sh, which writes the numbers each plot
+# needs to <paths.data_dir>/observables/<simulator>.npz, and plotted against
+# Geant4 by ./plot_observables.sh. Each observable's name says what it is (see
+# scripts/observables.py for the ones known).
 observables:
-  # Mean energy of the reconstructed hits against their distance from the
-  # shower axis, the incident particle's line of flight (the paper's shower
-  # profiles).
+  # Mean energy of the reconstructed hits against the distance from the
+  # incident particle's line of flight to the centre of the hit's cell (the
+  # paper's radial shower profiles).
   radial_profile:
     # The scenarios it is measured on.
     scenarios: [single_photon]
-    # In mm; one profile out to each radius, the second resolving the core.
+    # The reconstructed calorimeter hits it uses.
+    hit_collections: [EcalBarrelCollectionRec]
+    # In mm; one profile out to each radius, the second resolving the core,
+    # each with the number of bins next to it in n_bins.
     max_radius: [100, 30]
+    n_bins: [50, 30]
     # How it is compared to Geant4, as in the paper's summary table.
     metric: jensen_shannon
-  # Mean energy of the reconstructed hits in each ECAL layer.
+  # Mean energy of the reconstructed hits in each ECAL layer (the paper's
+  # longitudinal shower profile).
   longitudinal_profile:
     scenarios: [single_photon]
+    hit_collections: [EcalBarrelCollectionRec]
+    # The layer is read from each hit's cellID: this field of it, holding
+    # layers 0 to max_layer.
+    layer_field: layer
+    max_layer: 30
+    # How to decode the cellID, e.g. "system:5,module:3,stave:4,tower:4,
+    # layer:6,wafer:6,slice:4,cellX:32:-16,cellY:-16". Empty: from the
+    # reconstructed file's metadata, or else from the detector geometry.
+    cell_id_encoding: null
     metric: jensen_shannon
