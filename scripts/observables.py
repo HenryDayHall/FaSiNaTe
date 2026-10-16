@@ -23,8 +23,9 @@ The observables known (the keys of `observables` in the configuration):
   longitudinal_profile  energy of the reconstructed hits per calorimeter layer,
                         from the layer field of each hit's cellID
 
-The incident particle is the MCParticle with generator status 1 (the particle
-gun's). Each profile is stored per input file of the scenario, as the sum over
+The incident particle is the first MC particle with generator status 1 (the
+particle gun's), from the MC truth collection: MCParticles, as ddsim names it in
+EDM4hep and the reconstruction passes it on, or MCParticle, its LCIO name. Each profile is stored per input file of the scenario, as the sum over
 events of each bin's energy and of its square, with the number of events; the
 mean energy per event in a bin, and its statistical uncertainty, follow from
 those. Keys, with "__" between the parts:
@@ -304,8 +305,14 @@ def encoding_from_geometry(compact, collection):
     return None
 
 
+# The MC truth collection, by the names it can have: ddsim names it MCParticles
+# when it writes EDM4hep (and the reconstruction keeps the input's collections),
+# and MCParticle is its LCIO name, which a conversion from LCIO keeps
+MC_COLLECTIONS = ("MCParticles", "MCParticle")
+
+
 class Branches:
-    """Columns of a podio events tree, found by name (e.g. "MCParticle.vertex.x")."""
+    """Columns of a podio events tree, found by name (e.g. "MCParticles.vertex.x")."""
 
     def __init__(self, path):
         import uproot
@@ -327,25 +334,38 @@ class Branches:
         return self.tree[self.keys[name]].array(entry_start=start, entry_stop=stop,
                                                 library="ak")
 
+    def collection_with(self, candidates, member):
+        """The first of the candidate collections that has the member."""
+        for name in candidates:
+            if "%s.%s" % (name, member) in self.keys:
+                return name
+        others = sorted({key.split(".")[0] for key in self.keys
+                         if key.endswith("." + member)})
+        raise ObservableError("%s has no MC truth collection (%s with a %s); %s" % (
+            self.path, " or ".join(candidates), member,
+            "collections with a %s: %s" % (member, ", ".join(others)) if others
+            else "no collection in it has a %s" % member))
+
     def close(self):
         self.file.close()
 
 
 def read_primary(branches, start, stop):
     """Vertex, unit direction and energy of each event's incident particle (the
-    first MCParticle of generator status 1), and which events have one."""
+    first MC particle of generator status 1), and which events have one."""
     import awkward as ak
     import numpy as np
-    status = branches.jagged("MCParticle.generatorStatus", start, stop)
+    mc = branches.collection_with(MC_COLLECTIONS, "generatorStatus")
+    status = branches.jagged(mc + ".generatorStatus", start, stop)
     mask = status == 1
 
     def first(name):
         values = ak.firsts(branches.jagged(name, start, stop)[mask])
         return ak.to_numpy(ak.fill_none(values, np.nan)).astype(np.float64)
 
-    vertex = np.stack([first("MCParticle.vertex." + c) for c in "xyz"], axis=1)
-    momentum = np.stack([first("MCParticle.momentum." + c) for c in "xyz"], axis=1)
-    mass = first("MCParticle.mass")
+    vertex = np.stack([first(mc + ".vertex." + c) for c in "xyz"], axis=1)
+    momentum = np.stack([first(mc + ".momentum." + c) for c in "xyz"], axis=1)
+    mass = first(mc + ".mass")
     p = np.linalg.norm(momentum, axis=1)
     has = np.isfinite(p) & (p > 0)
     direction = np.zeros_like(momentum)
