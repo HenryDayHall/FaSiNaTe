@@ -7,7 +7,7 @@ There are roughly 5 steps;
 
 1. Compile to model into c++, see `inference.py` (but you will need to implement changes).
 2. Create a sample of inputs to start events from, see `Di_Photon_Input_slcio.py`.
-3. Simulate events with each model, see `simulate_models.sh` (or `run_sim.sh` for the older steering file).
+3. Simulate events with each model, see `simulate_models.sh`, and with Geant4 as the reference, see `simulate_geant4.sh` and `slurm_simulate_geant4.sh`.
 4. Reconstruct the simulated events, see `run_reco.sh`.
 5. Perform analysis on the events. Only a photon separation analysis is currently described, see `run_analysis.sh`.
 6. Plots from multiple analysis can be compared, an example is given in `Di_Photon_Analysis_Plots.py`.
@@ -171,6 +171,27 @@ With `-n N`, the outputs are named `<input name>_n<N>.slcio`, so a test never co
 Other input files can be simulated with `-i FILE`, which writes to `sim_output/custom/<model>/`.
 
 All models use DDML's `scripts/ddsim_steer.py`. DDML's README names `ddsim_steer_cc3.py` for CaloClouds3, but that file only exists on DDML's `henry-all-showers` branch, and imports a function DDML has since replaced; apart from the particle gun settings, which an input file overrides, it is the same as `ddsim_steer.py`.
+
+### Simulating the benchmark with Geant4
+
+Full Geant4 simulation of the same inputs is the reference that the models are compared to.
+`simulate_geant4.sh` works like `simulate_models.sh`, with the same options, and writes `sim_output/<scenario>/geant4/<input name>.edm4hep.root` under `paths.data_dir` (EDM4hep ROOT files, for the Gaudi-based analysis).
+It runs `ddsim` with DDML's steering file but without DDML's fast simulation (`scripts/ddsim_steer_geant4.py`), so every other setting (physics list, crossing angle, filters, ...) is the one the models are simulated with, in the detector set by `geant4.compact` in the configuration.
+
+Geant4 takes much longer than the models, so `simulate_geant4.sh` can simulate one input at a time, and `slurm_simulate_geant4.sh` submits a slurm job array with one input per job:
+
+```bash
+./simulate_geant4.sh --dry-run                                       # what would be simulated, and what is done already
+./simulate_geant4.sh -s single_photon --file <input>.slcio           # just this input of the scenario
+./slurm_simulate_geant4.sh                                           # a job array: one job per input still to simulate
+./slurm_simulate_geant4.sh -m 10 -- --time 3-00:00:00                # at most 10 jobs at once, with a longer time limit
+```
+
+`slurm_simulate_geant4.sh` lists the inputs that still need simulating, building DDML first if needed, then submits the array.
+Each job sources `setup.sh`, inside the container unless `container.enabled` is false (`scripts/run_in_environment.sh`), then runs `simulate_geant4.sh` on its input.
+Each submission's list of inputs, job script and slurm logs go to `slurm/simulate_geant4_<time>/` under `paths.data_dir`; run it again to resubmit whatever failed or ran out of time.
+
+In a shell that has sourced `setup.sh`, `simulate_geant4.sh` simulates right there; anywhere else it sets up the environment itself, as `simulate_models.sh` does.
 
 ### Simulating with your own steering file
 
