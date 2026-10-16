@@ -75,7 +75,7 @@ Get it in a clean bash shell with
 source setup.sh
 ```
 
-This reads the configuration, builds DDML if there's no build for this configuration yet, then sets up the Key4hep release DDML was built against, and DDML itself.
+This reads the configuration, builds DDML if there's no build for this configuration yet, clones the detector configurations that reconstruction needs (ILDConfig; see [Reconstructing events](#reconstructing-events)) if they aren't there yet, then sets up the Key4hep release DDML was built against, and DDML itself.
 Source it only once per shell, because the Key4hep setup can only run once.
 
 The build is done by `scripts/build_ddml.sh`, which
@@ -243,7 +243,7 @@ Each simulation is reconstructed in the detector it was simulated in: the model'
 `--noBeamCalReco` is always passed, as in the earlier Marlin reconstruction, and `--usingParticleGun` for `particle_gun` scenarios; add other arguments for `ILDReconstruction.py` to `reconstruction.extra_args` in the configuration, e.g. `[--lcioOutput, "on"]` to also write LCIO.
 
 Key4hep releases don't include ILDConfig, and the `ILDConfig` submodule is too old for recent releases, so ILDConfig is cloned to `detector_configs.ildconfig.source_dir` by `scripts/fetch_detector_configs.sh`.
-Like `scripts/build_ddml.sh`, `reconstruct_simulation.sh` runs it with `--if-needed`, which clones ILDConfig the first time and otherwise leaves the clone as it is.
+Like `scripts/build_ddml.sh`, `setup.sh` runs it with `--if-needed` whenever it is sourced, which clones ILDConfig the first time and otherwise leaves the clone as it is; the scripts that start a container run it beforehand and mount the clone, since the container may have no network.
 Run it yourself to update the clone to the head of its branch (`--dry-run` shows what it would do), and pin `detector_configs.ildconfig.commit` for benchmark runs; it prints the commit to paste into `configs/local.yaml`.
 Like `simulate_geant4.sh`, it reconstructs right there in a shell that has sourced `setup.sh`, and otherwise sets up the environment itself, inside the container unless `container.enabled` is false.
 

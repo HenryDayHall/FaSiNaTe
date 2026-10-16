@@ -39,6 +39,7 @@ export SINGULARITY_TMPDIR=$FASINATE_CONTAINER_TMP_DIR
 export SINGULARITY_CACHEDIR=$FASINATE_CONTAINER_CACHE_DIR
 # setup.sh in the container needs DDML built for this configuration
 "$repo_dir/scripts/build_ddml.sh" --if-needed || { return 1 2>/dev/null || exit 1; }
+"$repo_dir/scripts/fetch_detector_configs.sh" --if-needed || { return 1 2>/dev/null || exit 1; }
 
 # store the current directory for later
 starting_dir=$(pwd)
@@ -46,7 +47,7 @@ starting_dir=$(pwd)
 
 # The DDML build is mounted at the same path as outside, and setup.sh in the
 # container uses the configuration loaded here, which passes through to it.
-singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$FASINATE_DDML_BIND_PATHS,$repo_dir:/user_repo,$data_dir:/user_data $singularity_path instance1
+singularity instance start -H $PWD --bind /cvmfs:/cvmfs,$FASINATE_DDML_BIND_PATHS,$FASINATE_DETECTOR_CONFIGS_BIND_PATHS,$repo_dir:/user_repo,$data_dir:/user_data $singularity_path instance1
 
 
 echo "-- Running Marlin ..."

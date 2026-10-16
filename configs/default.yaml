@@ -46,7 +46,7 @@ ddml:
 
 # Detector configuration repositories that reconstruction needs and Key4hep
 # releases don't include, cloned by scripts/fetch_detector_configs.sh (which
-# reconstruct_simulation.sh runs with --if-needed). Each entry has the same
+# setup.sh runs with --if-needed). Each entry has the same
 # keys as `ddml`'s repository settings.
 detector_configs:
   # ILD's standard reconstruction, ILDReconstruction.py. The ILDConfig

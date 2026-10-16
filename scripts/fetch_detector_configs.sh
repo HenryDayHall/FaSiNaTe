@@ -19,8 +19,8 @@
 # to `source_dir` if it isn't there; otherwise, if `update` is true, fetch it
 # and fast-forward `branch`. If `commit` is set, check that out instead.
 #
-# reconstruct_simulation.sh calls this with --if-needed, so an existing clone
-# is left as it is there. Run it yourself to update the clones to the heads of
+# setup.sh and the scripts that start a container call this with --if-needed,
+# so an existing clone is left as it is there. Run it yourself to update the clones to the heads of
 # their branches.
 
 set -euo pipefail

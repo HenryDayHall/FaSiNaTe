@@ -1,13 +1,16 @@
 # Set up this shell for FaSiNaTe: the Key4hep release, ML libraries and DDML
 # build chosen in the configuration (configs/default.yaml and
-# configs/local.yaml; see README.md). Source it from bash, in a clean shell:
+# configs/local.yaml; see README.md), and the detector configurations
+# (detector_configs, e.g. ILDConfig) that reconstruction needs. Source it from
+# bash, in a clean shell:
 #
 #   source setup.sh
 #
 # If DDML isn't built for this configuration yet, it first builds it with
-# scripts/build_ddml.sh, which can take a while. Inside a container started by
-# the run_*.sh scripts it uses the configuration they pass in, and expects
-# them to have built DDML already.
+# scripts/build_ddml.sh, which can take a while, and it clones the detector
+# configurations that aren't there yet with scripts/fetch_detector_configs.sh.
+# Inside a container started by the run_*.sh scripts it uses the configuration
+# they pass in, and expects them to have done both already.
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     echo "setup.sh sets up the shell it runs in, so source it: source $0" >&2
@@ -17,7 +20,7 @@ fi
 _fasinate_repo=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 _fasinate_cleanup() {
-    unset _fasinate_repo _fasinate_given
+    unset _fasinate_repo _fasinate_given _fasinate_var _fasinate_missing
     unset -f _fasinate_cleanup _fasinate_is_built
 }
 
@@ -48,6 +51,27 @@ if ! _fasinate_is_built; then
     fi
     echo "setup.sh: DDML isn't built for this configuration yet, so building it first" >&2
     "$_fasinate_repo/scripts/build_ddml.sh" --if-needed || { _fasinate_cleanup; return 1; }
+fi
+
+# The detector configurations: cloned if they aren't there, except in a
+# container, which may have no network; the run scripts fetch them beforehand
+# and mount them (FASINATE_DETECTOR_CONFIGS_BIND_PATHS).
+if [ -n "$_fasinate_given" ]; then
+    _fasinate_missing=
+    for _fasinate_var in "${!FASINATE_DETECTOR_CONFIGS_@}"; do
+        case $_fasinate_var in
+            *_SOURCE_DIR)
+                [ -e "${!_fasinate_var}/.git" ] || _fasinate_missing="$_fasinate_missing ${!_fasinate_var}"
+                ;;
+        esac
+    done
+    if [ -n "$_fasinate_missing" ]; then
+        echo "setup.sh: the detector configurations aren't in:$_fasinate_missing; fetch them outside the container with scripts/fetch_detector_configs.sh, and mount FASINATE_DETECTOR_CONFIGS_BIND_PATHS" >&2
+        _fasinate_cleanup
+        return 1
+    fi
+else
+    "$_fasinate_repo/scripts/fetch_detector_configs.sh" --if-needed >&2 || { _fasinate_cleanup; return 1; }
 fi
 
 # shellcheck disable=SC1090

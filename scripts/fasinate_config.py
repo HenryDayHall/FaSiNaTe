@@ -83,6 +83,9 @@ def shell_assignments(config):
     # Directories a container needs to see (at the same path) to use the DDML build.
     lines.append("export FASINATE_DDML_BIND_PATHS="
                  + shlex.quote(",".join(ddml_bind_paths(config))))
+    # The same for the detector configuration clones (fetch_detector_configs.sh).
+    lines.append("export FASINATE_DETECTOR_CONFIGS_BIND_PATHS="
+                 + shlex.quote(",".join(detector_configs_bind_paths(config))))
     lines.append("export FASINATE_DDML_BUILD_STAMP=" + ddml_build_stamp(config))
     return "\n".join(lines)
 
@@ -115,6 +118,19 @@ def ddml_bind_paths(config):
         if not any(_is_within(path, other) for other in candidates if other != path):
             if path not in paths:
                 paths.append(path)
+    return paths
+
+
+def detector_configs_bind_paths(config):
+    """The clones of detector_configs, without those inside the DDML folders."""
+    ddml = ddml_bind_paths(config)
+    paths = []
+    for entry in (config.get("detector_configs") or {}).values():
+        path = entry["source_dir"]
+        if path in ddml or any(_is_within(path, other) for other in ddml):
+            continue
+        if path not in paths:
+            paths.append(path)
     return paths
 
 

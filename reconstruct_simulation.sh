@@ -37,10 +37,10 @@
 # exists. k4run writes to hidden files, only renamed once it succeeds, so the
 # outputs are always complete.
 #
-# ILDConfig isn't part of Key4hep releases, so this first runs
-# scripts/fetch_detector_configs.sh --if-needed, which clones it to
-# detector_configs.ildconfig.source_dir if it isn't there (pin
-# detector_configs.ildconfig.commit for benchmark runs). Arguments for ILDReconstruction.py go in
+# ILDConfig isn't part of Key4hep releases; setup.sh clones it to
+# detector_configs.ildconfig.source_dir if it isn't there, with
+# scripts/fetch_detector_configs.sh (pin detector_configs.ildconfig.commit for
+# benchmark runs). Arguments for ILDReconstruction.py go in
 # reconstruction.extra_args; --noBeamCalReco is always added, and
 # --usingParticleGun for particle_gun scenarios.
 #
@@ -202,8 +202,8 @@ done
 
 if [[ -z ${DDML_SOURCE_DIR:-} || -z ${KEY4HEP_STACK:-} ]]; then
     # Not in the environment from setup.sh yet. Work out the plan here, where
-    # the configuration files are, so that mistakes show up early, get
-    # ILDConfig if needed, then run this script again in that environment.
+    # the configuration files are, so that mistakes show up early, then run
+    # this script again in that environment (which gets ILDConfig if needed).
     # Under slurm this runs from a copy of the script, so then use the current directory.
     here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
     [[ -f $here/scripts/load_config.sh ]] || here=$PWD
@@ -213,11 +213,9 @@ if [[ -z ${DDML_SOURCE_DIR:-} || -z ${KEY4HEP_STACK:-} ]]; then
         plan=$("${FASINATE_PYTHON:-python3}" "$FASINATE_REPO_DIR/scripts/reconstruction_jobs.py" \
             plan "${plan_args[@]}") || exit 1
     fi
-    "$FASINATE_REPO_DIR/scripts/fetch_detector_configs.sh" --if-needed
     mode_args=()
     if $dry_run; then mode_args+=(--dry-run); fi
-    exec "$FASINATE_REPO_DIR/scripts/run_in_environment.sh" "${bind_args[@]}" \
-        --bind "$FASINATE_DETECTOR_CONFIGS_ILDCONFIG_SOURCE_DIR" -- \
+    exec "$FASINATE_REPO_DIR/scripts/run_in_environment.sh" "${bind_args[@]}" -- \
         "$FASINATE_REPO_DIR/reconstruct_simulation.sh" --plan "$plan" "${mode_args[@]}"
 fi
 
@@ -227,7 +225,6 @@ fi
 if [[ -z $plan ]]; then
     plan=$(python3 "$FASINATE_REPO_DIR/scripts/reconstruction_jobs.py" plan "${plan_args[@]}") ||
         exit 1
-    "$FASINATE_REPO_DIR/scripts/fetch_detector_configs.sh" --if-needed
 fi
 
 # Check the environment, and skip what is done already
