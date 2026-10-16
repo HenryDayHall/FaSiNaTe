@@ -5,9 +5,9 @@ Every model described in models/*.yaml simulates the input of every benchmark
 scenario in the configuration, or of the ones named, or the files given. Each
 simulation writes
 
-  <paths.data_dir>/sim_output/<scenario>/<model>/<input name>.slcio
+  <paths.data_dir>/sim_output/<scenario>/<model>/<input name>.root
 
-or <input name>_n<N>.slcio when only the first N events are simulated; files
+or <input name>_n<N>.root when only the first N events are simulated; files
 given with --input are simulated as the scenario "custom". A simulation whose
 output exists is done, and is skipped unless forced.
 
@@ -389,7 +389,7 @@ def make_jobs(plan, dry_run=False):
             done, redo, new, absent = 0, [], [], 0
             for path in files:
                 stem = os.path.splitext(os.path.basename(path))[0]
-                output = os.path.join(plan["sim_dir"], scenario, name, stem + suffix + ".slcio")
+                output = os.path.join(plan["sim_dir"], scenario, name, stem + suffix + ".root")
                 if output in outputs:
                     raise PlanError("%s and %s would both be simulated to %s"
                                     % (outputs[output], path, output))
