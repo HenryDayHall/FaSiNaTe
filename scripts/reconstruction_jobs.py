@@ -230,7 +230,7 @@ def make_plan(targets=(), scenarios=(), compact=None, events=None, force=False):
     return {
         "sim_dir": sim_dir,
         "rec_dir": rec_dir,
-        "ildconfig_dir": os.path.join(config["reconstruction"]["ildconfig"]["source_dir"],
+        "ildconfig_dir": os.path.join(config["detector_configs"]["ildconfig"]["source_dir"],
                                       ILDCONFIG_PRODUCTION),
         "extra_args": extra,
         "events": events,
@@ -265,8 +265,8 @@ def check_environment(plan):
         problems.append("k4run isn't on PATH; is this the environment from setup.sh?")
     script = os.path.join(plan["ildconfig_dir"], RECO_SCRIPT)
     if not os.path.isfile(script):
-        problems.append("%s not found; reconstruct_simulation.sh clones ILDConfig to "
-                        "reconstruction.ildconfig.source_dir" % script)
+        problems.append("%s not found; get ILDConfig with scripts/fetch_detector_configs.sh"
+                        % script)
     k4geo = os.environ.get("k4geo_DIR") or os.environ.get("K4GEO")
     compact_files = {}
     for entry in plan["groups"]:

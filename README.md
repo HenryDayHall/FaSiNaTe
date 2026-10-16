@@ -242,8 +242,9 @@ A simulation file outside `sim_output` is reconstructed to `rec_output/custom/fi
 Each simulation is reconstructed in the detector it was simulated in: the model's `fixed_at_training.detector.compact_file`, or `geant4.compact`; `--compact FILE` overrides this.
 `--noBeamCalReco` is always passed, as in the earlier Marlin reconstruction, and `--usingParticleGun` for `particle_gun` scenarios; add other arguments for `ILDReconstruction.py` to `reconstruction.extra_args` in the configuration, e.g. `[--lcioOutput, "on"]` to also write LCIO.
 
-Key4hep releases don't include ILDConfig, and the `ILDConfig` submodule is too old for recent releases, so the script clones ILDConfig to `reconstruction.ildconfig.source_dir` the first time it runs.
-An existing clone is left as it is; pin `reconstruction.ildconfig.commit` for benchmark runs, and the script checks that commit out.
+Key4hep releases don't include ILDConfig, and the `ILDConfig` submodule is too old for recent releases, so ILDConfig is cloned to `detector_configs.ildconfig.source_dir` by `scripts/fetch_detector_configs.sh`.
+Like `scripts/build_ddml.sh`, `reconstruct_simulation.sh` runs it with `--if-needed`, which clones ILDConfig the first time and otherwise leaves the clone as it is.
+Run it yourself to update the clone to the head of its branch (`--dry-run` shows what it would do), and pin `detector_configs.ildconfig.commit` for benchmark runs; it prints the commit to paste into `configs/local.yaml`.
 Like `simulate_geant4.sh`, it reconstructs right there in a shell that has sourced `setup.sh`, and otherwise sets up the environment itself, inside the container unless `container.enabled` is false.
 
 `run_reco.sh` and `Di_Photon_rec_commands.sh` are the earlier Marlin reconstruction, with `MarlinStdReco_WITH_GAPS.xml`; apart from a hard-coded k4geo path, that steering file is the standard one, whose gap hits the Gaudi reconstruction uses too.

@@ -44,6 +44,24 @@ ddml:
   # Extra CMake arguments, e.g. [-DCMAKE_BUILD_TYPE=Release]
   cmake_args: []
 
+# Detector configuration repositories that reconstruction needs and Key4hep
+# releases don't include, cloned by scripts/fetch_detector_configs.sh (which
+# reconstruct_simulation.sh runs with --if-needed). Each entry has the same
+# keys as `ddml`'s repository settings.
+detector_configs:
+  # ILD's standard reconstruction, ILDReconstruction.py. The ILDConfig
+  # submodule is too old for recent Key4hep releases.
+  ildconfig:
+    repository: https://github.com/iLCSoft/ILDConfig.git
+    branch: master
+    # Commit to check out instead of the head of `branch`. Pin it (quoted, full
+    # hash) for benchmark runs.
+    commit: null
+    # When fetch_detector_configs.sh runs without --if-needed, fast-forward the
+    # clone to the head of `branch` (or fetch `commit`).
+    update: true
+    source_dir: ${paths.software_dir}/ILDConfig
+
 key4hep:
   setup_script: /cvmfs/sw.hsf.org/key4hep/setup.sh
   # Release passed to the setup script with -r, e.g. "2026-05-13". `latest` is
@@ -77,15 +95,6 @@ geant4:
 # in the environment setup.sh gives. Each simulation is reconstructed in the
 # detector it was simulated in.
 reconstruction:
-  # Key4hep releases don't include ILDConfig, so reconstruct_simulation.sh
-  # clones it here. The ILDConfig submodule is too old for recent releases.
-  ildconfig:
-    repository: https://github.com/iLCSoft/ILDConfig.git
-    branch: master
-    # Commit to check out instead of the head of `branch`. Pin it (quoted, full
-    # hash) for benchmark runs; an existing clone is otherwise left as it is.
-    commit: null
-    source_dir: ${paths.software_dir}/ILDConfig
   # Extra arguments for ILDReconstruction.py, e.g. [--lcioOutput, "on"] or
   # [--cmsEnergy, "250"]. --usingParticleGun is added for particle_gun
   # scenarios, and --noBeamCalReco always, as in the earlier Marlin

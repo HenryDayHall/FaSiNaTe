@@ -37,9 +37,10 @@
 # exists. k4run writes to hidden files, only renamed once it succeeds, so the
 # outputs are always complete.
 #
-# ILDConfig isn't part of Key4hep releases, so this clones it to
-# reconstruction.ildconfig.source_dir first (pin reconstruction.ildconfig.commit
-# for benchmark runs). Arguments for ILDReconstruction.py go in
+# ILDConfig isn't part of Key4hep releases, so this first runs
+# scripts/fetch_detector_configs.sh --if-needed, which clones it to
+# detector_configs.ildconfig.source_dir if it isn't there (pin
+# detector_configs.ildconfig.commit for benchmark runs). Arguments for ILDReconstruction.py go in
 # reconstruction.extra_args; --noBeamCalReco is always added, and
 # --usingParticleGun for particle_gun scenarios.
 #
@@ -64,45 +65,6 @@ set -euo pipefail
 
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "${BASH_SOURCE[0]}"; }
 die() { echo "reconstruct_simulation: $*" >&2; exit 1; }
-
-# ensure_ildconfig: clone ILDConfig to reconstruction.ildconfig.source_dir if
-# it isn't there, and check out reconstruction.ildconfig.commit if that is set.
-# An existing clone is otherwise left as it is, so results don't change behind
-# your back; update it with git yourself.
-ensure_ildconfig() {
-    local dir=$FASINATE_RECONSTRUCTION_ILDCONFIG_SOURCE_DIR
-    local repository=$FASINATE_RECONSTRUCTION_ILDCONFIG_REPOSITORY
-    local branch=$FASINATE_RECONSTRUCTION_ILDCONFIG_BRANCH
-    local commit=${FASINATE_RECONSTRUCTION_ILDCONFIG_COMMIT:-}
-    local tmp
-
-    command -v git >/dev/null || die "git is needed to get ILDConfig"
-    if [[ ! -e $dir/.git ]]; then
-        [[ ! -e $dir ]] || die "$dir exists but isn't a git clone of ILDConfig; move it away, or point reconstruction.ildconfig.source_dir somewhere else"
-        echo "reconstruct_simulation: cloning ILDConfig ($branch) to $dir"
-        mkdir -p -- "$(dirname "$dir")"
-        # Into a temporary folder first, so that a half-done clone is never used
-        tmp=$(mktemp -d "$dir.clone.XXXXXX")
-        if ! git clone --quiet --branch "$branch" -- "$repository" "$tmp"; then
-            rm -rf -- "$tmp"
-            die "cloning $repository failed"
-        fi
-        if ! mv -T -- "$tmp" "$dir" 2>/dev/null; then
-            rm -rf -- "$tmp"
-            [[ -e $dir/.git ]] || die "could not move the ILDConfig clone to $dir"
-        fi
-    fi
-    if [[ -n $commit && $(git -C "$dir" rev-parse HEAD) != "$commit"* ]]; then
-        echo "reconstruct_simulation: checking out ILDConfig $commit (reconstruction.ildconfig.commit)"
-        git -C "$dir" cat-file -e "$commit^{commit}" 2>/dev/null ||
-            git -C "$dir" fetch --quiet origin "$commit" ||
-            git -C "$dir" fetch --quiet origin ||
-            die "could not fetch ILDConfig $commit"
-        git -C "$dir" checkout --quiet --detach "$commit" ||
-            die "could not check out ILDConfig $commit in $dir (local changes?)"
-    fi
-    echo "reconstruct_simulation: ILDConfig $(git -C "$dir" rev-parse HEAD) in $dir"
-}
 
 # reconstruct_one SCENARIO SIMULATOR INPUT BASE COMPACT EVENTS DONE ARGS: run
 # ILDReconstruction.py on INPUT in a folder of its own, writing hidden files
@@ -240,8 +202,8 @@ done
 
 if [[ -z ${DDML_SOURCE_DIR:-} || -z ${KEY4HEP_STACK:-} ]]; then
     # Not in the environment from setup.sh yet. Work out the plan here, where
-    # the configuration files are, so that mistakes show up early, and get
-    # ILDConfig, then run this script again in that environment.
+    # the configuration files are, so that mistakes show up early, get
+    # ILDConfig if needed, then run this script again in that environment.
     # Under slurm this runs from a copy of the script, so then use the current directory.
     here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
     [[ -f $here/scripts/load_config.sh ]] || here=$PWD
@@ -251,11 +213,11 @@ if [[ -z ${DDML_SOURCE_DIR:-} || -z ${KEY4HEP_STACK:-} ]]; then
         plan=$("${FASINATE_PYTHON:-python3}" "$FASINATE_REPO_DIR/scripts/reconstruction_jobs.py" \
             plan "${plan_args[@]}") || exit 1
     fi
-    ensure_ildconfig
+    "$FASINATE_REPO_DIR/scripts/fetch_detector_configs.sh" --if-needed
     mode_args=()
     if $dry_run; then mode_args+=(--dry-run); fi
     exec "$FASINATE_REPO_DIR/scripts/run_in_environment.sh" "${bind_args[@]}" \
-        --bind "$FASINATE_RECONSTRUCTION_ILDCONFIG_SOURCE_DIR" -- \
+        --bind "$FASINATE_DETECTOR_CONFIGS_ILDCONFIG_SOURCE_DIR" -- \
         "$FASINATE_REPO_DIR/reconstruct_simulation.sh" --plan "$plan" "${mode_args[@]}"
 fi
 
@@ -265,7 +227,7 @@ fi
 if [[ -z $plan ]]; then
     plan=$(python3 "$FASINATE_REPO_DIR/scripts/reconstruction_jobs.py" plan "${plan_args[@]}") ||
         exit 1
-    ensure_ildconfig
+    "$FASINATE_REPO_DIR/scripts/fetch_detector_configs.sh" --if-needed
 fi
 
 # Check the environment, and skip what is done already
