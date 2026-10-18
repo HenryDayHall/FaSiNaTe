@@ -75,7 +75,7 @@ Get it in a clean bash shell with
 source setup.sh
 ```
 
-This reads the configuration, builds DDML if there's no build for this configuration yet, clones the detector configurations that reconstruction needs (ILDConfig; see [Reconstructing events](#reconstructing-events)) if they aren't there yet, then sets up the Key4hep release DDML was built against, and DDML itself.
+This reads the configuration, builds DDML if there's no build for this configuration yet, clones the detector configurations that reconstruction needs (ILDConfig; see [Reconstructing events](#reconstructing-events)) if they aren't there yet, builds the [patches to the Key4hep release](#fixes-the-key4hep-release-doesnt-have-yet) if they aren't built yet, then sets up the Key4hep release DDML was built against, DDML itself, and the patches.
 Source it only once per shell, because the Key4hep setup can only run once.
 
 The build is done by `scripts/build_ddml.sh`, which
@@ -93,6 +93,46 @@ At the end, it prints the DDML commit and Key4hep release it used, ready to past
 DDML is built inside the container, so source `setup.sh` in that container, or on a host with the same OS (AlmaLinux, Rocky or RHEL 9 for the default image); elsewhere it stops and says which platform DDML was built for.
 Recent Key4hep releases are built for AlmaLinux 9 and Ubuntu 24.04 rather than Ubuntu 22.04, so the default image is `ghcr.io/key4hep/key4hep-images/alma9`.
 In the containers the `run_*.sh` scripts start, the commands source `/user_repo/setup.sh`, which uses the configuration passed in from outside.
+
+### Fixes the Key4hep release doesn't have yet
+
+Sometimes a bug that breaks the chain is already fixed upstream, but in no Key4hep release yet.
+The `patches` section of the configuration lists such fixes: each is a package of the release, rebuilt from a newer version against the Key4hep release DDML is built against, which `setup.sh` uses in place of the release's own.
+There is one so far:
+
+- `marlintrkprocessors`: in MarlinTrkProcessors 2.12.8 and earlier, the TPC digitisation of ILD's reconstruction (`DDTPCDigiProcessor`) stops the whole job with `padTheta = nan` when it can't work out a hit's angle from three TPC hits, which backscatter from Geant4 showers can leave.
+  It is fixed in [iLCSoft/MarlinTrkProcessors#79](https://github.com/iLCSoft/MarlinTrkProcessors/commit/f2da912fa583eb6da3e9aac4c8ba43fcde64efab), first released in `v02-12-09`, which is 2.12.8 with only that fix; so this builds `v02-12-09`.
+
+`scripts/build_patches.sh` builds them, and `setup.sh` and the scripts that start a container run it with `--if-needed`, as they do `scripts/build_ddml.sh`.
+For each patch, it finds the release's own build of the package (its library in `MARLIN_DLL`) and its version; if that is older than the patch's `fixed_in`, it clones the patch's `repository` at its `ref` into `patches.base_dir`, then builds and installs it in the same clean shell and container as DDML, with ROOT's C++ standard, as Key4hep builds its packages.
+It then writes `patches.env_file`, which `setup.sh` sources after setting up Key4hep, and which puts each patch's library in `MARLIN_DLL` in place of the release's.
+It rebuilds when the patches' settings or the Key4hep release change, and `--dry-run`, `--clean`, `--config` and `--set` work as for `scripts/build_ddml.sh`.
+`setup.sh` says which patches it uses, e.g.
+
+```
+FaSiNaTe: patch: marlintrkprocessors v02-12-09 (3ba32e2ae54b) in place of the release's 2.12.8, until Key4hep has 2.12.9
+```
+
+and the reconstruction logs record them, next to the Key4hep release (`# patches`); the reconstruction's own log lists the library it loaded (`Loading library ...`).
+
+**Removing a patch.**
+A patch is only used while the release's own version is older than its `fixed_in`.
+Once DDML is built against a release that has the fix, `setup.sh` stops using the patch by itself, without building it, and says that it can go:
+
+```
+FaSiNaTe: patch marlintrkprocessors isn't needed any more: Key4hep 2026-11-01 has marlintrkprocessors 2.12.9 (fixed_in 2.12.9); delete patches.marlintrkprocessors from configs/default.yaml
+```
+
+Then delete that entry from `configs/default.yaml`; nothing else needs to change, and its build in `patches.base_dir` can be deleted too.
+To go on without a patch before that, e.g. if it doesn't build, set it off in `configs/local.yaml`:
+
+```yaml
+patches:
+  marlintrkprocessors:
+    enabled: false
+```
+
+A new patch needs an entry with the same keys, named after the package's Spack package, for a library of Marlin processors.
 
 ## Compiling a model
 
@@ -242,6 +282,7 @@ A simulation file outside `sim_output` is reconstructed to `rec_output/custom/fi
 Each simulation is reconstructed in the detector it was simulated in: the model's `fixed_at_training.detector.compact_file`, or `geant4.compact`; `--compact FILE` overrides this.
 `--noBeamCalReco` is always passed, as in the earlier Marlin reconstruction, and `--usingParticleGun` for `particle_gun` scenarios; add other arguments for `ILDReconstruction.py` to `reconstruction.extra_args` in the configuration, e.g. `[--lcioOutput, "on"]` to also write LCIO.
 
+The TPC digitisation of the Key4hep releases so far (MarlinTrkProcessors 2.12.8) can stop the reconstruction of Geant4 events with `padTheta = nan`; the `marlintrkprocessors` patch fixes that (see [Fixes the Key4hep release doesn't have yet](#fixes-the-key4hep-release-doesnt-have-yet)).
 Key4hep releases don't include ILDConfig, and the `ILDConfig` submodule is too old for recent releases, so ILDConfig is cloned to `detector_configs.ildconfig.source_dir` by `scripts/fetch_detector_configs.sh`.
 Like `scripts/build_ddml.sh`, `setup.sh` runs it with `--if-needed` whenever it is sourced, which clones ILDConfig the first time and otherwise leaves the clone as it is; the scripts that start a container run it beforehand and mount the clone, since the container may have no network.
 Run it yourself to update the clone to the head of its branch (`--dry-run` shows what it would do), and pin `detector_configs.ildconfig.commit` for benchmark runs; it prints the commit to paste into `configs/local.yaml`.

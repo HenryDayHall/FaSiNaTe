@@ -87,6 +87,14 @@ def shell_assignments(config):
     lines.append("export FASINATE_DETECTOR_CONFIGS_BIND_PATHS="
                  + shlex.quote(",".join(detector_configs_bind_paths(config))))
     lines.append("export FASINATE_DDML_BUILD_STAMP=" + ddml_build_stamp(config))
+    # The patches to the Key4hep release (build_patches.sh): the enabled ones,
+    # a stamp of their settings, and the directory a container needs to see.
+    patches = enabled_patches(config)
+    lines.append("export FASINATE_PATCHES_ENABLED="
+                 + shlex.quote(" ".join(name for name, _ in patches)))
+    lines.append("export FASINATE_PATCHES_STAMP=" + patches_stamp(config))
+    lines.append("export FASINATE_PATCHES_BIND_PATHS=" + shlex.quote(
+        (config.get("patches") or {}).get("base_dir") or "" if patches else ""))
     return "\n".join(lines)
 
 
@@ -104,6 +112,49 @@ def ddml_build_stamp(config):
         "ddml.download_models", "ddml.cmake_args", "key4hep.setup_script",
         "key4hep.release", "container.enabled")]
     values.append(image if "://" in image else os.path.basename(image))
+    text = json.dumps(values, default=_to_str)
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+# What a patch needs to say: where to get it, which version has the fix, and
+# which library of Marlin processors it replaces
+_PATCH_KEYS = ("repository", "ref", "fixed_in", "library")
+_PATCH_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_VERSION = re.compile(r"^[0-9]+(\.[0-9]+)*$")
+
+
+def enabled_patches(config):
+    """[(name, settings)] of the enabled patches (build_patches.sh), checked."""
+    found = []
+    for name, settings in (config.get("patches") or {}).items():
+        if not isinstance(settings, dict):  # base_dir, env_file
+            continue
+        if not settings.get("enabled", True):
+            continue
+        if not _PATCH_NAME.match(name):
+            raise ConfigError("patches.%s: name patches after their Spack package, in lower "
+                              "case" % name)
+        missing = [key for key in _PATCH_KEYS if settings.get(key) in (None, "")]
+        if missing:
+            raise ConfigError("patches.%s needs %s" % (name, ", ".join(missing)))
+        if not _VERSION.match(_to_str(settings["fixed_in"])):
+            raise ConfigError("patches.%s.fixed_in should be a version such as \"2.12.9\" "
+                              "(quoted), not %r" % (name, settings["fixed_in"]))
+        found.append((name, settings))
+    return found
+
+
+def patches_stamp(config):
+    """Short hash of the settings of the enabled patches, or "" if there are none.
+
+    build_patches.sh writes it into patches.env_file, which setup.sh sources and
+    which refuses to apply patches built for other settings.
+    """
+    values = [[name] + [_to_str(settings[key]) for key in _PATCH_KEYS]
+              + [settings.get("cmake_args") or []]
+              for name, settings in enabled_patches(config)]
+    if not values:
+        return ""
     text = json.dumps(values, default=_to_str)
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
