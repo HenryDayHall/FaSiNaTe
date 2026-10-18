@@ -35,22 +35,20 @@ The benchmark follows the paper *"A First Full Physics Benchmark for Highly Gran
 Every stage is one script at the top of the repository. The scripts take their settings from the configuration, find the work left to do from what is already on disk, and skip what is finished, so any stage can be re-run safely after a failure or timeout.
 
 ```mermaid
-flowchart LR
-    cfg[/"configs/*.yaml<br>models/*.yaml"/]
-    gen["generate_input.sh"]
-    g4["simulate_geant4.sh"]
-    ml["simulate_models.sh"]
-    reco["reconstruct_simulation.sh"]
-    obs["observables_from_reconstruction.sh"]
-    plot["plot_observables.sh"]
+flowchart TD
+    gen["Stage 1: generate_input.sh"]
+    g4["Stage 2: simulate_geant4.sh"]
+    ml["Stage 3: simulate_models.sh"]
+    reco["Stage 4: reconstruct_simulation.sh"]
+    obs["Stage 5: observables_from_reconstruction.sh"]
+    plot["Stage 6: plot_observables.sh"]
 
-    cfg -.-> gen
-    gen -- ".slcio inputs" --> g4
-    gen -- ".slcio inputs" --> ml
-    g4 -- "sim_output/" --> reco
-    ml -- "sim_output/" --> reco
-    reco -- "rec_output/" --> obs
-    obs -- "observables/*.npz" --> plot
+    gen -->|input events| g4
+    gen -->|input events| ml
+    g4 -->|Geant4 simulations| reco
+    ml -->|model simulations| reco
+    reco -->|reconstructed events| obs
+    obs -->|one npz file per simulator| plot
 ```
 
 | Stage | Script | Reads | Writes (under `paths.data_dir`) |
