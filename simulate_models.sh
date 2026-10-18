@@ -10,6 +10,9 @@
 #   -s, --scenario NAME  simulate this scenario's inputs (repeatable; default:
 #                        every scenario, unless --input is given)
 #   -i, --input FILE     simulate FILE, as the scenario "custom" (repeatable)
+#       --file FILE      simulate only FILE, an input of the one --scenario
+#                        given (or of "custom"): one file at a time, as the
+#                        jobs of slurm_pipeline.sh do
 #   -n, --events N       simulate only the first N events of each input
 #   -f, --force          simulate again even where the output exists
 #       --dry-run        show what would be simulated and skipped, then stop
@@ -176,6 +179,7 @@ simulation_interrupted() {
 plan_args=()
 models=()
 input_dirs=()
+file=
 dry_run=false
 while (($#)); do
     case $1 in
@@ -184,10 +188,16 @@ while (($#)); do
             plan_args+=(--scenario "$2")
             shift 2
             ;;
-        -i | --input)
+        -i | --input | --file)
             (($# >= 2)) || die "$1 needs a file"
             [[ -f $2 ]] || die "input file not found: $2"
-            plan_args+=(--input "$2")
+            if [[ $1 == --file ]]; then
+                [[ -z $file ]] || die "--file can only be given once"
+                file=$2
+                plan_args+=(--file "$2")
+            else
+                plan_args+=(--input "$2")
+            fi
             input_dirs+=("$(dirname "$(realpath -- "$2")")")
             shift 2
             ;;

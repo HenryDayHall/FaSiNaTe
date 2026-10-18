@@ -196,3 +196,51 @@ observables:
     # reconstructed file's metadata, or else from the detector geometry.
     cell_id_encoding: null
     metric: jensen_shannon
+
+# The slurm jobs of ./slurm_pipeline.sh, which runs every stage of the pipeline
+# as jobs of one file each (one input, one simulation, one reconstruction),
+# each waiting for the jobs that make what it reads. The defaults are for
+# DESY's Maxwell cluster, like the #SBATCH lines of the stage scripts. Options
+# given after -- on the command line go to every job, after these.
+slurm:
+  # Each submission gets a folder here, pipeline_<time>, with the job script,
+  # the list of jobs submitted (jobs.tsv) and their slurm logs (logs/).
+  log_dir: ${paths.data_dir}/slurm
+  # Jobs are named <prefix>-<stage>, e.g. fasinate-reco-geant4.
+  job_name_prefix: fasinate
+  # sbatch options for every job, e.g. [--account=myproject, --mail-type=FAIL]
+  sbatch_args: [--nodes=1]
+  # For each stage: the partition, a constraint on the nodes (null for none),
+  # the time limit of each job (quoted) and more sbatch options.
+  stages:
+    generate:
+      partition: maxcpu
+      constraint: null
+      time: "01:00:00"
+      sbatch_args: []
+    geant4:
+      partition: maxcpu
+      # The CPU of the paper's timings
+      constraint: "EPYC&7402"
+      time: "2-00:00:00"
+      sbatch_args: []
+    models:
+      partition: maxcpu
+      constraint: "EPYC&7402"
+      time: "2-00:00:00"
+      sbatch_args: []
+    reconstruct:
+      partition: maxcpu
+      constraint: "EPYC&7402"
+      time: "2-00:00:00"
+      sbatch_args: []
+    observables:
+      partition: maxcpu
+      constraint: null
+      time: "1-00:00:00"
+      sbatch_args: []
+    plot:
+      partition: maxcpu
+      constraint: null
+      time: "01:00:00"
+      sbatch_args: []

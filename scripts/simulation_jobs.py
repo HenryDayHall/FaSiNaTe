@@ -13,12 +13,13 @@ output exists is done, and is skipped unless forced.
 
 This runs in two steps:
 
-  simulation_jobs.py plan [--scenario NAME] [--input FILE] [--events N]
-                          [--force] [MODEL ...]
+  simulation_jobs.py plan [--scenario NAME] [--input FILE] [--file FILE]
+                          [--events N] [--force] [MODEL ...]
       Before the simulation environment is set up: read the configuration and
       the model descriptions, check them, and print the plan as JSON.
       --scenario and --input can be repeated; without either, every scenario
-      is simulated.
+      is simulated. With --file, it is just that input, as part of the one
+      scenario given (as the jobs of slurm_pipeline.sh simulate).
 
   simulation_jobs.py jobs [--dry-run] < PLAN
       In the environment from setup.sh: check that it runs the DDML build from
@@ -136,7 +137,7 @@ def load_model(name):
     return model
 
 
-def make_plan(models=(), scenarios=(), inputs=(), events=None, force=False):
+def make_plan(models=(), scenarios=(), inputs=(), events=None, force=False, file=None):
     """The simulations to consider, as a JSON-able dict."""
     config = load_config()
     names = []
@@ -152,7 +153,20 @@ def make_plan(models=(), scenarios=(), inputs=(), events=None, force=False):
         raise PlanError("the number of events must be at least 1, not %d" % events)
 
     groups = []
-    if scenarios or not inputs:
+    if file is not None:
+        # One input of one scenario, as geant4_jobs.py simulates with --file
+        if len(scenarios) != 1 or inputs:
+            raise PlanError("--file needs exactly one --scenario, the one the file belongs "
+                            "to (custom for files outside the scenarios), and no --input")
+        if not _NAME.match(scenarios[0]):
+            raise PlanError("scenario names become folder names, so use only letters, "
+                            "digits and _.+- in '%s'" % scenarios[0])
+        if not os.path.isfile(file):
+            raise PlanError("input file not found: %s" % file)
+        # The real path, as that is what gets mounted in the container
+        groups.append({"scenario": scenarios[0], "type": "files",
+                       "files": [os.path.realpath(file)]})
+    elif scenarios or not inputs:
         for name, kind, commands in scenario_commands(config, scenarios):
             if not _NAME.match(name):
                 raise PlanError("scenario names become folder names, so use only letters, "
@@ -450,6 +464,8 @@ def main(argv=None):
                              help="simulate this scenario (repeatable)")
     plan_parser.add_argument("--input", action="append", default=[], metavar="FILE",
                              help="simulate this file, as the scenario 'custom' (repeatable)")
+    plan_parser.add_argument("--file", metavar="FILE",
+                             help="simulate only this input of the one --scenario given")
     plan_parser.add_argument("--events", type=int, metavar="N",
                              help="simulate only the first N events of each input")
     plan_parser.add_argument("--force", action="store_true",
@@ -461,7 +477,8 @@ def main(argv=None):
 
     try:
         if args.step == "plan":
-            plan = make_plan(args.models, args.scenario, args.input, args.events, args.force)
+            plan = make_plan(args.models, args.scenario, args.input, args.events, args.force,
+                             args.file)
             report_plan(plan)
             print(json.dumps(plan))
         elif args.step == "jobs":

@@ -16,6 +16,7 @@ The benchmark follows the paper *"A First Full Physics Benchmark for Highly Gran
 
 - [The pipeline](#the-pipeline)
 - [Quick start](#quick-start)
+- [The whole pipeline on slurm](#the-whole-pipeline-on-slurm)
 - [Configuration](#configuration)
 - [The environment](#the-environment)
 - [Stage by stage](#stage-by-stage)
@@ -60,7 +61,7 @@ flowchart TD
 | 5 | `observables_from_reconstruction.sh` | finished reconstructions | `observables/<simulator>.npz` |
 | 6 | `plot_observables.sh` | `observables/*.npz` | `observables/plots/*.{pdf,png}`, `metrics.csv` |
 
-Stages 2 and 3 are independent of each other; a "simulator" below means either Geant4 or one of the models.
+Stages 2 and 3 are independent of each other; a "simulator" below means either Geant4 or one of the models. On a slurm cluster, [`slurm_pipeline.sh`](#the-whole-pipeline-on-slurm) runs all six stages as jobs of one file each.
 
 ## Quick start
 
@@ -95,7 +96,41 @@ Before a full run, try the chain on a handful of events. Stages 2–6 take `-n N
 ./plot_observables.sh -n 10
 ```
 
-Every script takes `--help`, and stages 2–5 also take `--dry-run`, showing what would be done and what is already done. Run them from the repository root (or set `FASINATE_REPO_DIR`). Apart from `slurm_simulate_geant4.sh`, which submits its own job array, the long-running ones can be submitted directly with `sbatch` from the repository root; their `#SBATCH` defaults are set for DESY's Maxwell cluster.
+Every script takes `--help`, and stages 2–5 also take `--dry-run`, showing what would be done and what is already done. Run them from the repository root (or set `FASINATE_REPO_DIR`). Apart from `slurm_simulate_geant4.sh` and `slurm_pipeline.sh`, which submit their own jobs, the long-running ones can be submitted directly with `sbatch` from the repository root; their `#SBATCH` defaults are set for DESY's Maxwell cluster.
+
+## The whole pipeline on slurm
+
+`slurm_pipeline.sh` runs every stage on a slurm cluster in one go. It works out what each stage still has to do from what is on disk, and submits that as jobs of one file each, every job waiting for the jobs that make what it reads (`sbatch --dependency=afterok`):
+
+| Stage | One job for each | Waiting for |
+|---|---|---|
+| generate | input file still to make | |
+| geant4 | input still to simulate with Geant4 | the job making its input |
+| models | input and model still to simulate | the job making its input |
+| reconstruct | simulation still to reconstruct | the job simulating it |
+| observables | simulator whose measurements aren't up to date | the jobs reconstructing its simulations |
+| plot | (one job) | the measurement jobs |
+
+Try it first with [`configs/pipeline_test.yaml`](configs/pipeline_test.yaml), a very light test of every stage: two inputs of 10 photons each, in a data folder of its own (`data/pipeline_test` in the repository), with short time limits. With CaloClouds3 alone, that is 13 jobs.
+
+```bash
+./slurm_pipeline.sh --config configs/pipeline_test.yaml --dry-run  # what is done, and what would be submitted
+./slurm_pipeline.sh --config configs/pipeline_test.yaml            # the test
+./slurm_pipeline.sh                                                # the full benchmark
+```
+
+Run it on a login node, from the repository root. Before submitting anything it names the inputs and runs the stage scripts' checks in the environment the jobs get (building DDML first if needed, which `--dry-run` does too), so that a missing model weight or compact file stops it there rather than failing every job. Like the stage scripts, it takes simulators and `-s SCENARIO` to run only those, and `-n N` for a test on the first N events of each input; `-c/--config FILE` merges a configuration file over the others, for this run and all its jobs. `--stages` runs only some stages, `--force STAGE` makes a stage's outputs again and with them everything made from them, and options after `--` go to every `sbatch` call:
+
+```bash
+./slurm_pipeline.sh caloclouds3               # this model's jobs, then the plots
+./slurm_pipeline.sh --stages generate,geant4  # only the inputs and the Geant4 reference
+./slurm_pipeline.sh --force reconstruct       # reconstruct everything again, and measure and plot it
+./slurm_pipeline.sh -- --account=myproject    # more sbatch options
+```
+
+It can be run again at any time. What is done is skipped; a task that a job of an earlier submission is still queued or running for is waited for, not submitted again; and whatever failed or timed out is submitted again. A job waiting for one that fails is cancelled, so after a failure, fix what went wrong and run the script again. Adding a model to `models/` and running it again submits that model's jobs and the plots.
+
+Each submission gets a folder, `slurm/pipeline_<time>/` in `paths.data_dir`, with the job script, the jobs submitted (`jobs.tsv`), what was done and why (`tasks.json`) and each job's slurm log in `logs/`; the stage scripts write their own logs next to their outputs, as always. The partition, constraint, time limit and other `sbatch` options of each stage's jobs are in the `slurm` section of the configuration.
 
 ## Configuration
 
@@ -105,7 +140,8 @@ Shared settings live in [`configs/default.yaml`](configs/default.yaml):
 - `ddml`, `key4hep`, `container`, `detector_configs`, `patches`: the software stack (see [The environment](#the-environment));
 - `geant4`, `reconstruction`: settings for the reference simulation and the reconstruction;
 - `scenarios`: the sets of events every simulator simulates;
-- `observables`: what is measured on them, and how it is compared with Geant4.
+- `observables`: what is measured on them, and how it is compared with Geant4;
+- `slurm`: the jobs of [`slurm_pipeline.sh`](#the-whole-pipeline-on-slurm), stage by stage.
 
 Don't edit `default.yaml` for your own setup. Put the settings you change in `configs/local.yaml`, which git ignores and every script reads automatically. An override file only needs the keys it changes, e.g. a smaller single-photon sample for testing:
 
@@ -116,7 +152,7 @@ scenarios:
       n_events: 100
 ```
 
-(Input file names don't include the number of events, so this replaces the full samples; use `-n` instead to test without touching them.)
+(Input file names don't include the number of events, so this replaces the full samples; use `-n` instead to test without touching them, or a data folder of its own, as [`configs/pipeline_test.yaml`](configs/pipeline_test.yaml) does.)
 
 Values can refer to other settings (`${paths.software_dir}`) and to environment variables (`$USER`); relative paths are relative to the repository. More override files can be layered on top by listing them in `FASINATE_CONFIG`. Inspect the merged result with
 
@@ -201,7 +237,7 @@ Run it from a login node at the repository root. Each submission gets a folder `
 
 Before simulating, it checks that the DDML libraries, the `ddml` Python package and each preset's plugin come from the configured build, and that each model's weights match their recorded md5 sum. Each model is simulated in the detector it was trained for (`fixed_at_training.detector.compact_file`).
 
-Both simulation scripts accept `-i FILE` to simulate an arbitrary input file (written under the scenario name `custom`), and `-f/--force` to redo existing outputs. `ddsim` writes to a hidden file that is renamed only on success, so an output that exists is always complete.
+Both simulation scripts accept `-i FILE` to simulate an arbitrary input file (written under the scenario name `custom`), `--file FILE` with one `-s SCENARIO` to simulate just that one of its inputs (as the jobs of `slurm_pipeline.sh` do), and `-f/--force` to redo existing outputs. `ddsim` writes to a hidden file that is renamed only on success, so an output that exists is always complete.
 
 ### 4. Reconstruct
 
@@ -264,7 +300,9 @@ Everything is written under `paths.data_dir`:
 ├── observables/
 │   ├── <simulator>.npz            # stage 5
 │   └── plots/                     # stage 6: figures + metrics.csv
-└── slurm/simulate_geant4_<time>/  # job arrays from slurm_simulate_geant4.sh
+└── slurm/
+    ├── pipeline_<time>/           # submissions of slurm_pipeline.sh (slurm.log_dir)
+    └── simulate_geant4_<time>/    # job arrays from slurm_simulate_geant4.sh
 ```
 
 Test runs with `-n N` add `_n<N>` to every file name, and files simulated with `-i` go under the scenario `custom` (reconstructions of files outside `sim_output` go to `rec_output/custom/files/`).
@@ -301,9 +339,11 @@ Observables are implemented in [`scripts/observables.py`](scripts/observables.py
 ├── reconstruct_simulation.sh           # stage 4
 ├── observables_from_reconstruction.sh  # stage 5
 ├── plot_observables.sh                 # stage 6
+├── slurm_pipeline.sh                   # all six stages, as slurm jobs of one file each
 ├── setup.sh                            # interactive environment
 ├── ILD_Particle_Gun.py                 # particle-gun input generator
 ├── configs/default.yaml                # shared configuration (override in configs/local.yaml)
+├── configs/pipeline_test.yaml          # a very light test run of the whole pipeline
 ├── models/                             # one YAML file per model
 ├── scripts/                            # building, configuration and the Python behind each stage
 ├── docs/images/                        # figures for this README
