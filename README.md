@@ -1,334 +1,317 @@
-# Reconstruction of CaloClouds and friends
+# FaSiNaTe
 
-This repository includes tools and guidance to run a full simulation and reconstruction with a model
-that has been created in a similar manner to the [CaloClouds](https://gitlab.desy.de/ftx-sft/generative/point-cloud-diffusion).
-It's an agglomeration of work done by Peter McKeown and Anatolii Korol.
-There are roughly 5 steps;
+FaSiNaTe benchmarks generative fast-simulation models of calorimeter showers in a full detector chain.
+Each model runs inside ILD's `ddsim` simulation through [DDML](https://github.com/key4hep/DDML), its events go through ILD's standard reconstruction, and observables measured on the reconstructed events are compared with full Geant4 simulation of the same inputs.
 
-1. Compile to model into c++, see `inference.py` (but you will need to implement changes).
-2. Create a sample of inputs to start events from, see `Di_Photon_Input_slcio.py`.
-3. Simulate events with each model, see `simulate_models.sh`, and with Geant4 as the reference, see `simulate_geant4.sh` and `slurm_simulate_geant4.sh`.
-4. Reconstruct the simulated events, see `reconstruct_simulation.sh`.
-5. Measure the benchmark observables on the reconstructed events, see `observables_from_reconstruction.sh`, and plot them against Geant4, see `plot_observables.sh`. The older photon separation analysis is described in `run_analysis.sh`.
-6. Plots from multiple analysis can be compared, an example is given in `Di_Photon_Analysis_Plots.py`.
+The benchmark follows the paper *"A First Full Physics Benchmark for Highly Granular Calorimeter Surrogates"*, starting with its single-photon shower profiles. The first model included is CaloClouds3.
 
-Steps 3, 4 and 5 can be run in sequence using `run_all.sh`, which chains the commands from `run_sim.sh`, `run_reco.sh` and `run_analysis.sh`. It's normally best to check each stage separately in your environment before running all of them together. It requires the same sort of modifications as steps 3, 4 and 5.
+<p align="center">
+  <img src="docs/images/longitudinal_profile_layers__single_photon.png" alt="Longitudinal shower profile, CaloClouds3 against Geant4" width="48%">
+  <img src="docs/images/radial_profile_r30__single_photon.png" alt="Radial shower profile out to 30 mm, CaloClouds3 against Geant4" width="48%">
+</p>
 
-To use the repository, you must clone recursively, because you need the submodules.
+*Example output of `plot_observables.sh` for the `single_photon` scenario (30 000 Geant4 events, 10–100 GeV): the mean reconstructed ECAL energy per layer (left) and against distance to the shower axis (right). Geant4 is the grey filled histogram, CaloClouds3 the orange line; the lower panels show the relative deviation from Geant4 with statistical uncertainties, and the legend gives the Jensen–Shannon divergence.*
 
-```bash
-git clone --recurse-submodules git@gitlab.desy.de:ftx-sft/generative/analysis_chain.git
+## Contents
+
+- [The pipeline](#the-pipeline)
+- [Quick start](#quick-start)
+- [Configuration](#configuration)
+- [The environment](#the-environment)
+- [Stage by stage](#stage-by-stage)
+  - [1. Generate the inputs](#1-generate-the-inputs)
+  - [2. Simulate with Geant4](#2-simulate-with-geant4)
+  - [3. Simulate with the models](#3-simulate-with-the-models)
+  - [4. Reconstruct](#4-reconstruct)
+  - [5. Measure the observables](#5-measure-the-observables)
+  - [6. Plot](#6-plot)
+- [Where the data goes](#where-the-data-goes)
+- [Extending the benchmark](#extending-the-benchmark)
+- [Repository layout](#repository-layout)
+- [Credits](#credits)
+
+## The pipeline
+
+Every stage is one script at the top of the repository. The scripts take their settings from the configuration, find the work left to do from what is already on disk, and skip what is finished, so any stage can be re-run safely after a failure or timeout.
+
+```mermaid
+flowchart TD
+    gen["Stage 1: generate_input.sh"]
+    g4["Stage 2: simulate_geant4.sh"]
+    ml["Stage 3: simulate_models.sh"]
+    reco["Stage 4: reconstruct_simulation.sh"]
+    obs["Stage 5: observables_from_reconstruction.sh"]
+    plot["Stage 6: plot_observables.sh"]
+
+    gen -->|input events| g4
+    gen -->|input events| ml
+    g4 -->|Geant4 simulations| reco
+    ml -->|model simulations| reco
+    reco -->|reconstructed events| obs
+    obs -->|one npz file per simulator| plot
 ```
 
-Or if you have already cloned the repository, from inside the repository do
+| Stage | Script | Reads | Writes (under `paths.data_dir`) |
+|---|---|---|---|
+| 1 | `generate_input.sh` | `scenarios` in the configuration | `input_single_particle_gun/*.slcio` (+ `.h5` truth) |
+| 2 | `simulate_geant4.sh` | scenario inputs | `sim_output/<scenario>/geant4/*.edm4hep.root` |
+| 3 | `simulate_models.sh` | scenario inputs, `models/*.yaml` | `sim_output/<scenario>/<model>/*.root` |
+| 4 | `reconstruct_simulation.sh` | everything in `sim_output/` | `rec_output/<scenario>/<simulator>/*_REC.edm4hep.root` |
+| 5 | `observables_from_reconstruction.sh` | finished reconstructions | `observables/<simulator>.npz` |
+| 6 | `plot_observables.sh` | `observables/*.npz` | `observables/plots/*.{pdf,png}`, `metrics.csv` |
+
+Stages 2 and 3 are independent of each other; a "simulator" below means either Geant4 or one of the models.
+
+## Quick start
 
 ```bash
-git submodule update --init --recursive
-```
+git clone https://github.com/HenryDayHall/FaSiNaTe.git
+cd FaSiNaTe
 
-[DDML](https://github.com/key4hep/DDML), which runs the model inside the simulation, is not a submodule; `setup.sh` builds it the first time you need it (see [Setting up the environment](#setting-up-the-environment)).
-
-Almost all of this process in built and run inside a singularity container.
-This isn't strictly necessary - at least on DESY's maxwell cluster, everything can be done directly in the shell. 
-However, since the `key4hep` setup in `setup.sh` can only be run once, and can create unpredictable issues if run multiple times, using the singularity ensures a clean environment no matter how you run the scripts.
-Generally the `run_`...`.sh` scripts are designed to be submitted as slurm jobs, in which case you would have a clean environment anyway, but they can also be directly sourced.
-
-Below, you can read a bit more about how to run each of these steps and what they are expected to produce.
-The folder this repository has been cloned into is referred to as `repo_dir`.
-
-## Configuration
-
-Settings shared by the scripts are in `configs/default.yaml`:
-where external software is cloned and built (`paths.software_dir`),
-where inputs and outputs go (`paths.data_dir`),
-where the steering file finds models (`paths.model_dir`),
-which DDML and Key4hep release to build, which container image to use,
-and the benchmark: the `scenarios` to simulate and the `observables` to measure on them.
-
-Don't edit `default.yaml` for your own setup.
-Put the settings you change in `configs/local.yaml`, which git ignores and the scripts read automatically, e.g.
-
-```yaml
+# Say where software and (large) data should live
+cat > configs/local.yaml <<'EOF'
 paths:
   software_dir: /data/dust/user/$USER/fasinate/external
   data_dir: /data/dust/user/$USER/fasinate/data
+EOF
+
+./generate_input.sh                 # 1. inputs for every scenario
+./slurm_simulate_geant4.sh          # 2. Geant4, one slurm job per input
+./simulate_models.sh                # 3. every model in models/
+./reconstruct_simulation.sh         # 4. every finished simulation
+./observables_from_reconstruction.sh  # 5. one .npz per simulator
+./plot_observables.sh               # 6. figures and metrics.csv
 ```
 
-Settings can refer to each other (`${paths.software_dir}`) and to environment variables (`$USER`), and relative paths are relative to the repository.
-To layer another file on top, e.g. for a site or a CI job, list it in `FASINATE_CONFIG`; `scripts/build_ddml.sh` also takes `--config FILE` and `--set section.key=value`.
-Check the result with
+The first script to run builds DDML (and anything else the environment needs, see [below](#the-environment)), which takes a while; later runs reuse the build.
+
+Before a full run, try the chain on a handful of events. Stages 2–6 take `-n N`, and the outputs of a test run carry an `_n<N>` suffix, so they never mix with the full samples:
 
 ```bash
-python3 scripts/fasinate_config.py                      # all settings
+./simulate_geant4.sh -n 10
+./simulate_models.sh -n 10
+./reconstruct_simulation.sh -n 10
+./observables_from_reconstruction.sh -n 10
+./plot_observables.sh -n 10
+```
+
+Every script takes `--help`, and stages 2–5 also take `--dry-run`, showing what would be done and what is already done. Run them from the repository root (or set `FASINATE_REPO_DIR`). Apart from `slurm_simulate_geant4.sh`, which submits its own job array, the long-running ones can be submitted directly with `sbatch` from the repository root; their `#SBATCH` defaults are set for DESY's Maxwell cluster.
+
+## Configuration
+
+Shared settings live in [`configs/default.yaml`](configs/default.yaml):
+
+- `paths`: where external software is built (`software_dir`), where all inputs and outputs go (`data_dir`), and where the steering file finds model weights (`model_dir`);
+- `ddml`, `key4hep`, `container`, `detector_configs`, `patches`: the software stack (see [The environment](#the-environment));
+- `geant4`, `reconstruction`: settings for the reference simulation and the reconstruction;
+- `scenarios`: the sets of events every simulator simulates;
+- `observables`: what is measured on them, and how it is compared with Geant4.
+
+Don't edit `default.yaml` for your own setup. Put the settings you change in `configs/local.yaml`, which git ignores and every script reads automatically. An override file only needs the keys it changes, e.g. a smaller single-photon sample for testing:
+
+```yaml
+scenarios:
+  single_photon:
+    input:
+      n_events: 100
+```
+
+(Input file names don't include the number of events, so this replaces the full samples; use `-n` instead to test without touching them.)
+
+Values can refer to other settings (`${paths.software_dir}`) and to environment variables (`$USER`); relative paths are relative to the repository. More override files can be layered on top by listing them in `FASINATE_CONFIG`. Inspect the merged result with
+
+```bash
+python3 scripts/fasinate_config.py                      # everything
 python3 scripts/fasinate_config.py --get paths.data_dir  # one setting
 ```
 
-This needs Python 3 with PyYAML (`python3 -m pip install --user pyyaml` if it's missing).
-The `run_*.sh` scripts load the configuration through `scripts/load_config.sh`, so run them from the repository root (or set `FASINATE_REPO_DIR`).
+This needs Python 3 with PyYAML (`python3 -m pip install --user pyyaml`).
 
-## Setting up the environment
+Each model has its own file in [`models/`](models/); see [Adding a model](#adding-a-model).
 
-Every step runs in the same environment: a Key4hep release with its ML libraries, plus a build of DDML's `python-inference` branch, which runs the model inside `ddsim`.
-Get it in a clean bash shell with
+## The environment
+
+Every stage runs in the same environment: a Key4hep release, a build of DDML's `python-inference` branch against it, ILDConfig for the reconstruction, and any patches the release still needs. You don't normally have to set this up yourself: each script builds what is missing, then runs its work in a clean shell inside an Apptainer/Singularity container (`container.image`, AlmaLinux 9 by default) with `/cvmfs` mounted. Set `container.enabled: false` to run directly on a host with a matching OS and `/cvmfs`, e.g. in CI.
+
+For interactive work, get the same environment in a clean bash shell with
 
 ```bash
 source setup.sh
 ```
 
-This reads the configuration, builds DDML if there's no build for this configuration yet, clones the detector configurations that reconstruction needs (ILDConfig; see [Reconstructing events](#reconstructing-events)) if they aren't there yet, builds the [patches to the Key4hep release](#fixes-the-key4hep-release-doesnt-have-yet) if they aren't built yet, then sets up the Key4hep release DDML was built against, DDML itself, and the patches.
-Source it only once per shell, because the Key4hep setup can only run once.
+Source it only once per shell, as the Key4hep setup can only run once. In a shell that has sourced it, the stage scripts run in place rather than starting a container.
 
-The build is done by `scripts/build_ddml.sh`, which
+What it sets up, and the scripts that do it:
 
-1. clones DDML into `ddml.source_dir`, or fast-forwards an existing clone (or checks out `ddml.commit`, if set);
-2. pulls the container image to `container.image` if it isn't there yet;
-3. builds and installs DDML inside that container, in a clean shell, against the Key4hep release `key4hep.release`;
-4. writes `ddml.env_file`, which `setup.sh` sources, and checks that it works.
+- **DDML** — `scripts/build_ddml.sh` clones DDML into `ddml.source_dir` (at `ddml.commit` if set, otherwise the head of `ddml.branch`), pulls the container image if needed, builds DDML inside it against `key4hep.release`, and writes `ddml.env_file`. Building also downloads DDML's reference models into `paths.model_dir`. It rebuilds only when the DDML commit or branch, the build options, the Key4hep release or the image change. Run it by hand to move to the head of the branch (`--dry-run`, `--clean`, `--config FILE` and `--set section.key=value` are available); it prints the commit and release used, ready to pin in `configs/local.yaml`.
+- **ILDConfig** — Key4hep releases don't include it, so `scripts/fetch_detector_configs.sh` clones it to `detector_configs.ildconfig.source_dir`. Pin `detector_configs.ildconfig.commit` for benchmark runs.
+- **Patches** — fixes that are upstream but not yet in a Key4hep release, built by `scripts/build_patches.sh` (see [Patches to the Key4hep release](#patches-to-the-key4hep-release)).
 
-`setup.sh` and the `run_*.sh` scripts run it with `--if-needed`, so it only builds when there's no build matching the configuration:
-changing the DDML commit or branch, the build options, the Key4hep release or the container image means a rebuild.
-Run `scripts/build_ddml.sh` yourself to update DDML to the head of its branch; `--dry-run` shows what it would do, and `--clean` starts from an empty build directory.
-At the end, it prints the DDML commit and Key4hep release it used, ready to paste into `configs/local.yaml` to pin them.
+For benchmark runs, pin `ddml.commit`, `key4hep.release` and `detector_configs.ildconfig.commit` so results are reproducible.
 
-DDML is built inside the container, so source `setup.sh` in that container, or on a host with the same OS (AlmaLinux, Rocky or RHEL 9 for the default image); elsewhere it stops and says which platform DDML was built for.
-Recent Key4hep releases are built for AlmaLinux 9 and Ubuntu 24.04 rather than Ubuntu 22.04, so the default image is `ghcr.io/key4hep/key4hep-images/alma9`.
-In the containers the `run_*.sh` scripts start, the commands source `/user_repo/setup.sh`, which uses the configuration passed in from outside.
+### Patches to the Key4hep release
 
-### Fixes the Key4hep release doesn't have yet
+Each entry under `patches` rebuilds one package of the release from a newer version and swaps its library into `MARLIN_DLL`. There is one so far:
 
-Sometimes a bug that breaks the chain is already fixed upstream, but in no Key4hep release yet.
-The `patches` section of the configuration lists such fixes: each is a package of the release, rebuilt from a newer version against the Key4hep release DDML is built against, which `setup.sh` uses in place of the release's own.
-There is one so far:
+- `marlintrkprocessors`: up to version 2.12.8, ILD's TPC digitisation (`DDTPCDigiProcessor`) aborts the whole job with `padTheta = nan` on some hit triplets, which backscatter from Geant4 showers can produce. The fix, [iLCSoft/MarlinTrkProcessors#79](https://github.com/iLCSoft/MarlinTrkProcessors/commit/f2da912fa583eb6da3e9aac4c8ba43fcde64efab), is in `v02-12-09`, which is what gets built.
 
-- `marlintrkprocessors`: in MarlinTrkProcessors 2.12.8 and earlier, the TPC digitisation of ILD's reconstruction (`DDTPCDigiProcessor`) stops the whole job with `padTheta = nan` when it can't work out a hit's angle from three TPC hits, which backscatter from Geant4 showers can leave.
-  It is fixed in [iLCSoft/MarlinTrkProcessors#79](https://github.com/iLCSoft/MarlinTrkProcessors/commit/f2da912fa583eb6da3e9aac4c8ba43fcde64efab), first released in `v02-12-09`, which is 2.12.8 with only that fix; so this builds `v02-12-09`.
+A patch is only used while the release's own version is older than its `fixed_in`. Once DDML is built against a release that has the fix, `setup.sh` stops using it and says the entry can be deleted from `configs/default.yaml`. To run without a patch before then, set `patches.<name>.enabled: false` in `configs/local.yaml`. The patches in use are printed by `setup.sh` and recorded in each reconstruction log.
 
-`scripts/build_patches.sh` builds them, and `setup.sh` and the scripts that start a container run it with `--if-needed`, as they do `scripts/build_ddml.sh`.
-For each patch, it finds the release's own build of the package (its library in `MARLIN_DLL`) and its version; if that is older than the patch's `fixed_in`, it clones the patch's `repository` at its `ref` into `patches.base_dir`, then builds and installs it in the same clean shell and container as DDML, with ROOT's C++ standard, as Key4hep builds its packages.
-It then writes `patches.env_file`, which `setup.sh` sources after setting up Key4hep, and which puts each patch's library in `MARLIN_DLL` in place of the release's.
-It rebuilds when the patches' settings or the Key4hep release change, and `--dry-run`, `--clean`, `--config` and `--set` work as for `scripts/build_ddml.sh`.
-`setup.sh` says which patches it uses, e.g.
+## Stage by stage
 
-```
-FaSiNaTe: patch: marlintrkprocessors v02-12-09 (3ba32e2ae54b) in place of the release's 2.12.8, until Key4hep has 2.12.9
-```
-
-and the reconstruction logs record them, next to the Key4hep release (`# patches`); the reconstruction's own log lists the library it loaded (`Loading library ...`).
-
-**Removing a patch.**
-A patch is only used while the release's own version is older than its `fixed_in`.
-Once DDML is built against a release that has the fix, `setup.sh` stops using the patch by itself, without building it, and says that it can go:
-
-```
-FaSiNaTe: patch marlintrkprocessors isn't needed any more: Key4hep 2026-11-01 has marlintrkprocessors 2.12.9 (fixed_in 2.12.9); delete patches.marlintrkprocessors from configs/default.yaml
-```
-
-Then delete that entry from `configs/default.yaml`; nothing else needs to change, and its build in `patches.base_dir` can be deleted too.
-To go on without a patch before that, e.g. if it doesn't build, set it off in `configs/local.yaml`:
-
-```yaml
-patches:
-  marlintrkprocessors:
-    enabled: false
-```
-
-A new patch needs an entry with the same keys, named after the package's Spack package, for a library of Marlin processors.
-
-## Compiling a model
-
-The concept is to make a trace of the model using `poutine.trace`, which can then be run in the C++ simulation.
-Tracing a model has a few restrictions;
-
-- All the code for the model must be isolated in a single class.
-- The model must use only native python and torch functions.
-
-You can see an example of this in `inference.py`, which also produces a number of diagnostic plots.
-It takes no input arguments, all updates are made by modifying the scrip itself.
-If your model was produced from the same classes as the CaloClouds-2/3 models, you should be able to use this with minimal changes, otherwise, you will need to write your own inference class.
-
-
-## Making the input sample
-
-Each benchmark scenario in the configuration says how its input events are made.
-Make the inputs of all of them, or of the ones you name, with
+### 1. Generate the inputs
 
 ```bash
 ./generate_input.sh                # every scenario
 ./generate_input.sh single_photon  # just this one
 ```
 
-It runs in the same environment as the simulation, building DDML first if needed.
-The single photon scenario gives one `.slcio` file per energy, each with an `.h5` file of the true energies, momenta and gun positions, in `input_single_particle_gun` under `paths.data_dir`.
-To try a scenario with fewer events, override it in `configs/local.yaml`, e.g. `scenarios: {single_photon: {input: {n_events: 10}}}`; the file names don't include the number of events, so this replaces the full samples.
+Each scenario's `input` section says how its events are made. The `particle_gun` type runs [`ILD_Particle_Gun.py`](ILD_Particle_Gun.py) once per energy, with the remaining keys passed as its options; the i-th energy uses `seed + i`, so the samples are independent. Each energy gives an `.slcio` file of starting particles and an `.h5` file of the true energies, momenta and gun positions, in `input_single_particle_gun/`.
 
-For other inputs, here I'll describe one specific example that Peter wrote for the di-photon separation analysis that
-he and Anatolii were doing.
-You will likely want to change this step, to fit your analysis needs.
+The default `single_photon` scenario fires photons from the IP into one stave of the ECAL barrel, at 10, 20, …, 100 GeV with 3000 events each, spread uniformly over the front face of the stave.
 
-A complete example of this can be found in `Di_Photon_Input_slcio.py`.
-Start by making a director to store the input file, then call like;
+### 2. Simulate with Geant4
+
+Full Geant4 is the reference the models are compared with. `simulate_geant4.sh` runs `ddsim` with DDML's steering file but without DDML's fast simulation ([`scripts/ddsim_steer_geant4.py`](scripts/ddsim_steer_geant4.py)), so every other setting (physics list, crossing angle, filters, …) matches the model simulations, in the detector `geant4.compact`.
 
 ```bash
-source setup.sh
-mkdir /data/dust/user/dayhallh/physical_recos/inputs
-python3 Di_Photon_Input_slcio.py --pdg 22 --maxSep 30 --centralPosZ 50 --Emax 20 --Emin 20 --outdir /data/dust/user/dayhallh/physical_recos/inputs
+./simulate_geant4.sh --dry-run                              # what's left to do
+./simulate_geant4.sh -s single_photon                       # one scenario, all inputs in sequence
+./simulate_geant4.sh -s single_photon --file <input>.slcio  # a single input
 ```
 
-This should yield a `gen-E2020pdg22maxSep30centralPosZ50-p1.csv` (the log) and, more interestingly, a `ILD-gen-E2020pdg22maxSep30centralPosZ50-p1.slcio`.
-That is the file that is used to specify the position and direction of the incident particles in the simulation.
-
-
-## Simulating events
-
-The simulation runs the model inside `ddsim` through [DDML](https://github.com/key4hep/DDML), in the environment from [`setup.sh`](#setting-up-the-environment).
-
-### Simulating the benchmark with each model
-
-Each model is described by a file in `models/`, e.g. `models/caloclouds3.yaml`, which records:
-
-- `representation`: how the model represents a shower, e.g. `point_cloud`;
-- `fixed_at_training`: the factors fixed when it was trained, which it has no input for, e.g. the detector (and the compact file to simulate it in) and the particle;
-- `context`: the factors it is given for each shower, e.g. the energy and direction, with their units and training ranges;
-- `ddml`: how to run it, as DDML presets (from `python/ddml/configs.py` in DDML) passed to `ddsim --ml-model`, and the weights it loads, with their md5 sum.
-
-`simulate_models.sh` simulates the input of every scenario with every model, following DDML's README:
+Geant4 is slow, so on a slurm cluster use `slurm_simulate_geant4.sh`, which submits a job array with one input per job:
 
 ```bash
-./simulate_models.sh --dry-run                       # what would be simulated, and what is done already
-./simulate_models.sh                                 # every model, every scenario
-./simulate_models.sh -s single_photon caloclouds3    # one scenario, one model
-./simulate_models.sh -n 10 caloclouds3               # a quick test: the first 10 events of each input
-sbatch simulate_models.sh                            # as a slurm job, from the repository root
+./slurm_simulate_geant4.sh                             # one job per input still to simulate
+./slurm_simulate_geant4.sh -m 10 -- --time 3-00:00:00  # at most 10 at once; options after -- go to sbatch
 ```
 
-It always uses the DDML build from `scripts/build_ddml.sh` (building it first if needed) and gets its environment by sourcing `setup.sh` in a clean shell, inside the container unless `container.enabled` is false.
-Before simulating, it checks that the DDML libraries, the `ddml` Python package and each preset's plugin come from that build, and that each model's weights match their md5 sum.
+Run it from a login node at the repository root. Each submission gets a folder `slurm/simulate_geant4_<time>/` with the list of inputs, the job script and the slurm logs; run it again to resubmit whatever failed or timed out.
 
-Each simulation writes `sim_output/<scenario>/<model>/<input name>.slcio` under `paths.data_dir`, with the `ddsim` log next to it.
-Simulations whose output exists are skipped, so after a timeout or a failure, run it again to do the rest; `--force` simulates them again.
-`ddsim` writes to a hidden file that is only renamed once it succeeds, so an output is always complete.
-With `-n N`, the outputs are named `<input name>_n<N>.slcio`, so a test never counts as a full simulation.
-Other input files can be simulated with `-i FILE`, which writes to `sim_output/custom/<model>/`.
+### 3. Simulate with the models
 
-All models use DDML's `scripts/ddsim_steer.py`. DDML's README names `ddsim_steer_cc3.py` for CaloClouds3, but that file only exists on DDML's `henry-all-showers` branch, and imports a function DDML has since replaced; apart from the particle gun settings, which an input file overrides, it is the same as `ddsim_steer.py`.
-
-### Simulating the benchmark with Geant4
-
-Full Geant4 simulation of the same inputs is the reference that the models are compared to.
-`simulate_geant4.sh` works like `simulate_models.sh`, with the same options, and writes `sim_output/<scenario>/geant4/<input name>.edm4hep.root` under `paths.data_dir` (EDM4hep ROOT files, for the Gaudi-based analysis).
-It runs `ddsim` with DDML's steering file but without DDML's fast simulation (`scripts/ddsim_steer_geant4.py`), so every other setting (physics list, crossing angle, filters, ...) is the one the models are simulated with, in the detector set by `geant4.compact` in the configuration.
-
-Geant4 takes much longer than the models, so `simulate_geant4.sh` can simulate one input at a time, and `slurm_simulate_geant4.sh` submits a slurm job array with one input per job:
+`simulate_models.sh` simulates every scenario's inputs with every model in `models/` (or those named), running `ddsim` with each model's DDML presets as in DDML's README.
 
 ```bash
-./simulate_geant4.sh --dry-run                                       # what would be simulated, and what is done already
-./simulate_geant4.sh -s single_photon --file <input>.slcio           # just this input of the scenario
-./slurm_simulate_geant4.sh                                           # a job array: one job per input still to simulate
-./slurm_simulate_geant4.sh -m 10 -- --time 3-00:00:00                # at most 10 jobs at once, with a longer time limit
+./simulate_models.sh --dry-run
+./simulate_models.sh                              # every model, every scenario
+./simulate_models.sh -s single_photon caloclouds3 # one scenario, one model
 ```
 
-`slurm_simulate_geant4.sh` lists the inputs that still need simulating, building DDML first if needed, then submits the array.
-Each job sources `setup.sh`, inside the container unless `container.enabled` is false (`scripts/run_in_environment.sh`), then runs `simulate_geant4.sh` on its input.
-Each submission's list of inputs, job script and slurm logs go to `slurm/simulate_geant4_<time>/` under `paths.data_dir`; run it again to resubmit whatever failed or ran out of time.
+Before simulating, it checks that the DDML libraries, the `ddml` Python package and each preset's plugin come from the configured build, and that each model's weights match their recorded md5 sum. Each model is simulated in the detector it was trained for (`fixed_at_training.detector.compact_file`).
 
-In a shell that has sourced `setup.sh`, `simulate_geant4.sh` simulates right there; anywhere else it sets up the environment itself, as `simulate_models.sh` does.
+Both simulation scripts accept `-i FILE` to simulate an arbitrary input file (written under the scenario name `custom`), and `-f/--force` to redo existing outputs. `ddsim` writes to a hidden file that is renamed only on success, so an output that exists is always complete.
 
-### Simulating with your own steering file
+### 4. Reconstruct
 
-Building DDML downloads its reference models into `models/` in the DDML clone, which is the default `paths.model_dir`, mounted as `/model_dir` for the steering file.
-Put your own traced models there too, or point `paths.model_dir` at the folder that has them.
-
-If your clone still has the old `ddfastshowerml` submodule, build DDML first (`scripts/build_ddml.sh`), then keep the models you added to it (they aren't tracked anywhere) before removing it:
+The simulations are reconstructed with ILD's standard reconstruction under Gaudi: ILDConfig's `ILDReconstruction.py` run with `k4run`, as in the Key4hep tutorial [ILD Simulation and Reconstruction with Key4hep](https://key4hep.github.io/key4hep-doc/main/tutorials/key4hep-tutorials/gaudi_ild_reco/README.html).
 
 ```bash
-cp -n ddfastshowerml/models/*.pt "$(python3 scripts/fasinate_config.py --get paths.model_dir)"/
-rm -rf ddfastshowerml .git/modules/ddfastshowerml
-git config --remove-section submodule.ddfastshowerml
+./reconstruct_simulation.sh --dry-run
+./reconstruct_simulation.sh                         # every finished simulation
+./reconstruct_simulation.sh -s single_photon geant4 # one scenario, one simulator
+./reconstruct_simulation.sh path/to/sim.root        # one file
 ```
 
-The last stage of setting up is to choose what to simulate in `run_sim.sh`.
-Looking at the top of the file, you can see some example instructions for SLURM jobs, which you may want to modify,
-then further down you set the model and input file in this block;
+It finds every finished simulation in `sim_output/` for the scenarios in the configuration, by Geant4 and by every model, and reconstructs each in the detector it was simulated in (`--compact FILE` overrides this). Each `<name>.root` becomes `<name>_REC.edm4hep.root`, alongside `<name>_AIDA.root`, `<name>_PfoAnalysis.root` and the log. `--noBeamCalReco` is always passed, and `--usingParticleGun` for particle-gun scenarios; further arguments for `ILDReconstruction.py` go in `reconstruction.extra_args` (e.g. `[--lcioOutput, "on"]` to also write LCIO). As with simulation, outputs appear only once complete and existing ones are skipped unless `--force` is given.
+
+### 5. Measure the observables
+
+`observables_from_reconstruction.sh` measures every observable in the configuration for each simulator whose reconstruction is finished, i.e. every input of every scenario the observables use has its `_REC.edm4hep.root`.
 
 ```bash
-# Change these to your files/directories ~~~~~~~~~~~~~~~
-< Stuff to modify >
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-```
-
-Now you can source this file, from the repository root, to run the simulation. Or submit it to slurm with `sbatch run_sim.sh`.
-It builds DDML first if needed, and will produce output under `sim_output` in `paths.data_dir`.
-
-
-## Reconstructing events
-
-The simulated events are reconstructed with ILD's standard reconstruction, run with Gaudi rather than Marlin:
-ILDConfig's `ILDReconstruction.py` under `k4run`, as in the Key4hep tutorial [ILD Simulation and Reconstruction with Key4hep](https://key4hep.github.io/key4hep-doc/main/tutorials/key4hep-tutorials/gaudi_ild_reco/README.html).
-`reconstruct_simulation.sh` reconstructs every finished simulation it finds of the scenarios in the configuration, by every model in `models/` and by Geant4:
-
-```bash
-./reconstruct_simulation.sh --dry-run                     # what would be reconstructed, and what is done already
-./reconstruct_simulation.sh                               # every simulator, every scenario
-./reconstruct_simulation.sh -s single_photon geant4       # one scenario, one simulator (a model name, or geant4)
-./reconstruct_simulation.sh <data_dir>/sim_output/single_photon/caloclouds3/<name>.root   # one simulation
-./reconstruct_simulation.sh -n 10 caloclouds3             # a quick test: the first 10 events of each
-sbatch reconstruct_simulation.sh                          # as a slurm job, from the repository root
-```
-
-Each simulation `sim_output/<scenario>/<simulator>/<name>.root` (`.edm4hep.root` for Geant4) under `paths.data_dir` is reconstructed to `rec_output/<scenario>/<simulator>/<name>_REC.edm4hep.root`, with `<name>_AIDA.root`, `<name>_PfoAnalysis.root` and the log, `<name>.log`, next to it.
-As with the simulation, reconstructions whose output exists are skipped (`--force` redoes them), `k4run` writes to hidden files that are only renamed once it succeeds, and with `-n N` the outputs are named `<name>_n<N>...`.
-A simulation file outside `sim_output` is reconstructed to `rec_output/custom/files/`.
-
-Each simulation is reconstructed in the detector it was simulated in: the model's `fixed_at_training.detector.compact_file`, or `geant4.compact`; `--compact FILE` overrides this.
-`--noBeamCalReco` is always passed, as in the earlier Marlin reconstruction, and `--usingParticleGun` for `particle_gun` scenarios; add other arguments for `ILDReconstruction.py` to `reconstruction.extra_args` in the configuration, e.g. `[--lcioOutput, "on"]` to also write LCIO.
-
-The TPC digitisation of the Key4hep releases so far (MarlinTrkProcessors 2.12.8) can stop the reconstruction of Geant4 events with `padTheta = nan`; the `marlintrkprocessors` patch fixes that (see [Fixes the Key4hep release doesn't have yet](#fixes-the-key4hep-release-doesnt-have-yet)).
-Key4hep releases don't include ILDConfig, and the `ILDConfig` submodule is too old for recent releases, so ILDConfig is cloned to `detector_configs.ildconfig.source_dir` by `scripts/fetch_detector_configs.sh`.
-Like `scripts/build_ddml.sh`, `setup.sh` runs it with `--if-needed` whenever it is sourced, which clones ILDConfig the first time and otherwise leaves the clone as it is; the scripts that start a container run it beforehand and mount the clone, since the container may have no network.
-Run it yourself to update the clone to the head of its branch (`--dry-run` shows what it would do), and pin `detector_configs.ildconfig.commit` for benchmark runs; it prints the commit to paste into `configs/local.yaml`.
-Like `simulate_geant4.sh`, it reconstructs right there in a shell that has sourced `setup.sh`, and otherwise sets up the environment itself, inside the container unless `container.enabled` is false.
-
-This replaces the earlier Marlin reconstruction with `MarlinStdReco_WITH_GAPS.xml`; apart from a hard-coded k4geo path, that steering file was the standard one, whose gap hits the Gaudi reconstruction uses too.
-
-## Measuring and plotting the observables
-
-The benchmark's observables are listed under `observables` in the configuration, each with the scenarios it is measured on.
-The first ones are the shower profiles of the paper "A First Full Physics Benchmark for Highly Granular Calorimeter Surrogates", measured on its single photon dataset (the `single_photon` scenario):
-
-- `radial_profile`: the mean energy of the reconstructed ECAL hits against the distance from the incident photon's line of flight to the centre of the hit's cell, once out to 100 mm and once, resolving the core, out to 30 mm;
-- `longitudinal_profile`: the mean energy of the reconstructed ECAL hits in each layer, read from the hits' cellIDs.
-
-`observables_from_reconstruction.sh` measures them for every simulator (each model, and Geant4) whose reconstruction is finished, that is, every input of every scenario they use has its `_REC.edm4hep.root` file:
-
-```bash
-./observables_from_reconstruction.sh --dry-run        # which simulators are finished, and what is measured already
-./observables_from_reconstruction.sh                  # every finished simulator
+./observables_from_reconstruction.sh --dry-run
+./observables_from_reconstruction.sh                 # every finished simulator
 ./observables_from_reconstruction.sh caloclouds3 geant4
-./observables_from_reconstruction.sh -n 10            # from the reconstructions of reconstruct_simulation.sh -n 10
 ```
 
-For each simulator it writes `observables/<simulator>.npz` under `paths.data_dir`, with every profile per input file as the sums over events of each bin's energy and of its square, and the number of events, so that the mean energy per event in each bin and its statistical uncertainty can be worked out, for all energies together or each on its own (`scripts/observables.py` lists the keys).
-Before it measures a simulator, it checks whether that file already has every key the configuration asks for, with the same settings and from the same reconstructed files, and skips the simulator if so; `--force` measures it again.
-It reads the EDM4hep files with uproot in the environment from `setup.sh`, so it runs like the simulation scripts, in the container unless `container.enabled` is false.
-The layer of each hit comes from the `layer` field of its cellID, decoded with the encoding stored in the reconstructed file or, failing that, from the detector geometry; `observables.longitudinal_profile.cell_id_encoding` sets it by hand.
-If more than 1% of a file's hits decode to a layer outside 0 to `max_layer`, it warns, since that usually means the encoding is wrong.
+The current observables are the shower profiles from the benchmark paper, measured on reconstructed ECAL barrel hits in the `single_photon` scenario:
 
-`plot_observables.sh` then draws every profile it finds, with all the simulators that have it on the same axes, as in the paper's figures: Geant4 as a grey filled histogram, each model as a line in its own colour and line style (set under `plot` in `models/<model>.yaml`), each with its statistical uncertainty as a band, and below, each model's relative deviation from Geant4.
-The legend gives each model's Jensen-Shannon divergence from Geant4 (the observable's `metric`), and `metrics.csv` lists them all.
+- `radial_profile`: mean hit energy against the distance from the incident photon's line of flight to the hit's cell centre, once out to 100 mm (50 bins) and once out to 30 mm (30 bins) to resolve the core;
+- `longitudinal_profile`: mean hit energy per ECAL layer, decoded from the hits' cellIDs.
+
+For each simulator it writes `observables/<simulator>.npz`, holding every profile per input file as sums over events of each bin's energy and squared energy, plus the event count. From these the mean per event and its statistical uncertainty follow, for all energies combined or each separately ([`scripts/observables.py`](scripts/observables.py) documents the keys). A simulator is skipped if its file already has every requested key, computed with the same settings from the same files.
+
+The cellID encoding is read from the reconstructed file, or failing that from the detector geometry; set `observables.longitudinal_profile.cell_id_encoding` to give it by hand. A warning is printed if more than 1% of a file's hits fall outside layers 0 to `max_layer`, which usually means the encoding is wrong.
+
+### 6. Plot
 
 ```bash
-./plot_observables.sh                  # every measurement found, to observables/plots/
-./plot_observables.sh caloclouds3      # just this model, against Geant4
-./plot_observables.sh -d copied/observables -o figures   # e.g. on a laptop, from copied .npz files
+./plot_observables.sh                                     # everything found, to observables/plots/
+./plot_observables.sh caloclouds3                         # just this model against Geant4
+./plot_observables.sh -d copied/observables -o figures    # e.g. on a laptop, from copied .npz files
+./plot_observables.sh --format pdf                        # default is pdf,png
 ```
 
-It runs with your own `python3` if that has numpy and matplotlib, and otherwise in the environment from `setup.sh`.
+Each figure, `<observable>_<profile>__<scenario>.<format>` (e.g. `radial_profile_r30__single_photon.png`, shown [at the top](#fasinate)), puts every simulator on the same axes: Geant4 as a grey filled histogram, each model as a line with its uncertainty band, and each model's relative deviation from Geant4 underneath. The legend gives each model's distance from Geant4 using the observable's `metric` (currently the Jensen–Shannon divergence), and all metrics are collected in `metrics.csv`.
 
-## Analysing the events
+Plotting only needs numpy and matplotlib: it uses your own `python3` if it has them, and the `setup.sh` environment otherwise, so the `.npz` files can be copied elsewhere and plotted there.
 
-The output of the reconstruction is a `.csv` file, and should be fairly intuitive.
-For the default photon separation reconstruction presented here, a plotting script is included.
-The script is called `Di_Photon_Analysis_Plots.py`.
+## Where the data goes
 
-It's use is fairly rudimentary, and you will have to edit the paths used to find the `.csv` files produced by the output to match your environment.
-This plotting script is not flexible and is indented more as inspiration, than for actual use.
+Everything is written under `paths.data_dir`:
+
+```
+<data_dir>/
+├── input_single_particle_gun/     # stage 1: <input>.slcio + <input>.h5
+├── sim_output/
+│   └── <scenario>/
+│       ├── geant4/                # stage 2: <input>.edm4hep.root + log
+│       └── <model>/               # stage 3: <input>.root + log
+├── rec_output/
+│   └── <scenario>/<simulator>/    # stage 4: <input>_REC.edm4hep.root, _AIDA.root, _PfoAnalysis.root, .log
+├── observables/
+│   ├── <simulator>.npz            # stage 5
+│   └── plots/                     # stage 6: figures + metrics.csv
+└── slurm/simulate_geant4_<time>/  # job arrays from slurm_simulate_geant4.sh
+```
+
+Test runs with `-n N` add `_n<N>` to every file name, and files simulated with `-i` go under the scenario `custom` (reconstructions of files outside `sim_output` go to `rec_output/custom/files/`).
+
+## Extending the benchmark
+
+### Adding a model
+
+Add a YAML file to `models/`; its file name becomes the model's name in commands and output folders. [`models/caloclouds3.yaml`](models/caloclouds3.yaml) is a commented example. It records:
+
+- `representation`: how the model describes a shower, e.g. `point_cloud`;
+- `fixed_at_training`: what the model has no input for, so where it is valid: the detector (and the compact file to simulate it in) and the particle;
+- `context`: what the model is conditioned on for each shower, e.g. energy and direction, with units and training ranges;
+- `ddml`: how to run it — the DDML presets (from `python/ddml/configs.py` in DDML) passed to `ddsim --ml-model`, and the weights file with its md5 sum;
+- `plot`: its colour and line style in the figures (each model needs a distinct line style as well as a colour, so curves can be told apart without colour).
+
+Put the weights in `paths.model_dir` (by default DDML's `models/` folder, mounted as `/model_dir` for the steering file), or point `paths.model_dir` elsewhere. The model then takes part in stages 3–6 automatically.
+
+### Adding a scenario
+
+Add an entry under `scenarios` with an `input` section. Input types are defined in [`scripts/scenario_inputs.py`](scripts/scenario_inputs.py) (currently `particle_gun`); a new type needs a function that returns the commands making the inputs and one that lists the files they produce. List the scenario under the `scenarios` of each observable that should be measured on it.
+
+### Adding an observable
+
+Observables are implemented in [`scripts/observables.py`](scripts/observables.py), keyed by the name used under `observables` in the configuration, and the comparison metrics in [`scripts/plot_observables.py`](scripts/plot_observables.py).
+
+## Repository layout
+
+```
+├── generate_input.sh                   # stage 1
+├── simulate_geant4.sh                  # stage 2
+├── slurm_simulate_geant4.sh            #   ... as a slurm job array
+├── simulate_models.sh                  # stage 3
+├── reconstruct_simulation.sh           # stage 4
+├── observables_from_reconstruction.sh  # stage 5
+├── plot_observables.sh                 # stage 6
+├── setup.sh                            # interactive environment
+├── ILD_Particle_Gun.py                 # particle-gun input generator
+├── configs/default.yaml                # shared configuration (override in configs/local.yaml)
+├── models/                             # one YAML file per model
+├── scripts/                            # building, configuration and the Python behind each stage
+├── docs/images/                        # figures for this README
+└── di_photon_old/                      # the earlier di-photon separation analysis (legacy)
+```
+
+Some files predate the current pipeline and are kept for reference only: `di_photon_old/` (the di-photon separation analysis by Peter McKeown and Anatolii Korol; its `ddml_diphoton_analysis_submodule` is the only git submodule, and the pipeline doesn't need it), `MarlinStdReco_WITH_GAPS.xml` (the earlier Marlin reconstruction, replaced by the Gaudi one in stage 4), `create_singularity.sh` (an old Ubuntu 22.04 container setup; the image is now pulled automatically) and `MODELS.md` (names of older CaloClouds variants).
+
+## Credits
+
+FaSiNaTe grew out of an analysis chain for CaloClouds-style models in full simulation and reconstruction, originally written by Peter McKeown and Anatolii Korol. The fast simulation runs through [DDML](https://github.com/key4hep/DDML), and the benchmark design follows *"A First Full Physics Benchmark for Highly Granular Calorimeter Surrogates"*.
