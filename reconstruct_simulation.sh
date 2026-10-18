@@ -91,6 +91,7 @@ reconstruct_one() {
         echo "# started   $(date '+%F %T') on $HOSTNAME"
         echo "# Key4hep   ${DDML_KEY4HEP_RELEASE:-unknown}"
         echo "# ILDConfig $ildconfig_commit, in $ildconfig_dir"
+        echo "# patches   ${FASINATE_PATCHES_APPLIED:-none} (patches in the configuration)"
         printf '# command   (in a folder linking to %s)' "$ildconfig_dir"
         printf ' %q' "${cmd[@]}"
         echo

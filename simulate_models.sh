@@ -219,6 +219,8 @@ plan=$("${FASINATE_PYTHON:-python3}" "$FASINATE_REPO_DIR/scripts/simulation_jobs
 "$FASINATE_REPO_DIR/scripts/build_ddml.sh" --if-needed
 # and the detector configurations, which setup.sh needs too (cloned if needed)
 "$FASINATE_REPO_DIR/scripts/fetch_detector_configs.sh" --if-needed
+# and the patches to the release, which setup.sh applies (built if needed)
+"$FASINATE_REPO_DIR/scripts/build_patches.sh" --if-needed
 mkdir -p "$FASINATE_PATHS_DATA_DIR"
 
 # Run in a clean shell, as build_ddml.sh does: the Key4hep setup can only run
@@ -243,12 +245,13 @@ if [[ $FASINATE_CONTAINER_ENABLED == true && -z ${APPTAINER_CONTAINER:-}${SINGUL
     mkdir -p "$FASINATE_CONTAINER_TMP_DIR" "$FASINATE_CONTAINER_CACHE_DIR"
     # Mount the folders the simulation uses at the same paths as outside, so
     # the paths in the plan hold in there too; skip folders inside others.
-    IFS=, read -r -a dirs <<<"/cvmfs,$FASINATE_REPO_DIR,$FASINATE_PATHS_DATA_DIR,$FASINATE_DDML_BIND_PATHS,$FASINATE_DETECTOR_CONFIGS_BIND_PATHS"
+    IFS=, read -r -a dirs <<<"/cvmfs,$FASINATE_REPO_DIR,$FASINATE_PATHS_DATA_DIR,$FASINATE_DDML_BIND_PATHS,$FASINATE_DETECTOR_CONFIGS_BIND_PATHS,${FASINATE_PATCHES_BIND_PATHS:-}"
     dirs+=("${input_dirs[@]}")
     binds=
     for dir in "${dirs[@]}"; do
+        [[ -n $dir ]] || continue
         for other in "${dirs[@]}"; do
-            if [[ $dir == "$other"/* ]]; then continue 2; fi
+            if [[ -n $other && $dir == "$other"/* ]]; then continue 2; fi
         done
         if [[ ,$binds, != *",$dir,"* ]]; then binds+=${binds:+,}$dir; fi
     done

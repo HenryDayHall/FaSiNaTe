@@ -69,6 +69,38 @@ key4hep:
   # so runs always use the stack DDML was built against. Pin it for benchmarks.
   release: latest
 
+# Fixes the Key4hep release doesn't have yet: packages of the release rebuilt
+# from a newer version by scripts/build_patches.sh, against the release DDML is
+# built against, which setup.sh then uses in place of the release's own. Each
+# patch is a library of Marlin processors, swapped in MARLIN_DLL, named after
+# its Spack package. A patch is only built and used while the release's own
+# version is older than its fixed_in; once a release has the fix, setup.sh says
+# so, and the patch's entry here can be deleted. To go on without a patch,
+# set its enabled to false in configs/local.yaml.
+patches:
+  base_dir: ${paths.software_dir}/patches
+  # Written by scripts/build_patches.sh, and sourced by setup.sh.
+  env_file: ${patches.base_dir}/env.sh
+  # The TPC digitisation of ILD's reconstruction (DDTPCDigiProcessor) in
+  # MarlinTrkProcessors 2.12.8 and earlier stops the whole job with
+  # "padTheta = nan" when it can't work out a hit's angle from three TPC hits,
+  # which backscatter from Geant4 showers can leave. Fixed in
+  # iLCSoft/MarlinTrkProcessors#79, first released in v02-12-09, which is
+  # 2.12.8 with only that fix; no Key4hep release had it yet in October 2026.
+  marlintrkprocessors:
+    enabled: true
+    repository: https://github.com/iLCSoft/MarlinTrkProcessors.git
+    # The tag or commit to build.
+    ref: v02-12-09
+    # The first version of the package with the fix, quoted: the patch is
+    # only used while the release's own version is older.
+    fixed_in: "2.12.9"
+    # The library it replaces in MARLIN_DLL.
+    library: libMarlinTrkProcessors.so
+    # Extra CMake arguments; ROOT's C++ standard is always passed, as Key4hep
+    # builds its packages with it.
+    cmake_args: []
+
 container:
   # Build DDML inside an Apptainer/Singularity image with /cvmfs mounted. Set
   # to false if the shell already runs a supported OS with /cvmfs (e.g. in CI).
