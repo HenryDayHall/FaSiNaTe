@@ -1,0 +1,175 @@
+# The harness
+
+`ddml_bench/` is the harness of the benchmark plan: the code every way of
+running the pipeline goes through, on a laptop, on slurm, and later on GitHub
+Actions runners. It has one module that names every file, a registry of the
+stages that says what each stage's tasks are, one task graph, and executors
+that run the graph's tasks.
+
+```
+ddml_bench/
+├── config.py           the configuration (configs/*.yaml), as before
+├── layout.py           every path: the one module that names files
+├── scenarios.py        the scenarios' inputs: their commands and file names
+├── models.py           the simulators: Geant4 and models/*.yaml
+├── stages/             the stage registry, in pipeline order
+│   ├── base.py         what a stage declares
+│   ├── generate.py     stage 1
+│   ├── simulate.py     stages 2 (geant4) and 3 (models)
+│   ├── reconstruct.py  stage 4
+│   ├── observables.py  stage 5 (the measuring itself is in measure.py)
+│   └── plot.py         stage 6 (the figures and metrics are in plot.py)
+├── graph.py            the plan, the task graph and each task's status
+├── executors/          local (one task after another) and slurm (a job each)
+├── environment.py      getting into the environment from setup.sh
+├── process.py          running ddsim, k4run and the gun, with logs and clean-up
+└── cli.py              scripts/ddml-bench, which the shell scripts run
+```
+
+## How a run goes
+
+```
+pipeline.sh, stage scripts                  slurm_pipeline.sh
+  ddml-bench run --executor local             ddml-bench run --executor slurm
+  ddml-bench stage NAME
+          │                                            │
+          ├─ make_plan(): read the configuration, the models and the options,
+          │  check them, name every input (no environment needed)
+          │                                            │
+  run_in_environment.sh                       run_in_environment.sh
+  ddml-bench local PLAN                       ddml-bench tasks PLAN TASKS
+    Graph(plan).find_status()                   Graph(plan).find_status()
+    each stage's check_environment()            each stage's check_environment()
+    run_task() for each task to do, in order          │
+                                              submit: sbatch job.sh KEY, a job per task,
+                                              --dependency=afterok on the tasks it needs
+                                                       │ (in each job)
+                                              run_in_environment.sh
+                                              ddml-bench run-task DIR KEY → run_task()
+```
+
+`make_plan()` runs where the configuration files are, before anything is
+built, so mistakes in the configuration or the options show up at once. It
+also names every input: the gun's module imports what it needs to generate
+events only when it does, so the names need nothing beyond the standard
+library. Working out what is done needs the environment (the observables'
+check reads `.npz` files with numpy), as do the stages' environment checks,
+so that happens in the environment the tasks run in, before anything runs or
+is submitted.
+
+## The layout
+
+`layout.py` names every file under `paths.data_dir`: inputs, simulations,
+reconstructions, measurements, plots and logs. A `Layout` is one sample: the
+full inputs, or the first N events of each (`-n N`). The sample is chosen
+once, when an input is simulated, and its name carries on: the simulation of
+the first N events of `<input>` is `<input>_n<N>`, its reconstruction
+`<input>_n<N>_REC.edm4hep.root`, the measurements `<simulator>_n<N>.npz`, and
+the metrics `metrics_n<N>.csv`. Records of files, such as the reconstructed
+files in a `.npz`, are relative to the data folder (`Layout.relative`), so
+they hold when the data is copied elsewhere.
+
+## The stage registry
+
+A stage is a class in `stages/` (see `stages/base.py`), and `stages.STAGES`
+lists them in order. A stage:
+
+- adds its tasks to the graph (`add_tasks`), one per file it makes, using the
+  tasks of the stages before it (`graph.inputs`, `graph.simulations`,
+  `graph.reconstructions`, `graph.measuring`);
+- says when a task is done (`current`): by default when its output exists; the
+  observables when their `.npz` is up to date, the plots when `metrics.csv` is
+  newer than every `.npz`;
+- says what in the environment would stop its tasks (`check_environment`):
+  the DDML build, the presets' plugins, the weights' md5 sums, the compact
+  files, ILDConfig, the Python modules each needs;
+- runs one task (`run`), raising `StageError` if it fails.
+
+Three attributes shape how the graph treats a stage's tasks: `gathers` (a
+task out of date while anything it gathers is still to be made: the
+observables and the plots), `takes_what_there_is` (the plots, of whatever is
+measured, rather than waiting for everything) and `blocked_is_error` (an
+input that isn't made, for the simulations, makes a local run fail).
+
+A task is a plain dict, so it can be written to `tasks.json` and run from
+there alone:
+
+```json
+{
+  "key": "reconstruct:/data/rec_output/single_photon/geant4/p22_..._seed0_ip_surface_REC.edm4hep.root",
+  "stage": "reconstruct",
+  "scenario": "single_photon",
+  "simulator": "geant4",
+  "name": "p22_..._seed0_ip_surface",
+  "inputs": ["/data/sim_output/single_photon/geant4/p22_..._seed0_ip_surface.edm4hep.root"],
+  "input_file": "/data/input_single_particle_gun/p22_..._seed0_ip_surface.slcio",
+  "output": "/data/rec_output/single_photon/geant4/p22_..._seed0_ip_surface_REC.edm4hep.root",
+  "needs": ["geant4:/data/sim_output/single_photon/geant4/p22_..._seed0_ip_surface.edm4hep.root"],
+  "params": {"base": "...", "compact": "ILD/compact/ILD_l5_o1_v02/ILD_l5_o1_v02.xml",
+             "events": -1, "args": ["--noBeamCalReco", "--usingParticleGun"],
+             "done_suffix": "_REC.edm4hep.root", "ildconfig_dir": "..."},
+  "status": "todo", "why": "not made yet", "redo": false, "after": ["geant4:..."]
+}
+```
+
+The key is `<stage>:<output>`, as only one task makes each file; slurm
+submissions record it in `jobs.tsv`, so a later submission waits for a job
+still queued for the same task rather than submitting it again.
+
+## The task graph
+
+`Graph(plan)` asks each stage for its tasks, in order, so each task comes
+after the tasks it needs, and checks that no two tasks make the same file.
+`find_status()` gives every task a status from what is on disk: `done`,
+`todo`, `blocked` (it needs what isn't done and won't be made this time) or
+`unselected` (not chosen by `--stages`, the simulators, `--scenario` or the
+files given). A task whose output exists stays done even if something it
+needs is still to be made, unless that is being made again (`--force`): then
+it is made again too (`redo`).
+
+## Executors
+
+- **local** (`executors/local.py`): runs the tasks to do one after another in
+  this environment; a task whose needs failed is skipped, and the others go
+  on. `pipeline.sh` and the stage scripts use it.
+- **slurm** (`executors/slurm.py`): submits a job per task to do, each waiting
+  for the jobs of the tasks it needs, and waits for jobs of earlier
+  submissions still queued for the same tasks. `slurm_pipeline.sh` uses it.
+
+Both run a task with `executors.run_task()`, which a slurm job reaches through
+`ddml-bench run-task DIR KEY`. A GitHub Actions shard, one task per job of a
+matrix, will run the same command.
+
+## The environment
+
+`scripts/run_in_environment.sh` is the one way into the environment the
+tasks run in: it builds what `setup.sh` needs if it isn't there (DDML,
+ILDConfig, the patches), then sources `setup.sh` in a clean shell, inside the
+container unless `container.enabled` is false, with the repository, the data,
+the software and the configuration files mounted at the same paths. The
+clean shell and the container are set up by `scripts/environment.sh`, which
+`build_ddml.sh` and `build_patches.sh` use too. In a shell that has sourced
+`setup.sh`, the harness runs right there.
+
+## Tests
+
+`tests/` runs the scripts end to end, through the launcher and `setup.sh`,
+with fakes for the programs at the ends (`tests/fakes/`): `ddsim`, `k4run`
+(writing real EDM4hep-style ROOT files, so the observables and the plots run
+for real), pyLCIO, DDML's Python package, and slurm's `sbatch` and `squeue`
+(running each job as it is submitted, or queueing them). See the README's
+Tests section; CI runs them on every push.
+
+## Extending it
+
+- **A stage**: a class in `stages/` with the methods above, added to
+  `stages.STAGES` in its place in the order; its tasks name their files with
+  the layout, and its runner writes to a hidden file that is renamed when
+  complete, as the others do.
+- **An executor**: anything that runs the graph's tasks to do (status `todo`)
+  in an order where each comes after its `after`, by `run_task()` or
+  `ddml-bench run-task`.
+- **A way to fetch an output**: `run_task()` is the place to fetch a published
+  file with a matching hash instead of running the task (the plan's Zenodo
+  step); `Stage.current()` is the place for up-to-date checks that compare
+  recorded provenance rather than what is on disk.
