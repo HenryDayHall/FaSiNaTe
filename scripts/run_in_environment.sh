@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
-# Run a command in the simulation environment: source setup.sh in a clean
-# shell, inside the container unless container.enabled is false, then run the
-# command there.
+# Run a command in the environment the pipeline runs in: source setup.sh in a
+# clean shell, inside the container unless container.enabled is false, then
+# run the command there.
 #
 # Usage: scripts/run_in_environment.sh [--bind DIR]... [--] COMMAND [ARG ...]
 #
 #   --bind DIR  also mount DIR in the container, at the same path (repeatable)
 #   -h, --help  show this help
 #
-# /cvmfs, the repository, paths.data_dir and the DDML build are mounted at the
-# same paths as outside, so paths mean the same in there. DDML is built first
-# if there is no build for this configuration (scripts/build_ddml.sh
-# --if-needed). The configuration goes in as the FASINATE_* variables.
+# /cvmfs, the repository, paths.data_dir, the DDML build, the detector
+# configurations, the patches and the folders of the configuration files in
+# FASINATE_CONFIG are mounted at the same paths as outside, so paths mean the
+# same in there. What setup.sh needs is built first if it isn't there for this
+# configuration (scripts/build_ddml.sh, fetch_detector_configs.sh and
+# build_patches.sh, with --if-needed). The configuration goes in as the
+# FASINATE_* variables. scripts/environment.sh has the details.
 
 if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
     echo "run_in_environment.sh starts a new shell, so run it instead of sourcing it" >&2
@@ -41,47 +44,31 @@ done
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=scripts/load_config.sh
 source "${FASINATE_REPO_DIR:-$(dirname "$here")}/scripts/load_config.sh"
+# shellcheck source=scripts/environment.sh
+source "$FASINATE_REPO_DIR/scripts/environment.sh"
 
-# setup.sh in a container needs DDML built for this configuration already
-"$FASINATE_REPO_DIR/scripts/build_ddml.sh" --if-needed
-# and the detector configurations, which setup.sh needs too (cloned if needed)
-"$FASINATE_REPO_DIR/scripts/fetch_detector_configs.sh" --if-needed
-# and the patches to the release, which setup.sh applies (built if needed)
-"$FASINATE_REPO_DIR/scripts/build_patches.sh" --if-needed
+# What setup.sh needs, which it can't build in a container: DDML built for this
+# configuration, the detector configurations and the patches to the release.
+# None of them read the input, which goes to the command.
+"$FASINATE_REPO_DIR/scripts/build_ddml.sh" --if-needed </dev/null
+"$FASINATE_REPO_DIR/scripts/fetch_detector_configs.sh" --if-needed </dev/null
+"$FASINATE_REPO_DIR/scripts/build_patches.sh" --if-needed </dev/null
 mkdir -p "$FASINATE_PATHS_DATA_DIR"
 
-# A clean shell, as build_ddml.sh uses: the Key4hep setup can only run once per
-# shell, and leftovers from this one (Python environments especially) confuse
-# it. The configuration goes along, except bash arrays.
-env_vars=(HOME="$HOME" USER="${USER:-$(id -un)}"
-    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin)
-for var in LOGNAME TERM; do
-    if [[ -n ${!var:-} ]]; then env_vars+=("$var=${!var}"); fi
-done
-for var in "${!FASINATE_@}"; do
-    if [[ $(declare -p "$var") != "declare -a"* ]]; then env_vars+=("$var=${!var}"); fi
+# The folders of the configuration files, which the scripts in there read
+config_dirs=()
+IFS=: read -r -a config_files <<<"${FASINATE_CONFIG:-}"
+for file in "${config_files[@]}"; do
+    if [[ -n $file ]]; then config_dirs+=("$(dirname "$(realpath -m -- "$file")")"); fi
 done
 
-container=()
-if [[ $FASINATE_CONTAINER_ENABLED == true && -z ${APPTAINER_CONTAINER:-}${SINGULARITY_CONTAINER:-} && ! -d /.singularity.d ]]; then
-    runtime=$(command -v apptainer || command -v singularity) ||
-        die "container.enabled is true, but neither apptainer nor singularity is on PATH"
-    if [[ $(basename "$runtime") == apptainer ]]; then prefix=APPTAINER; else prefix=SINGULARITY; fi
-    export "${prefix}_TMPDIR=$FASINATE_CONTAINER_TMP_DIR" "${prefix}_CACHEDIR=$FASINATE_CONTAINER_CACHE_DIR"
-    mkdir -p "$FASINATE_CONTAINER_TMP_DIR" "$FASINATE_CONTAINER_CACHE_DIR"
-    # Mount the folders at the same paths as outside; skip folders inside others.
-    IFS=, read -r -a dirs <<<"/cvmfs,$FASINATE_REPO_DIR,$FASINATE_PATHS_DATA_DIR,$FASINATE_DDML_BIND_PATHS,$FASINATE_DETECTOR_CONFIGS_BIND_PATHS,${FASINATE_PATCHES_BIND_PATHS:-}"
-    dirs+=("${extra_dirs[@]}")
-    binds=
-    for dir in "${dirs[@]}"; do
-        [[ -n $dir ]] || continue
-        for other in "${dirs[@]}"; do
-            if [[ -n $other && $dir == "$other"/* ]]; then continue 2; fi
-        done
-        if [[ ,$binds, != *",$dir,"* ]]; then binds+=${binds:+,}$dir; fi
-    done
-    container=("$runtime" exec --bind "$binds" "$FASINATE_CONTAINER_IMAGE")
-    echo "run_in_environment: in $FASINATE_CONTAINER_IMAGE, mounting $binds" >&2
+# shellcheck disable=SC2119 # no variables besides the usual ones
+fasinate_clean_env
+fasinate_container_command /cvmfs "$FASINATE_REPO_DIR" "$FASINATE_PATHS_DATA_DIR" \
+    "$FASINATE_DDML_BIND_PATHS" "$FASINATE_DETECTOR_CONFIGS_BIND_PATHS" \
+    "${FASINATE_PATCHES_BIND_PATHS:-}" "${config_dirs[@]}" "${extra_dirs[@]}" || exit 1
+if ((${#fasinate_container[@]})); then
+    echo "run_in_environment: in $FASINATE_CONTAINER_IMAGE, mounting ${fasinate_container[3]}" >&2
 fi
 
 # setup.sh is sourced at the top level and without arguments, as the Key4hep
@@ -91,4 +78,5 @@ run='_run_in_environment_command=("$@")
 set --
 source "$FASINATE_REPO_DIR/setup.sh" || exit 1
 exec "${_run_in_environment_command[@]}"'
-exec "${container[@]}" /usr/bin/env -i "${env_vars[@]}" bash --noprofile --norc -c "$run" run_in_environment "$@"
+exec "${fasinate_container[@]}" /usr/bin/env -i "${fasinate_env[@]}" \
+    bash --noprofile --norc -c "$run" run_in_environment "$@"

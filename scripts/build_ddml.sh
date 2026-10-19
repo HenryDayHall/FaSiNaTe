@@ -50,6 +50,8 @@ done
 settings=$("${FASINATE_PYTHON:-python3}" "$here/fasinate_config.py" --shell "${config_args[@]}") ||
     die "could not load the configuration (see the message above)"
 eval "$settings"
+# shellcheck source=scripts/environment.sh
+source "$here/environment.sh"
 
 src=$FASINATE_DDML_SOURCE_DIR
 build=$FASINATE_DDML_BUILD_DIR
@@ -139,22 +141,15 @@ sys.exit(0 if found == expected else "check: expected it from " + expected)
 # ---------------------------------------------------------------------------
 
 # Run one of the functions above in `bash --noprofile --norc` with a minimal
-# environment: the Key4hep setup can only run once per shell, and leftovers
-# from the calling shell (Python environments especially) confuse it.
+# environment (scripts/environment.sh), keeping the proxy settings, which
+# downloading the models needs.
 run_clean() {
-    local func=$1 var
+    local func=$1
     shift
-    local env_vars=(HOME="$HOME" USER="${USER:-$(id -un)}"
-        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin)
-    for var in LOGNAME TERM http_proxy https_proxy HTTP_PROXY HTTPS_PROXY \
-        no_proxy NO_PROXY SSL_CERT_FILE SSL_CERT_DIR; do
-        if [[ -n ${!var:-} ]]; then env_vars+=("$var=${!var}"); fi
-    done
-    for var in "${!FASINATE_@}"; do # the configuration, except bash arrays
-        if [[ $(declare -p "$var") != "declare -a"* ]]; then env_vars+=("$var=${!var}"); fi
-    done
+    fasinate_clean_env http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no_proxy NO_PROXY \
+        SSL_CERT_FILE SSL_CERT_DIR
     # 9>&-: don't hand the build lock to anything that might outlive this script
-    "${container[@]}" /usr/bin/env -i "${env_vars[@]}" \
+    "${container[@]}" /usr/bin/env -i "${fasinate_env[@]}" \
         bash --noprofile --norc -c "$(declare -f "$func"); $func \"\$@\"" "$func" "$@" 9>&-
 }
 
@@ -321,38 +316,27 @@ fi
 
 # Inside an Apptainer/Singularity container (e.g. setup.sh sourced in one),
 # build right there rather than starting another container.
-in_container=false
-if [[ -n ${APPTAINER_CONTAINER:-}${SINGULARITY_CONTAINER:-} || -d /.singularity.d ]]; then
-    in_container=true
-fi
-
 container=()
 image=
 binds=
 built_in="a clean shell, without a container"
-if [[ $FASINATE_CONTAINER_ENABLED == true ]] && $in_container; then
+if [[ $FASINATE_CONTAINER_ENABLED == true ]] && fasinate_in_container; then
     built_in="the container build_ddml.sh ran in"
 elif [[ $FASINATE_CONTAINER_ENABLED == true ]]; then
     image=$FASINATE_CONTAINER_IMAGE
     built_in=$image
-    if ! runtime=$(command -v apptainer || command -v singularity); then
+    if fasinate_find_runtime; then
+        runtime=$fasinate_runtime
+    else
         msg="container.enabled is true, but neither apptainer nor singularity is on PATH"
         msg+=" (use --set container.enabled=false to build without a container)"
         $dry_run || die "$msg"
         say "warning: $msg"
         runtime=apptainer
     fi
-    if [[ $(basename "$runtime") == apptainer ]]; then var_prefix=APPTAINER; else var_prefix=SINGULARITY; fi
-    export "${var_prefix}_TMPDIR=$FASINATE_CONTAINER_TMP_DIR" "${var_prefix}_CACHEDIR=$FASINATE_CONTAINER_CACHE_DIR"
     # The DDML directories are mounted at the same paths as outside, so the paths
     # baked into the build and the env file are valid in both places.
-    binds=/cvmfs,$FASINATE_DDML_BIND_PATHS
-    IFS=, read -r -a bind_dirs <<<"$FASINATE_DDML_BIND_PATHS"
-    build_is_bound=false
-    for dir in "${bind_dirs[@]}"; do
-        if [[ $build == "$dir" || $build == "$dir"/* ]]; then build_is_bound=true; fi
-    done
-    $build_is_bound || binds+=",$build"
+    binds=$(fasinate_binds /cvmfs "$FASINATE_DDML_BIND_PATHS" "$build")
     container=("$runtime" exec --bind "$binds" "$image")
 fi
 

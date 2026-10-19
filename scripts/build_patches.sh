@@ -62,6 +62,8 @@ done
 settings=$("${FASINATE_PYTHON:-python3}" "$here/fasinate_config.py" --shell "${config_args[@]}") ||
     die "could not load the configuration (see the message above)"
 eval "$settings"
+# shellcheck source=scripts/environment.sh
+source "$here/environment.sh"
 
 read -r -a names <<<"${FASINATE_PATCHES_ENABLED:-}"
 if ((${#names[@]} == 0)); then
@@ -147,22 +149,14 @@ patch_build() {
 # ---------------------------------------------------------------------------
 
 # Run one of the functions above in `bash --noprofile --norc` with a minimal
-# environment, as build_ddml.sh does: the Key4hep setup can only run once per
-# shell, and leftovers from the calling shell confuse it.
+# environment (scripts/environment.sh), as build_ddml.sh does.
 run_clean() {
-    local func=$1 var
+    local func=$1
     shift
-    local env_vars=(HOME="$HOME" USER="${USER:-$(id -un)}"
-        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin)
-    for var in LOGNAME TERM http_proxy https_proxy HTTP_PROXY HTTPS_PROXY \
-        no_proxy NO_PROXY SSL_CERT_FILE SSL_CERT_DIR; do
-        if [[ -n ${!var:-} ]]; then env_vars+=("$var=${!var}"); fi
-    done
-    for var in "${!FASINATE_@}"; do # the configuration, except bash arrays
-        if [[ $(declare -p "$var") != "declare -a"* ]]; then env_vars+=("$var=${!var}"); fi
-    done
+    fasinate_clean_env http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no_proxy NO_PROXY \
+        SSL_CERT_FILE SSL_CERT_DIR
     # 9>&-: don't hand the lock to anything that might outlive this script
-    "${container[@]}" /usr/bin/env -i "${env_vars[@]}" \
+    "${container[@]}" /usr/bin/env -i "${fasinate_env[@]}" \
         bash --noprofile --norc -c "$(declare -f "$func"); $func \"\$@\"" "$func" "$@" 9>&-
 }
 
@@ -251,23 +245,16 @@ if $if_needed && ! $clean && is_current; then
 fi
 
 # Inside an Apptainer/Singularity container, build right there rather than
-# starting another container, as build_ddml.sh does.
-container=()
+# starting another container, as build_ddml.sh does. The folders are mounted at
+# the same paths as outside, so the paths in the builds and in the env file hold
+# in both places.
 built_in="a clean shell, without a container"
-if [[ $FASINATE_CONTAINER_ENABLED == true ]]; then
-    if [[ -n ${APPTAINER_CONTAINER:-}${SINGULARITY_CONTAINER:-} || -d /.singularity.d ]]; then
-        built_in="the container build_patches.sh ran in"
-    else
-        runtime=$(command -v apptainer || command -v singularity) ||
-            die "container.enabled is true, but neither apptainer nor singularity is on PATH"
-        if [[ $(basename "$runtime") == apptainer ]]; then prefix=APPTAINER; else prefix=SINGULARITY; fi
-        export "${prefix}_TMPDIR=$FASINATE_CONTAINER_TMP_DIR" "${prefix}_CACHEDIR=$FASINATE_CONTAINER_CACHE_DIR"
-        # Mounted at the same paths as outside, so the paths in the builds and
-        # in the env file hold in both places.
-        container=("$runtime" exec --bind "/cvmfs,$FASINATE_DDML_BIND_PATHS,$base" "$FASINATE_CONTAINER_IMAGE")
-        built_in=$FASINATE_CONTAINER_IMAGE
-    fi
+if [[ $FASINATE_CONTAINER_ENABLED == true ]] && fasinate_in_container; then
+    built_in="the container build_patches.sh ran in"
 fi
+fasinate_container_command /cvmfs "$FASINATE_DDML_BIND_PATHS" "$base" || die "can't start the container"
+container=("${fasinate_container[@]}")
+if ((${#container[@]})); then built_in=$FASINATE_CONTAINER_IMAGE; fi
 
 echo "Patches     ${names[*]}, in $base"
 echo "Key4hep     ${release:-(not set up yet)} ${platform}, from $FASINATE_DDML_ENV_FILE"
