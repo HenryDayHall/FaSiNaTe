@@ -11,3 +11,4 @@ configs/local.yaml
 /external/
 /data/
 __pycache__/
+.pytest_cache/

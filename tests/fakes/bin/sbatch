@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""A stand-in for slurm's sbatch, for the tests.
+
+It reads the options slurm_pipeline.sh gives, records the job in
+$FAKE_SLURM_DIR/jobs.json and prints its ID, as sbatch --parsable does. With
+FAKE_SLURM_MODE=run (the default) it then runs the job right away, in the
+folder of --chdir with its output in --output, unless a job it depends on
+(--dependency=afterok:...) failed or was cancelled: then, with
+--kill-on-invalid-dep=yes, it is cancelled. With FAKE_SLURM_MODE=queue it
+leaves the job pending, for `sbatch --drain` (the tests' own option) to run
+the pending jobs later, in order. squeue lists the jobs still pending.
+"""
+
+import fcntl
+import json
+import os
+import subprocess
+import sys
+
+STATE = os.path.join(os.environ["FAKE_SLURM_DIR"], "jobs.json")
+
+
+def load():
+    if not os.path.exists(STATE):
+        return {"next": 1001, "jobs": {}}
+    with open(STATE) as stream:
+        return json.load(stream)
+
+
+def save(state):
+    with open(STATE + ".new", "w") as stream:
+        json.dump(state, stream, indent=1)
+    os.replace(STATE + ".new", STATE)
+
+
+def run(job, jobs):
+    """Run a pending job if what it waits for is done; returns whether it changed."""
+    states = [jobs[dep]["state"] for dep in job["after"]]
+    if any(state in ("FAILED", "CANCELLED") for state in states):
+        if job["kill"]:
+            job["state"] = "CANCELLED"
+            return True
+        return False
+    if any(state == "PENDING" for state in states):
+        return False
+    env = dict(os.environ, SLURM_JOB_ID=job["id"])
+    env.pop("FAKE_SLURM_MODE", None)
+    with open(job["output"], "w") as stream:
+        status = subprocess.call([job["script"]] + job["args"], cwd=job["chdir"], stdout=stream,
+                                 stderr=subprocess.STDOUT, env=env, stdin=subprocess.DEVNULL)
+    job["state"] = "COMPLETED" if status == 0 else "FAILED"
+    job["exit"] = status
+    return True
+
+
+def drain(state):
+    changed = True
+    while changed:
+        changed = False
+        for job in sorted(state["jobs"].values(), key=lambda j: int(j["id"])):
+            if job["state"] == "PENDING" and run(job, state["jobs"]):
+                changed = True
+                save(state)
+
+
+def main(args):
+    os.makedirs(os.path.dirname(STATE), exist_ok=True)
+    lock = open(STATE + ".lock", "w")
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    state = load()
+    if args == ["--drain"]:
+        drain(state)
+        save(state)
+        return 0
+    job = {"options": [], "after": [], "kill": False, "chdir": os.getcwd(), "output": None}
+    i = 0
+    while i < len(args) and args[i].startswith("-"):
+        arg = args[i]
+        if arg.startswith("--dependency="):
+            kind, _, ids = arg[len("--dependency="):].partition(":")
+            if kind != "afterok":
+                print("sbatch (fake): only afterok dependencies, not %s" % arg, file=sys.stderr)
+                return 1
+            job["after"] = ids.split(":")
+        elif arg == "--kill-on-invalid-dep=yes":
+            job["kill"] = True
+        elif arg.startswith("--output="):
+            job["output"] = arg[len("--output="):].replace("%%", "%")
+        elif arg.startswith("--chdir="):
+            job["chdir"] = arg[len("--chdir="):]
+        elif arg != "--parsable":
+            job["options"].append(arg)
+        i += 1
+    if i >= len(args) or not job["output"]:
+        print("sbatch (fake): give --output and a script", file=sys.stderr)
+        return 1
+    for dep in job["after"]:
+        if dep not in state["jobs"]:
+            print("sbatch (fake): there's no job %s to wait for" % dep, file=sys.stderr)
+            return 1
+    job.update(id=str(state["next"]), script=args[i], args=args[i + 1:], state="PENDING")
+    state["next"] += 1
+    state["jobs"][job["id"]] = job
+    save(state)
+    print(job["id"])
+    sys.stdout.flush()
+    if os.environ.get("FAKE_SLURM_MODE", "run") == "run":
+        run(job, state["jobs"])
+        save(state)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

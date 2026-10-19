@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+"""A stand-in for slurm's squeue, for the tests: the pending jobs of the fake
+sbatch, as squeue -h -o '%i|%T|%r' lists them."""
+
+import json
+import os
+import sys
+
+state_file = os.path.join(os.environ["FAKE_SLURM_DIR"], "jobs.json")
+if "-o" not in sys.argv or sys.argv[sys.argv.index("-o") + 1] != "%i|%T|%r":
+    print("squeue (fake): only -o '%i|%T|%r'", file=sys.stderr)
+    sys.exit(1)
+jobs = {}
+if os.path.exists(state_file):
+    with open(state_file) as stream:
+        jobs = json.load(stream)["jobs"]
+for job in sorted(jobs.values(), key=lambda j: int(j["id"])):
+    if job["state"] != "PENDING":
+        continue
+    states = [jobs[dep]["state"] for dep in job["after"]]
+    if any(state in ("FAILED", "CANCELLED") for state in states):
+        reason = "DependencyNeverSatisfied"
+    else:
+        reason = "Dependency" if job["after"] else "Priority"
+    print("%s|PENDING|%s" % (job["id"], reason))

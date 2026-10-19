@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""A stand-in for k4run running ILDConfig's ILDReconstruction.py, for the tests.
+
+It checks that it is run as the reconstruct stage runs it (from a folder of
+links to ILDConfig's StandardConfig/production, with --noBeamCalReco, which
+it always adds), then writes what ILDReconstruction.py writes, <base>_REC.edm4hep.root,
+_AIDA.root and _PfoAnalysis.root: the REC file a real EDM4hep-style ROOT file
+(a podio "events" tree, written with uproot) with the MC particles of the
+simulation and made-up ECAL barrel hits around each photon's line of flight,
+a little wider for the models than for Geant4, so the observables have
+something to measure and compare.
+"""
+
+import json
+import os
+import sys
+import zlib
+
+import awkward as ak
+import numpy as np
+import uproot
+
+# observables.longitudinal_profile.cell_id_encoding in the tests' configuration:
+# system:5,module:3,stave:4,tower:4 come first, so the layer starts at bit 16
+LAYER_OFFSET = 16
+N_HITS = 40
+
+
+def fail(message):
+    print("k4run (fake): " + message)
+    sys.exit(2)
+
+
+args = sys.argv[1:]
+if not args or not args[0].endswith("ILDReconstruction.py"):
+    fail("expected ILDReconstruction.py first, not %s" % (args[:1],))
+script, options, flags = args[0], {}, []
+for arg in args[1:]:
+    if arg.startswith("--") and "=" in arg:
+        key, value = arg[2:].split("=", 1)
+        options[key] = value
+    else:
+        flags.append(arg)
+if not os.path.isfile(script) or not os.path.isfile("ILDReconstruction.py"):
+    fail("run from a folder of links to ILDConfig's StandardConfig/production")
+for key in ("inputFiles", "outputFileBase", "compactFile", "num-events"):
+    if key not in options:
+        fail("no --%s=" % key)
+if not os.path.isfile(options["compactFile"]):
+    fail("compact file not found: %s" % options["compactFile"])
+if "--noBeamCalReco" not in flags:
+    fail("no --noBeamCalReco")
+
+with open(options["inputFiles"]) as stream:
+    simulation = json.load(stream)
+events = simulation["events"]
+if int(options["num-events"]) >= 0:
+    events = events[:int(options["num-events"])]
+spread = 8.0 if simulation["simulator"] == "geant4" else 9.5
+rng = np.random.default_rng(zlib.crc32(os.path.basename(options["inputFiles"]).encode()))
+
+columns = dict((name, []) for name in (
+    "MCParticles.generatorStatus", "MCParticles.PDG", "MCParticles.mass",
+    "MCParticles.vertex.x", "MCParticles.vertex.y", "MCParticles.vertex.z",
+    "MCParticles.momentum.x", "MCParticles.momentum.y", "MCParticles.momentum.z",
+    "EcalBarrelCollectionRec.energy", "EcalBarrelCollectionRec.cellID",
+    "EcalBarrelCollectionRec.position.x", "EcalBarrelCollectionRec.position.y",
+    "EcalBarrelCollectionRec.position.z"))
+for event in events:
+    particle = event["particles"][0]
+    for name, value in (("generatorStatus", particle["generatorStatus"]),
+                        ("PDG", particle["PDG"]), ("mass", particle["mass"])):
+        columns["MCParticles." + name].append([value])
+    for i, c in enumerate("xyz"):
+        columns["MCParticles.vertex." + c].append([particle["vertex"][i]])
+        columns["MCParticles.momentum." + c].append([particle["momentum"][i]])
+    vertex = np.array(particle["vertex"])
+    direction = np.array(particle["momentum"]) / np.linalg.norm(particle["momentum"])
+    across = np.cross(direction, [0.0, 0.0, 1.0])
+    across /= np.linalg.norm(across)
+    other = np.cross(direction, across)
+    energy = np.linalg.norm(particle["momentum"])
+    layers = np.clip(rng.gamma(3.0, 3.0, N_HITS).astype(int), 0, 29)
+    radius = rng.exponential(spread, N_HITS)
+    angle = rng.uniform(0, 2 * np.pi, N_HITS)
+    positions = (vertex + direction * (5.0 * layers[:, None] + 2.5)
+                 + radius[:, None] * (np.cos(angle)[:, None] * across
+                                      + np.sin(angle)[:, None] * other))
+    columns["EcalBarrelCollectionRec.energy"].append(
+        (0.01 * energy / N_HITS * rng.uniform(0.5, 1.5, N_HITS)).tolist())
+    columns["EcalBarrelCollectionRec.cellID"].append(
+        [int(layer) << LAYER_OFFSET for layer in layers])
+    for i, c in enumerate("xyz"):
+        columns["EcalBarrelCollectionRec.position." + c].append(positions[:, i].tolist())
+
+types = {"MCParticles.generatorStatus": np.int32, "MCParticles.PDG": np.int32,
+         "MCParticles.momentum.x": np.float32, "MCParticles.momentum.y": np.float32,
+         "MCParticles.momentum.z": np.float32, "EcalBarrelCollectionRec.energy": np.float32,
+         "EcalBarrelCollectionRec.cellID": np.uint64}
+arrays = dict((name, ak.values_astype(ak.Array(values), types.get(name, np.float64)))
+              for name, values in columns.items())
+base = options["outputFileBase"]
+with uproot.recreate(base + "_REC.edm4hep.root") as output:
+    output.mktree("events", dict((name, array.type) for name, array in arrays.items()))
+    if events:
+        output["events"].extend(arrays)
+for ending in ("_AIDA.root", "_PfoAnalysis.root"):
+    with open(base + ending, "w") as stream:
+        stream.write("fake\n")
+print("k4run (fake): reconstructed %d events of %s" % (len(events), options["inputFiles"]))

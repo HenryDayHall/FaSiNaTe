@@ -1,0 +1,137 @@
+"""The task graph: its tasks, what each needs, and their status, worked out
+in this process with the tests' configuration (no environment needed)."""
+
+import collections
+import os
+
+import pytest
+
+from ddml_bench import config
+from ddml_bench.graph import BLOCKED, DONE, TODO, UNSELECTED, Graph, PlanError, make_plan
+
+
+@pytest.fixture
+def configured(config_env, monkeypatch):
+    # Not the configs/local.yaml of whoever runs the tests
+    monkeypatch.setattr(config, "LOCAL_FILE", os.path.join(config_env.tmp, "no-local.yaml"))
+    return config_env
+
+
+def touch(*paths):
+    for path in paths:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "w").close()
+
+
+def outputs(graph, stage):
+    return [task["output"] for task in graph.list if task["stage"] == stage]
+
+
+def status(graph, stage):
+    return collections.Counter(task["status"] for task in graph.list if task["stage"] == stage)
+
+
+def test_a_task_per_file_each_after_what_it_needs(configured):
+    graph = Graph(make_plan())
+    assert collections.Counter(task["stage"] for task in graph.list) == {
+        "generate": 2, "geant4": 2, "models": 2, "reconstruct": 4, "observables": 2, "plot": 1}
+    seen = set()
+    for task in graph.list:
+        assert set(task["needs"]) <= seen, "%s comes before what it needs" % task["key"]
+        for key in task["needs"]:
+            assert graph.by_key[key]["output"] in task["inputs"]
+        seen.add(task["key"])
+    assert len(set(task["output"] for task in graph.list)) == len(graph.list)
+
+
+def test_with_nothing_on_disk_everything_is_to_do(configured):
+    graph = Graph(make_plan()).find_status()
+    assert all(task["status"] == TODO for task in graph.list)
+    plot = graph.list[-1]
+    assert plot["after"] == [task["key"] for task in graph.list if task["stage"] == "observables"]
+
+
+def test_test_samples_are_named_alike_at_every_stage(configured):
+    graph = Graph(make_plan(events=5))
+    for task in graph.list:
+        if task["stage"] != "generate":
+            assert "_n5" in os.path.basename(task["output"]), task["output"]
+        assert "_n5_n5" not in task["output"]
+    for task in graph.list:
+        if task["stage"] == "reconstruct":
+            simulation = graph.by_key[task["needs"][0]]
+            assert task["output"].endswith(simulation["name"] + "_REC.edm4hep.root")
+            assert task["params"]["events"] == -1
+
+
+def test_what_is_on_disk_is_done(configured):
+    graph = Graph(make_plan())
+    touch(*outputs(graph, "generate") + outputs(graph, "geant4"))
+    graph.find_status()
+    assert status(graph, "generate") == {DONE: 2}
+    assert status(graph, "geant4") == {DONE: 2}
+    assert status(graph, "models") == {TODO: 2}
+    assert status(graph, "reconstruct") == {TODO: 4}
+
+
+def test_forcing_a_stage_remakes_what_is_made_from_it(configured):
+    graph = Graph(make_plan())
+    touch(*[path for stage in ("generate", "geant4", "models", "reconstruct")
+            for path in outputs(graph, stage)])
+    graph = Graph(make_plan(force=["geant4"])).find_status()
+    assert status(graph, "geant4") == {TODO: 2}
+    assert all(task["redo"] for task in graph.list if task["stage"] == "geant4")
+    remade = [task for task in graph.list if task["stage"] == "reconstruct" and task["redo"]]
+    assert sorted(task["simulator"] for task in remade) == ["geant4", "geant4"]
+    assert all("is made again" in task["why"] for task in remade)
+    assert status(graph, "models") == {DONE: 2}
+    measured = dict((task["simulator"], task) for task in graph.list
+                    if task["stage"] == "observables")
+    assert measured["geant4"]["why"].endswith("is made again")
+    assert measured["caloclouds3"]["why"] == "no caloclouds3.npz yet"
+
+
+def test_what_isnt_selected_isnt_run(configured):
+    graph = Graph(make_plan(simulators=["geant4"])).find_status()
+    assert status(graph, "models") == {UNSELECTED: 2}
+    assert status(graph, "geant4") == {TODO: 2}
+    # The plots are of what there is, so they don't wait for the models
+    assert graph.list[-1]["status"] == TODO
+
+    graph = Graph(make_plan(stages=["geant4"])).find_status()
+    assert status(graph, "geant4") == {BLOCKED: 2}
+    assert all("isn't selected to run" in task["why"] for task in graph.list
+               if task["stage"] == "geant4")
+
+
+def test_only_the_inputs_named(configured):
+    graph = Graph(make_plan())
+    inputs = outputs(graph, "generate")
+    touch(*inputs)
+    graph = Graph(make_plan(stages=["geant4"], files=[inputs[1]])).find_status()
+    selected = [task["input_file"] for task in graph.list
+                if task["stage"] == "geant4" and task["status"] == TODO]
+    assert selected == [inputs[1]]
+    with pytest.raises(PlanError, match="isn't an input of any scenario"):
+        make_plan(files=[os.path.join(configured.tmp, "test.yaml")])
+
+
+def test_a_simulation_given_is_the_graph_task_making_it(configured):
+    graph = Graph(make_plan())
+    simulation = outputs(graph, "geant4")[0]
+    touch(simulation)
+    graph = Graph(make_plan(stages=["reconstruct"], simulations=[simulation])).find_status()
+    todo = [task for task in graph.list if task["status"] == TODO]
+    assert len(todo) == 1 and todo[0]["inputs"] == [simulation] and todo[0]["key"] in graph.given
+
+
+@pytest.mark.parametrize("options, message", [
+    ({"stages": ["simulate"]}, "there's no stage 'simulate'"),
+    ({"simulators": ["fastsim"]}, "there's no simulator 'fastsim'"),
+    ({"scenarios": ["tau"]}, "there is no scenario 'tau'"),
+    ({"stages": ["geant4"], "force": ["plot"]}, "isn't one of the --stages"),
+    ({"events": 0}, "at least 1"),
+])
+def test_bad_options_are_caught_before_anything_runs(configured, options, message):
+    with pytest.raises(PlanError, match=message):
+        make_plan(**options)
