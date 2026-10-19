@@ -22,7 +22,20 @@
 paths:
   # data/pipeline_test in the repository (git ignores data/); it holds a few
   # MB, so any filesystem will do.
-  data_dir: data/pipeline_test
+  software_dir: /data/dust/user/dayhallh/analysis_test/external
+  data_dir: /data/dust/user/dayhallh/analysis_test/data
+
+ddml:
+  # fix to a commit for maxwell testing
+  commit: 263256cca31b37335cd2aae34b81e899bd2a5851
+
+key4hep:
+  # fix to a release for maxwell testing
+  release: 2026-04-08
+
+container:
+  # On maxwell no need for a container. /cvfms is mounted
+  enabled: false
 
 scenarios:
   single_photon:
