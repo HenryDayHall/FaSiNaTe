@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+"""The benchmark harness's command line: run it with --help, or see
+ddml_bench/cli.py and docs/harness.md."""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+
+from ddml_bench.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

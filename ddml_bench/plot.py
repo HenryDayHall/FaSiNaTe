@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-"""Plot the observables that observables_from_reconstruction.sh measured.
+"""Plot the observables that the observables stage measured.
 
 Every profile found in the .npz files (one per simulator, in
 <paths.data_dir>/observables) is drawn with every simulator that has it on the
@@ -11,25 +10,25 @@ The legend gives each model's distance from Geant4, by the metric of the
 observable in the configuration (jensen_shannon: the Jensen-Shannon divergence,
 natural logarithm, of the normalised profiles).
 
-  plot_observables.py [--dir DIR] [--out DIR] [--events N] [--format pdf,png]
-                      [--reference NAME] [SIMULATOR ...]
+  python3 -m ddml_bench.plot [--dir DIR] [--out DIR] [--events N]
+                             [--format pdf,png] [--reference NAME] [SIMULATOR ...]
 
-The figures go to <dir>/plots (or --out), one per observable, profile and
-scenario, named <observable>_<profile>__<scenario>.<format>, with the metrics in
-metrics.csv. It needs numpy and matplotlib, and PyYAML only to read the
-configuration for the default folder and the metrics.
+(plot_observables.sh runs it.) The figures go to <dir>/plots (or --out), one per
+observable, profile and scenario, named <observable>_<profile>__<scenario>.<format>,
+with the metrics in metrics.csv. It needs numpy and matplotlib, and PyYAML only
+to read the configuration for the default folder and the metrics, so it also
+works on .npz files copied to a laptop.
 """
 
 import argparse
 import csv
-import glob
 import json
 import os
-import re
 import sys
 
-SEP = "__"
-REFERENCE = "geant4"
+from .layout import GEANT4, OBSERVABLES_DIR, PLOTS_DIR, SEP, figure_base, measurement_files
+
+REFERENCE = GEANT4
 REFERENCE_FILL = "#d9d9d9"
 REFERENCE_EDGE = "#8c8c8c"
 INK = "#1f1f1f"
@@ -49,15 +48,14 @@ def say(message):
 def load_settings():
     """(observables folder, {observable: metric}) from the configuration, if it can be read."""
     try:
-        sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-        from fasinate_config import load_config
+        from .config import load_config
         config = load_config()
     except Exception as error:  # no PyYAML, or no configuration
         say("can't read the configuration (%s), so give --dir" % error)
         return None, {}
     metrics = {name: (settings or {}).get("metric") or "jensen_shannon"
                for name, settings in (config.get("observables") or {}).items()}
-    return os.path.join(config["paths"]["data_dir"], "observables"), metrics
+    return os.path.join(config["paths"]["data_dir"], OBSERVABLES_DIR), metrics
 
 
 class Simulator:
@@ -265,14 +263,8 @@ def main(argv=None):
     if not folder:
         return 1
     suffix = "" if args.events is None else "_n%d" % args.events
-    paths = []
-    for path in sorted(glob.glob(os.path.join(folder, "*%s.npz" % suffix))):
-        name = os.path.basename(path)[:-len(suffix + ".npz")]
-        if name.startswith(".") or (suffix == "" and re.search(r"_n\d+$", name)):
-            continue
-        if args.simulators and name not in args.simulators and name != args.reference:
-            continue
-        paths.append(path)
+    paths = [path for name, path in measurement_files(folder, suffix)
+             if not args.simulators or name in args.simulators or name == args.reference]
     if not paths:
         say("no measurements (*%s.npz) in %s; make them with "
             "./observables_from_reconstruction.sh" % (suffix, folder))
@@ -287,7 +279,7 @@ def main(argv=None):
         simulators.remove(reference)
         simulators.insert(0, reference)
 
-    out = args.out or os.path.join(folder, "plots")
+    out = args.out or os.path.join(folder, PLOTS_DIR)
     os.makedirs(out, exist_ok=True)
     formats = [f.strip() for f in args.format.split(",") if f.strip()]
     groups = []
@@ -316,7 +308,7 @@ def main(argv=None):
             curves.append((simulator, e, mean, err, n))
         if not curves:
             continue
-        base = os.path.join(out, "%s_%s%s%s%s" % (observable, profile, SEP, scenario, suffix))
+        base = figure_base(out, observable, profile, scenario, suffix)
         results = plot_profile(observable, scenario, profile, curves,
                                reference if any(c[0] is reference for c in curves) else None,
                                metrics.get(observable, "jensen_shannon"), base, formats)

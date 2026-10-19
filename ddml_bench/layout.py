@@ -1,0 +1,223 @@
+"""Where every file of the benchmark goes: the one module that names them.
+
+Everything is written under paths.data_dir:
+
+  input_single_particle_gun/<input>.slcio (and .h5)          the scenarios' inputs
+  sim_output/<scenario>/<simulator>/<input><sample><ending>   each input simulated,
+      with <input><sample>.log; the ending is .edm4hep.root for Geant4 and .root
+      for the models, EDM4hep both
+  rec_output/<scenario>/<simulator>/<input><sample>_REC.edm4hep.root
+      each simulation reconstructed, with _AIDA.root, _PfoAnalysis.root and .log
+  observables/<simulator><sample>.npz                         each simulator's measurements
+  observables/plots/<observable>_<profile>__<scenario><sample>.<format>
+  observables/plots/metrics<sample>.csv                       the figures and metrics
+
+<sample> is empty for the full inputs, and _n<N> for a test on the first N
+events of each (-n N). It is set once, when an input is simulated: the
+simulation of the first N events of <input> is <input>_n<N>, and everything
+made from it carries that name on, so -n N means the same sample at every
+stage.
+
+Inputs given directly (simulate_*.sh --input) are simulated as the scenario
+"custom"; simulations given directly to reconstruct_simulation.sh are
+reconstructed where they belong if they are in sim_output, and to
+rec_output/custom/files otherwise.
+
+This module only needs the standard library, so that it works anywhere, e.g.
+to plot .npz files copied to a laptop.
+"""
+
+import glob
+import os
+import re
+
+INPUT_DIR = "input_single_particle_gun"
+SIM_DIR = "sim_output"
+REC_DIR = "rec_output"
+OBSERVABLES_DIR = "observables"
+PLOTS_DIR = "plots"
+
+# The reference simulator, which no model may be named after
+GEANT4 = "geant4"
+# The scenario that inputs given directly are simulated as
+CUSTOM_SCENARIO = "custom"
+# rec_output/custom/files: simulations given directly from outside sim_output
+GIVEN_FILES = "files"
+
+# ddsim writes EDM4hep for a .root output file. Geant4's simulations have
+# always been named .edm4hep.root, and the models' .root.
+SIM_ENDINGS = {GEANT4: ".edm4hep.root"}
+MODEL_SIM_ENDING = ".root"
+# The endings a finished simulation can have, longest first
+SIMULATION_ENDINGS = (".edm4hep.root", ".root")
+
+# The reconstructed file that marks a reconstruction done: EDM4hep, unless
+# ILDReconstruction.py is told to write only LCIO (--lcioOutput only)
+REC_SUFFIX = "_REC.edm4hep.root"
+REC_SUFFIX_LCIO_ONLY = "_REC.slcio"
+
+# Between the parts of .npz keys and of figure names
+SEP = "__"
+
+_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]*$")
+_SAMPLE = re.compile(r"_n\d+$")
+
+
+class LayoutError(Exception):
+    pass
+
+
+def check_name(name, what):
+    """name, if it can be a folder name (scenarios and simulators become folders)."""
+    if not isinstance(name, str) or not _NAME.match(name):
+        raise LayoutError("%s names become folder names, so use only letters, digits and _.+- "
+                          "in them, starting with a letter or digit, not %r" % (what, name))
+    return name
+
+
+def sample_suffix(events):
+    """What the names of the files of a sample end in: nothing for the full
+    inputs, _n<N> for the first N events of each."""
+    if events is None:
+        return ""
+    if not isinstance(events, int) or isinstance(events, bool) or events < 1:
+        raise LayoutError("the number of events must be at least 1, not %r" % (events,))
+    return "_n%d" % events
+
+
+def input_stem(path):
+    """An input's name, which everything made from it is named after."""
+    return os.path.splitext(os.path.basename(path))[0]
+
+
+def simulation_stem(file_name):
+    """A simulation's name without its ending, or None if the file isn't a
+    finished simulation (unfinished ones are hidden)."""
+    if file_name.startswith("."):
+        return None
+    for ending in SIMULATION_ENDINGS:
+        if file_name.endswith(ending) and len(file_name) > len(ending):
+            return file_name[:-len(ending)]
+    return None
+
+
+def simulations_in(directory):
+    """The finished simulations in a folder, sorted."""
+    if not os.path.isdir(directory):
+        return []
+    return [os.path.join(directory, name) for name in sorted(os.listdir(directory))
+            if simulation_stem(name) and os.path.isfile(os.path.join(directory, name))]
+
+
+def figure_base(folder, observable, profile, scenario, suffix=""):
+    """A figure's path, without the ending of its format."""
+    return os.path.join(folder, "%s_%s%s%s%s" % (observable, profile, SEP, scenario, suffix))
+
+
+def measurement_files(folder, suffix=""):
+    """[(simulator, .npz file)] of one sample's measurements in a folder, by name."""
+    found = []
+    for path in sorted(glob.glob(os.path.join(glob.escape(folder), "*%s.npz" % suffix))):
+        name = os.path.basename(path)[:-len(suffix + ".npz")]
+        # Hidden files are unfinished; without a suffix, leave out the test samples
+        if not name or name.startswith(".") or (suffix == "" and _SAMPLE.search(name)):
+            continue
+        found.append((name, path))
+    return found
+
+
+class Layout(object):
+    """The paths of one sample, the full inputs or the first N events of each
+    (events=N), under a data folder."""
+
+    def __init__(self, data_dir, events=None):
+        self.data_dir = data_dir
+        self.events = events
+        self.suffix = sample_suffix(events)
+
+    # The inputs
+
+    @property
+    def input_dir(self):
+        return os.path.join(self.data_dir, INPUT_DIR)
+
+    # The simulations
+
+    @property
+    def sim_dir(self):
+        return os.path.join(self.data_dir, SIM_DIR)
+
+    def sample_name(self, input_file):
+        """The name of an input's simulation in this sample, which everything
+        made from that simulation is named after too."""
+        return input_stem(input_file) + self.suffix
+
+    def simulation(self, scenario, simulator, input_file):
+        ending = SIM_ENDINGS.get(simulator, MODEL_SIM_ENDING)
+        return os.path.join(self.sim_dir, scenario, simulator,
+                            self.sample_name(input_file) + ending)
+
+    def simulation_log(self, scenario, simulator, input_file):
+        return os.path.join(self.sim_dir, scenario, simulator,
+                            self.sample_name(input_file) + ".log")
+
+    # The reconstructions
+
+    @property
+    def rec_dir(self):
+        return os.path.join(self.data_dir, REC_DIR)
+
+    def reconstruction_base(self, scenario, simulator, input_file):
+        """What a reconstruction's outputs are named after: <base>_REC.edm4hep.root,
+        <base>_AIDA.root, <base>_PfoAnalysis.root and <base>.log."""
+        return os.path.join(self.rec_dir, scenario, simulator, self.sample_name(input_file))
+
+    def given_simulation(self, path):
+        """(scenario, simulator, reconstruction base) of a simulation file given
+        directly: where it belongs if it is in sim_output, and custom/files if not."""
+        real = os.path.realpath(path)
+        stem = simulation_stem(os.path.basename(real))
+        if stem is None:
+            raise LayoutError("%s isn't a finished simulation: an EDM4hep file named *.root or "
+                              "*.edm4hep.root (not hidden)" % path)
+        parts = os.path.relpath(real, os.path.realpath(self.sim_dir)).split(os.sep)
+        if len(parts) == 3 and parts[0] != os.pardir:
+            scenario, simulator = parts[0], parts[1]
+        else:
+            scenario, simulator = CUSTOM_SCENARIO, GIVEN_FILES
+        return scenario, simulator, os.path.join(self.rec_dir, scenario, simulator, stem)
+
+    # The measurements, and their plots
+
+    @property
+    def observables_dir(self):
+        return os.path.join(self.data_dir, OBSERVABLES_DIR)
+
+    def observables(self, simulator):
+        return os.path.join(self.observables_dir, simulator + self.suffix + ".npz")
+
+    def measurements(self):
+        """[(simulator, .npz file)] of this sample measured so far."""
+        return measurement_files(self.observables_dir, self.suffix)
+
+    @property
+    def plots_dir(self):
+        return os.path.join(self.observables_dir, PLOTS_DIR)
+
+    @property
+    def metrics(self):
+        return os.path.join(self.plots_dir, "metrics%s.csv" % self.suffix)
+
+    # Records of files, e.g. in the .npz files
+
+    def relative(self, path):
+        """A path in the data folder relative to it, so that a record of it holds
+        wherever the data is copied to; any other path as it is."""
+        relative = os.path.relpath(path, self.data_dir)
+        if relative == os.pardir or relative.startswith(os.pardir + os.sep):
+            return path
+        return relative
+
+    def absolute(self, path):
+        """The path a record made by relative() stands for."""
+        return path if os.path.isabs(path) else os.path.join(self.data_dir, path)

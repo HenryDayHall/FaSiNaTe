@@ -115,7 +115,7 @@ container:
   cache_dir: ${paths.software_dir}/containers/cache
 
 # Full Geant4 simulation of the scenarios, the reference that the models are
-# compared to (simulate_geant4.sh and slurm_simulate_geant4.sh).
+# compared to (the geant4 stage: simulate_geant4.sh, or slurm_pipeline.sh).
 geant4:
   # The detector, relative to k4geo ($k4geo_DIR) unless absolute. Keep it the
   # one the models are simulated in (fixed_at_training.detector.compact_file
@@ -166,7 +166,7 @@ scenarios:
 # ./observables_from_reconstruction.sh, which writes the numbers each plot
 # needs to <paths.data_dir>/observables/<simulator>.npz, and plotted against
 # Geant4 by ./plot_observables.sh. Each observable's name says what it is (see
-# scripts/observables.py for the ones known).
+# ddml_bench/measure.py for the ones known).
 observables:
   # Mean energy of the reconstructed hits against the distance from the
   # incident particle's line of flight to the centre of the hit's cell (the

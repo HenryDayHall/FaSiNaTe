@@ -62,10 +62,10 @@ while (($#)); do
 done
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-script=$here/scripts/plot_observables.py
+entry=$here/scripts/ddml-bench
 python=${FASINATE_PYTHON:-python3}
 if "$python" -c 'import numpy, matplotlib' 2>/dev/null; then
-    exec "$python" "$script" "${args[@]}"
+    exec "$python" "$entry" plot "${args[@]}"
 fi
 echo "plot_observables: $python has no numpy or matplotlib, so plotting in the environment from setup.sh" >&2
-exec "$here/scripts/run_in_environment.sh" "${bind_args[@]}" -- python3 "$script" "${args[@]}"
+exec "$here/scripts/run_in_environment.sh" "${bind_args[@]}" -- python3 "$entry" plot "${args[@]}"

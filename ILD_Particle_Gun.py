@@ -4,16 +4,17 @@ Particle gun to fire straight into the detector, with a small offset in the z di
 
 import sys
 import os
-import numpy as np
-from pyLCIO import EVENT, IOIMPL, IMPL
 from array import array
 import argparse
-import h5py
-import particle
+
+# What generating events needs (numpy, pyLCIO, h5py and particle) is imported
+# where it is used, so that the file names (get_parser and get_file_name) can be
+# worked out with any Python, as ddml_bench does when it plans the pipeline.
+from ddml_bench.layout import INPUT_DIR
 
 REPO_DIR = os.path.dirname(os.path.realpath(__file__))
 # Subfolder of paths.data_dir (see configs/default.yaml) that the gun writes to
-OUTPUT_SUBDIR = "input_single_particle_gun"
+OUTPUT_SUBDIR = INPUT_DIR
 # How the directions can be spread within the theta and phi ranges (see --distribution)
 DISTRIBUTIONS = ("spherical", "angular", "surface")
 
@@ -43,8 +44,7 @@ def default_save_dir():
     """
     data_dir = os.environ.get("FASINATE_PATHS_DATA_DIR")
     if not data_dir:
-        sys.path.insert(0, os.path.join(REPO_DIR, "scripts"))
-        from fasinate_config import load_config
+        from ddml_bench.config import load_config
 
         data_dir = load_config()["paths"]["data_dir"]
     return os.path.join(data_dir, OUTPUT_SUBDIR)
@@ -58,6 +58,8 @@ class ParticleProperties:
 
     @classmethod
     def from_parser(cls, parsed_args):
+        import particle
+
         pid = parsed_args.pid
         library_particle = particle.Particle.from_pdgid(pid)
         if library_particle.mass is None or library_particle.charge is None:
@@ -161,6 +163,8 @@ def pick_momenta(parsed_args, mass):
     energy : array-like (n_events,)
         The energies.
     """
+    import numpy as np
+
     np.random.seed(parsed_args.seed)
     n_events = parsed_args.n_events
 
@@ -245,6 +249,8 @@ def gen_spherical_momenta(n_points, theta_min_max, phi_min_max, theta=90.0, phi=
     phi : array-like (n_events,)
         The phi angles in radians.
     """
+    import numpy as np
+
     if theta_min_max is None:
         thetas = np.full(n_points, np.radians(theta))
     else:
@@ -272,6 +278,8 @@ def gen_surface_momenta(n_points, theta_min_max, phi_min_max, theta=90.0, phi=90
     Parameters and returns are as for gen_spherical_momenta; the angles must be
     strictly between 0 and 180 degrees.
     """
+    import numpy as np
+
     theta_limits = np.radians(theta_min_max if theta_min_max is not None else (theta, theta))
     phi_limits = np.radians(phi_min_max if phi_min_max is not None else (phi, phi))
     for limits in (theta_limits, phi_limits):
@@ -313,6 +321,8 @@ def momenta_to_pxyz(
     energies : array-like (n_events,)
         The energies of the particles units of GeV.
     """
+    import numpy as np
+
     p = np.sqrt(energies**2 - mass**2)
     pxys = np.empty((len(p), 3))
     pxys[:, 0] = p * np.sin(thetas) * np.cos(phis)
@@ -348,6 +358,8 @@ def pick_gun_position(gun_from_ip, pxyz, calorimeter_surface_y=1804.7):
     """
     The gun may be a fixed point, or it may be at the IP
     """
+    import numpy as np
+
     if gun_from_ip:
         if np.any(pxyz[:, 1] <= 0):
             raise ValueError(
@@ -386,6 +398,9 @@ def pxyz_to_lcio(
     gun_position : array-like (n_events, 3)
         The position of the gun in the x, y, z directions.
     """
+    import h5py
+    from pyLCIO import EVENT, IOIMPL, IMPL
+
     writer = IOIMPL.LCFactory.getInstance().createLCWriter()
     writer.open(outfile, EVENT.LCIO.WRITE_NEW)
     print(" opened outfile: ", outfile)
