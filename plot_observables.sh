@@ -4,7 +4,10 @@
 # of the benchmark paper: Geant4 as a grey filled histogram, each model as a
 # line with its statistical uncertainty, and each model's relative deviation
 # from Geant4 below. The legend gives each model's distance from Geant4 (the
-# observable's metric in the configuration).
+# observable's metric in the configuration). The reconstructed energy gives
+# the energy linearity (mu90 against the true energy, fitted with a straight
+# line) and resolution (sigma90/mu90, fitted with a + b/sqrt(E) + c/E), from
+# the central 90% of the events at each energy.
 #
 # Usage: ./plot_observables.sh [options] [SIMULATOR ...]
 #
@@ -19,9 +22,10 @@
 #   -h, --help         show this help
 #
 # Each figure is <observable>_<profile>__<scenario>.<format>, e.g.
-# radial_profile_r100__single_photon.pdf, and the metrics go to metrics.csv
-# next to them. It runs with this shell's python3 if that has numpy and
-# matplotlib, and otherwise in the environment from setup.sh.
+# radial_profile_r100__single_photon.pdf or energy_resolution__single_photon.pdf;
+# the metrics go to metrics.csv next to them, and the fitted parameters of the
+# energy figures to fits.csv. It runs with this shell's python3 if that has
+# numpy and matplotlib, and otherwise in the environment from setup.sh.
 
 if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
     echo "plot_observables.sh exits when something fails, so run it instead of sourcing it" >&2

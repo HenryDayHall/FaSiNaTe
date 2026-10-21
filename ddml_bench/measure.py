@@ -17,19 +17,30 @@ The observables known (the keys of `observables` in the configuration):
                         divide by the ring's area (ddml_bench/plot.py)
   longitudinal_profile  energy of the reconstructed hits per calorimeter layer,
                         from the layer field of each hit's cellID
+  energy                the reconstructed energy of each event, the sum of the
+                        energies of its reconstructed particles (PandoraPFA's,
+                        in particle_collections; only those of the PDG codes in
+                        pdg, if given), with the incident particle's energy;
+                        the figures take the energy linearity and resolution
+                        from the central 90% of the events at each incident
+                        energy (ddml_bench/plot.py)
 
 The incident particle is the first MC particle with generator status 1 (the
 particle gun's), from the MC truth collection: MCParticles, as ddsim names it in
 EDM4hep and the reconstruction passes it on, or MCParticle, its LCIO name. Each
 profile is stored per input file of the scenario, as the sum over events of each
 bin's energy and of its square, with the number of events; the mean energy per
-event in a bin, and its statistical uncertainty, follow from those. Keys, with
-"__" between the parts:
+event in a bin, and its statistical uncertainty, follow from those. The energy
+is stored per event (the central 90% needs every event), in the order of the
+files, each file's events in turn. Keys, with "__" between the parts:
 
   <observable>__<scenario>__<profile>__edges        bin edges
   <observable>__<scenario>__<profile>__sum          [file, bin] sum of energies, GeV
   <observable>__<scenario>__<profile>__sum_sq       [file, bin] sum of squares, GeV^2
   <observable>__<scenario>__<profile>__settings     the settings, as JSON
+  energy__<scenario>__reconstructed                 [event] reconstructed energy, GeV
+  energy__<scenario>__true                          [event] incident energy, GeV
+  energy__<scenario>__settings                      the settings, as JSON
   <scenario>__files                                 the reconstructed files, relative
                                                     to paths.data_dir
   <scenario>__n_events                              [file] events used
@@ -63,6 +74,11 @@ def say(message):
 
 def profile_key(observable, scenario, profile, what):
     return SEP.join((observable, scenario, profile, what))
+
+
+def event_key(observable, scenario, what):
+    """The key of an observable stored per event."""
+    return SEP.join((observable, scenario, what))
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +130,27 @@ KINDS = {
     "longitudinal_profile": (longitudinal_profiles, "layer"),
 }
 
+# The observables of each event as a whole, stored per event rather than in
+# bins, as the figures need every event: observable: what is stored of each
+PER_EVENT = {
+    "energy": ("reconstructed", "true"),
+}
+
+
+def check_particles(observable, settings):
+    """The settings of an observable of the reconstructed particles."""
+    collections = settings.get("particle_collections")
+    if not isinstance(collections, list) or not collections \
+            or not all(isinstance(c, str) and c for c in collections):
+        raise ObservableError("observables.%s needs particle_collections, a list of the "
+                              "collections of reconstructed particles, e.g. [PandoraPFOs]"
+                              % observable)
+    codes = settings.get("pdg")
+    if codes is not None and (not isinstance(codes, list) or not all(
+            isinstance(c, int) and not isinstance(c, bool) for c in codes)):
+        raise ObservableError("observables.%s.pdg should be a list of PDG codes, e.g. [22], "
+                              "or null for every reconstructed particle" % observable)
+
 
 def observable_settings(name, settings):
     """The settings that decide an observable's numbers (not how it is compared)."""
@@ -128,14 +165,17 @@ def check_observables(config):
         raise ObservableError("the configuration has no observables")
     scenarios = []
     for name, settings in observables.items():
-        if name not in KINDS:
+        if name not in KINDS and name not in PER_EVENT:
             raise ObservableError("there's no observable '%s'; the known ones are: %s"
-                                  % (name, ", ".join(KINDS)))
+                                  % (name, ", ".join(list(KINDS) + list(PER_EVENT))))
         if not isinstance(settings, dict) or not settings.get("scenarios"):
             raise ObservableError("observables.%s needs a list of scenarios" % name)
-        KINDS[name][0](name, settings)  # check the binning early
-        if not settings.get("hit_collections"):
-            raise ObservableError("observables.%s needs hit_collections" % name)
+        if name in PER_EVENT:
+            check_particles(name, settings)
+        else:
+            KINDS[name][0](name, settings)  # check the binning early
+            if not settings.get("hit_collections"):
+                raise ObservableError("observables.%s needs hit_collections" % name)
         for scenario in settings["scenarios"]:
             if scenario not in scenarios:
                 scenarios.append(scenario)
@@ -318,6 +358,41 @@ def read_hits(branches, collections, start, stop, need_cell_id):
     return parts
 
 
+# The member of a reconstructed particle holding its PDG code: PDG since
+# EDM4hep 0.99, type before
+PDG_MEMBERS = ("PDG", "type")
+
+
+def read_reconstructed_energy(branches, settings, observable, start, stop):
+    """The reconstructed energy of each event: the sum of the energies of its
+    reconstructed particles in the particle collections, or of those whose PDG
+    code (either sign) is in pdg, if given. 0 for an event with none."""
+    import awkward as ak
+    import numpy as np
+    codes = np.abs(np.array(settings.get("pdg") or [], dtype=np.int64))
+    total = np.zeros(stop - start)
+    for collection in settings["particle_collections"]:
+        name = collection + ".energy"
+        if name not in branches.keys:
+            raise ObservableError("%s has no %s (does it have the collection %s? set "
+                                  "observables.%s.particle_collections)"
+                                  % (branches.path, name, collection, observable))
+        energy = ak.values_astype(branches.jagged(name, start, stop), np.float64)
+        if codes.size:
+            member = next((m for m in PDG_MEMBERS if "%s.%s" % (collection, m) in branches.keys),
+                          None)
+            if member is None:
+                raise ObservableError("the reconstructed particles of %s in %s have no PDG "
+                                      "code (%s), which observables.%s.pdg needs"
+                                      % (collection, branches.path, " or ".join(PDG_MEMBERS),
+                                         observable))
+            pdg = branches.jagged("%s.%s" % (collection, member), start, stop)
+            keep = np.isin(np.abs(ak.to_numpy(ak.flatten(pdg)).astype(np.int64)), codes)
+            energy = energy[ak.unflatten(keep, ak.num(pdg))]
+        total += ak.to_numpy(ak.sum(energy, axis=1))
+    return total
+
+
 def accumulate(edges, values, energy, event, n_events, keep_events):
     """Per bin, the sum over the kept events of the bin's energy, and of its square."""
     import numpy as np
@@ -336,10 +411,15 @@ def accumulate(edges, values, energy, event, n_events, keep_events):
 
 def wanted(observables):
     """[(observable, scenario, profile, edges, settings JSON)] that the observables
-    in the configuration ask for."""
+    in the configuration ask for; profile and edges are None for those stored
+    per event."""
     result = []
     for name, settings in observables.items():
         settings_json = json.dumps(observable_settings(name, settings), sort_keys=True)
+        if name in PER_EVENT:
+            for scenario in settings["scenarios"]:
+                result.append((name, scenario, None, None, settings_json))
+            continue
         for profile, binning in KINDS[name][0](name, settings):
             for scenario in settings["scenarios"]:
                 result.append((name, scenario, profile, bin_edges(binning), settings_json))
@@ -357,6 +437,14 @@ def is_up_to_date(path, profiles, files, relative=None):
         with np.load(path, allow_pickle=False) as data:
             keys = set(data.files)
             for name, scenario, profile, edges, settings_json in profiles:
+                if profile is None:
+                    for what in PER_EVENT[name] + ("settings",):
+                        if event_key(name, scenario, what) not in keys:
+                            return False, "%s has no %s" % (
+                                os.path.basename(path), event_key(name, scenario, what))
+                    if str(data[event_key(name, scenario, "settings")]) != settings_json:
+                        return False, "the settings of %s changed" % name
+                    continue
                 for what in ("edges", "sum", "sum_sq", "settings"):
                     if profile_key(name, scenario, profile, what) not in keys:
                         return False, "%s has no %s" % (
@@ -405,14 +493,21 @@ def cell_id_fields(settings, observable, path, collection, compact, cache):
 
 
 def measure_file(path, observables, profiles, simulator, cache):
-    """Sums for every profile of one reconstructed file, and its event counts."""
+    """Sums for every profile of one reconstructed file, what is stored of each
+    event for the observables stored per event ({observable: {what: [event]}}),
+    and its event counts."""
     import numpy as np
+    profiled = dict((name, settings) for name, settings in observables.items()
+                    if name in KINDS)
+    by_event = dict((name, settings) for name, settings in observables.items()
+                    if name in PER_EVENT)
     by_collection = {}
-    for name, settings in observables.items():
+    for name, settings in profiled.items():
         for collection in settings["hit_collections"]:
             by_collection.setdefault(collection, set()).add(KINDS[name][1])
     sums = {key: [np.zeros(len(edges) - 1), np.zeros(len(edges) - 1)]
             for key, edges in profiles.items()}
+    events = dict((name, dict((what, []) for what in PER_EVENT[name])) for name in by_event)
     n_events = n_no_primary = 0
     energy_total = 0.0
     branches = Branches(path)
@@ -424,6 +519,10 @@ def measure_file(path, observables, profiles, simulator, cache):
             n_events += int(has.sum())
             n_no_primary += int(n - has.sum())
             energy_total += float(true_energy[has].sum())
+            for name, settings in by_event.items():
+                reconstructed = read_reconstructed_energy(branches, settings, name, start, stop)
+                events[name]["reconstructed"].append(reconstructed[has])
+                events[name]["true"].append(true_energy[has])
             hits = read_hits(branches, list(by_collection), start, stop,
                              any("layer" in v for v in by_collection.values()))
             for collection, event, energy, position, cell_id in hits:
@@ -433,7 +532,7 @@ def measure_file(path, observables, profiles, simulator, cache):
                     along = np.einsum("ij,ij->i", offset, direction[event])
                     values["radius"] = np.linalg.norm(
                         offset - along[:, None] * direction[event], axis=1)
-                for name, settings in observables.items():
+                for name, settings in profiled.items():
                     if collection not in settings["hit_collections"]:
                         continue
                     need = KINDS[name][1]
@@ -460,13 +559,16 @@ def measure_file(path, observables, profiles, simulator, cache):
     finally:
         branches.close()
     mean_energy = energy_total / n_events if n_events else float("nan")
-    return sums, n_events, n_no_primary, mean_energy
+    events = dict((name, dict((what, np.concatenate(parts) if parts else np.zeros(0))
+                              for what, parts in stored.items()))
+                  for name, stored in events.items())
+    return sums, events, n_events, n_no_primary, mean_energy
 
 
 def compute_simulator(observables, simulator, files, profiles, out_path, relative=None):
-    """Measure one simulator: every profile (from wanted()) on its reconstructed
-    files ({scenario: [path]}), into out_path. The files are recorded as
-    relative(path)."""
+    """Measure one simulator: every profile, and observable stored per event
+    (from wanted()), on its reconstructed files ({scenario: [path]}), into
+    out_path. The files are recorded as relative(path)."""
     import numpy as np
     arrays = {
         "meta__simulator": np.array(simulator["name"]),
@@ -479,19 +581,25 @@ def compute_simulator(observables, simulator, files, profiles, out_path, relativ
         measured = {name: settings for name, settings in observables.items()
                     if scenario in settings["scenarios"]}
         scenario_profiles = {(name, profile): edges
-                             for name, scen, profile, edges, _ in profiles if scen == scenario}
+                             for name, scen, profile, edges, _ in profiles
+                             if scen == scenario and profile is not None}
         per_file = {key: ([], []) for key in scenario_profiles}
+        per_event = dict((name, dict((what, []) for what in PER_EVENT[name]))
+                         for name in measured if name in PER_EVENT)
         counts, no_primary, energies = [], [], []
         for i, path in enumerate(paths, 1):
             say("  %s [%d/%d] %s" % (scenario, i, len(paths), os.path.basename(path)))
-            sums, n, missing, energy = measure_file(path, measured, scenario_profiles,
-                                                    simulator, cache)
+            sums, events, n, missing, energy = measure_file(path, measured, scenario_profiles,
+                                                            simulator, cache)
             if missing:
                 say("    %d event(s) without an incident particle (generator status 1) "
                     "were left out" % missing)
             for key in scenario_profiles:
                 per_file[key][0].append(sums[key][0])
                 per_file[key][1].append(sums[key][1])
+            for name, stored in per_event.items():
+                for what in stored:
+                    stored[what].append(events[name][what])
             counts.append(n)
             no_primary.append(missing)
             energies.append(energy)
@@ -502,6 +610,12 @@ def compute_simulator(observables, simulator, files, profiles, out_path, relativ
         arrays[SEP.join((scenario, "true_energy"))] = np.array(energies)
         for name, scen, profile, edges, settings_json in profiles:
             if scen != scenario:
+                continue
+            if profile is None:
+                for what, parts in per_event[name].items():
+                    arrays[event_key(name, scenario, what)] = (
+                        np.concatenate(parts) if parts else np.zeros(0))
+                arrays[event_key(name, scenario, "settings")] = np.array(settings_json)
                 continue
             arrays[profile_key(name, scenario, profile, "edges")] = edges
             arrays[profile_key(name, scenario, profile, "sum")] = np.array(

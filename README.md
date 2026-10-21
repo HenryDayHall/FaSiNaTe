@@ -3,7 +3,7 @@
 FaSiNaTe benchmarks generative fast-simulation models of calorimeter showers in a full detector chain.
 Each model runs inside ILD's `ddsim` simulation through [DDML](https://github.com/key4hep/DDML), its events go through ILD's standard reconstruction, and observables measured on the reconstructed events are compared with full Geant4 simulation of the same inputs.
 
-The benchmark follows the paper *"A First Full Physics Benchmark for Highly Granular Calorimeter Surrogates"*, starting with its single-photon shower profiles. The first model included is CaloClouds3.
+The benchmark follows the paper *"A First Full Physics Benchmark for Highly Granular Calorimeter Surrogates"*, starting with its single-photon shower profiles and energy linearity and resolution. The first model included is CaloClouds3.
 
 <p align="center">
   <img src="docs/images/longitudinal_profile_layers__single_photon.png" alt="Longitudinal shower profile, CaloClouds3 against Geant4" width="48%">
@@ -60,7 +60,7 @@ flowchart TD
 | 3 | `simulate_models.sh` | scenario inputs, `models/*.yaml` | `sim_output/<scenario>/<model>/*.root` |
 | 4 | `reconstruct_simulation.sh` | everything in `sim_output/` | `rec_output/<scenario>/<simulator>/*_REC.edm4hep.root` |
 | 5 | `observables_from_reconstruction.sh` | finished reconstructions | `observables/<simulator>.npz` |
-| 6 | `plot_observables.sh` | `observables/*.npz` | `observables/plots/*.{pdf,png}`, `metrics.csv` |
+| 6 | `plot_observables.sh` | `observables/*.npz` | `observables/plots/*.{pdf,png}`, `metrics.csv`, `fits.csv` |
 
 Stages 2 and 3 are independent of each other; a "simulator" below means either Geant4 or one of the models. [`pipeline.sh`](#the-whole-pipeline-at-once) runs all six stages in one go, and on a slurm cluster [`slurm_pipeline.sh`](#the-whole-pipeline-at-once) runs them as jobs of one file each.
 
@@ -262,12 +262,13 @@ It reconstructs the simulations of the scenarios' inputs, by Geant4 and by every
 ./observables_from_reconstruction.sh caloclouds3 geant4
 ```
 
-The current observables are the shower profiles from the benchmark paper, measured on reconstructed ECAL barrel hits in the `single_photon` scenario:
+The current observables are the shower profiles and the energy response from the benchmark paper, measured in the `single_photon` scenario, the profiles on reconstructed ECAL barrel hits and the energy on reconstructed particles:
 
 - `radial_profile`: mean hit energy per unit area (GeV/mm²) against the distance from the incident photon's line of flight to the hit's cell centre, i.e. the energy in each ring around the line of flight divided by the ring's area, π(r<sub>out</sub>² − r<sub>in</sub>²), so that the rings growing with the radius don't skew it; once out to 100 mm (50 bins) and once out to 30 mm (30 bins) to resolve the core;
-- `longitudinal_profile`: mean hit energy per ECAL layer, decoded from the hits' cellIDs.
+- `longitudinal_profile`: mean hit energy per ECAL layer, decoded from the hits' cellIDs;
+- `energy`: the reconstructed energy of each event, the sum of the energies of its reconstructed particles (`particle_collections`, PandoraPFA's `PandoraPFOs`; set `pdg`, e.g. `[22]`, to count only those PDG codes), with the incident photon's true energy, from which the plots take the energy linearity and resolution.
 
-For each simulator it writes `observables/<simulator>.npz`, holding every profile per input file as sums over events of each bin's energy and squared energy, plus the event count. From these the mean per event and its statistical uncertainty follow, for all energies combined or each separately ([`ddml_bench/measure.py`](ddml_bench/measure.py) documents the keys). The reconstructed files are recorded relative to `paths.data_dir`, so the files stay valid when copied elsewhere. A simulator is skipped if its file already has every requested key, computed with the same settings from the same files.
+For each simulator it writes `observables/<simulator>.npz`, holding every profile per input file as sums over events of each bin's energy and squared energy, plus the event count. From these the mean per event and its statistical uncertainty follow, for all energies combined or each separately. The energy is kept per event, since the central 90% the plots take needs every event ([`ddml_bench/measure.py`](ddml_bench/measure.py) documents the keys). The reconstructed files are recorded relative to `paths.data_dir`, so the files stay valid when copied elsewhere. A simulator is skipped if its file already has every requested key, computed with the same settings from the same files; adding an observable, or changing its settings, measures every simulator again (only this stage, not the reconstruction).
 
 The cellID encoding is read from the reconstructed file, or failing that from the detector geometry; set `observables.longitudinal_profile.cell_id_encoding` to give it by hand. A warning is printed if more than 1% of a file's hits fall outside layers 0 to `max_layer`, which usually means the encoding is wrong.
 
@@ -280,7 +281,14 @@ The cellID encoding is read from the reconstructed file, or failing that from th
 ./plot_observables.sh --format pdf                        # default is pdf,png
 ```
 
-Each figure, `<observable>_<profile>__<scenario>.<format>` (e.g. `radial_profile_r30__single_photon.png`, shown [at the top](#fasinate)), puts every simulator on the same axes: Geant4 as a grey filled histogram, each model as a line with its uncertainty band, and each model's relative deviation from Geant4 underneath. The legend gives each model's distance from Geant4 using the observable's `metric` (currently the Jensen–Shannon divergence), and all metrics are collected in `metrics.csv`. The `.npz` files hold the energy per ring of the radial profiles, which is divided by the rings' areas only when drawn; the metric compares the fractions of the energy in the bins, and the relative deviations are ratios, so neither depends on that division.
+Each figure, `<observable>_<profile>__<scenario>.<format>` (e.g. `radial_profile_r30__single_photon.png`, shown [at the top](#fasinate)), puts every simulator on the same axes: Geant4 as a grey filled histogram, each model as a line with its uncertainty band, and each model's relative deviation from Geant4 underneath. The legend gives each model's distance from Geant4 using the observable's `metric` (the Jensen–Shannon divergence for the profiles), and all metrics are collected in `metrics.csv`. The `.npz` files hold the energy per ring of the radial profiles, which is divided by the rings' areas only when drawn; the metric compares the fractions of the energy in the bins, and the relative deviations are ratios, so neither depends on that division.
+
+The `energy` gives two figures, as in the paper. At each true energy *E*, μ<sub>90</sub> and σ<sub>90</sub> are the mean and standard deviation of the central 90% of the events' reconstructed energies (sorted, without the lowest and highest 5%), with uncertainties from resampling the events (200 bootstrap resamplings, the same every time):
+
+- `energy_linearity__<scenario>`: μ<sub>90</sub> against *E*, fitted with a straight line, slope·*E* + intercept;
+- `energy_resolution__<scenario>`: σ<sub>90</sub>/μ<sub>90</sub> against *E*, fitted with *a* + *b*/√*E* + *c*/*E*.
+
+Each simulator is a set of points with its fit (weighted least squares), Geant4 in grey, and the legend gives each fitted function; below, each model's relative deviation from Geant4. The metric, `l1` by default, is the mean absolute difference from Geant4 over the energies, like the L1 of the paper's summary table. The fitted parameters, with their uncertainties, χ² and degrees of freedom, go to `fits.csv`. A fit needs at least as many energies as it has parameters, so a run of two energies, such as [`configs/pipeline_test.yaml`](configs/pipeline_test.yaml), draws the resolution without its fit. The inputs must be at fixed energies (the particle gun's `energies`), with at least 3 events at each.
 
 Plotting only needs numpy and matplotlib: it uses your own `python3` if it has them, and the `setup.sh` environment otherwise, so the `.npz` files can be copied elsewhere and plotted there.
 
@@ -299,7 +307,7 @@ Everything is written under `paths.data_dir`:
 │   └── <scenario>/<simulator>/    # stage 4: <input>_REC.edm4hep.root, _AIDA.root, _PfoAnalysis.root, .log
 ├── observables/
 │   ├── <simulator>.npz            # stage 5
-│   └── plots/                     # stage 6: figures + metrics.csv
+│   └── plots/                     # stage 6: figures, metrics.csv and fits.csv
 └── slurm/
     └── pipeline_<time>/           # submissions of slurm_pipeline.sh (slurm.log_dir)
 ```
@@ -326,7 +334,7 @@ Add an entry under `scenarios` with an `input` section. Input types are defined 
 
 ### Adding an observable
 
-Observables are implemented in [`ddml_bench/measure.py`](ddml_bench/measure.py), keyed by the name used under `observables` in the configuration, and the comparison metrics in [`ddml_bench/plot.py`](ddml_bench/plot.py).
+Observables are implemented in [`ddml_bench/measure.py`](ddml_bench/measure.py), keyed by the name used under `observables` in the configuration: binned profiles of the hits in `KINDS`, and quantities kept per event in `PER_EVENT`, whose figures are in `EVENT_FIGURES` in [`ddml_bench/plot.py`](ddml_bench/plot.py), as are the comparison metrics.
 
 ### Adding a stage
 

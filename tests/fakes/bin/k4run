@@ -6,9 +6,11 @@ links to ILDConfig's StandardConfig/production, with --noBeamCalReco, which
 it always adds), then writes what ILDReconstruction.py writes, <base>_REC.edm4hep.root,
 _AIDA.root and _PfoAnalysis.root: the REC file a real EDM4hep-style ROOT file
 (a podio "events" tree, written with uproot) with the MC particles of the
-simulation and made-up ECAL barrel hits around each photon's line of flight,
-a little wider for the models than for Geant4, so the observables have
-something to measure and compare.
+simulation, made-up ECAL barrel hits around each photon's line of flight, a
+little wider for the models than for Geant4, and made-up PandoraPFOs: the
+photon, its energy smeared a little more for the models, and in some events a
+small neutral hadron split off it, so the observables have something to
+measure and compare.
 """
 
 import json
@@ -56,8 +58,15 @@ with open(options["inputFiles"]) as stream:
 events = simulation["events"]
 if int(options["num-events"]) >= 0:
     events = events[:int(options["num-events"])]
-spread = 8.0 if simulation["simulator"] == "geant4" else 9.5
+geant4 = simulation["simulator"] == "geant4"
+spread = 8.0 if geant4 else 9.5
 rng = np.random.default_rng(zlib.crc32(os.path.basename(options["inputFiles"]).encode()))
+# The reconstructed particles' own random numbers, so the hits are as before
+pfo_rng = np.random.default_rng(zlib.crc32(os.path.basename(options["inputFiles"]).encode()
+                                           + b" PFOs"))
+# The photon's reconstructed energy: this fraction of its energy, smeared by
+# stochastic/sqrt(E) (+) 1%
+scale, stochastic = (0.98, 0.17) if geant4 else (0.975, 0.19)
 
 columns = dict((name, []) for name in (
     "MCParticles.generatorStatus", "MCParticles.PDG", "MCParticles.mass",
@@ -65,7 +74,7 @@ columns = dict((name, []) for name in (
     "MCParticles.momentum.x", "MCParticles.momentum.y", "MCParticles.momentum.z",
     "EcalBarrelCollectionRec.energy", "EcalBarrelCollectionRec.cellID",
     "EcalBarrelCollectionRec.position.x", "EcalBarrelCollectionRec.position.y",
-    "EcalBarrelCollectionRec.position.z"))
+    "EcalBarrelCollectionRec.position.z", "PandoraPFOs.energy", "PandoraPFOs.PDG"))
 for event in events:
     particle = event["particles"][0]
     for name, value in (("generatorStatus", particle["generatorStatus"]),
@@ -92,11 +101,20 @@ for event in events:
         [int(layer) << LAYER_OFFSET for layer in layers])
     for i, c in enumerate("xyz"):
         columns["EcalBarrelCollectionRec.position." + c].append(positions[:, i].tolist())
+    resolution = np.hypot(stochastic / np.sqrt(energy), 0.01)
+    pfo_energies = [energy * scale * (1 + resolution * pfo_rng.normal())]
+    pfo_pdgs = [22]
+    if pfo_rng.random() < 0.25:
+        pfo_energies.append(energy * 0.02 * pfo_rng.uniform(0.5, 1.5))
+        pfo_pdgs.append(2112)
+    columns["PandoraPFOs.energy"].append(pfo_energies)
+    columns["PandoraPFOs.PDG"].append(pfo_pdgs)
 
 types = {"MCParticles.generatorStatus": np.int32, "MCParticles.PDG": np.int32,
          "MCParticles.momentum.x": np.float32, "MCParticles.momentum.y": np.float32,
          "MCParticles.momentum.z": np.float32, "EcalBarrelCollectionRec.energy": np.float32,
-         "EcalBarrelCollectionRec.cellID": np.uint64}
+         "EcalBarrelCollectionRec.cellID": np.uint64, "PandoraPFOs.energy": np.float32,
+         "PandoraPFOs.PDG": np.int32}
 arrays = dict((name, ak.values_astype(ak.Array(values), types.get(name, np.float64)))
               for name, values in columns.items())
 base = options["outputFileBase"]

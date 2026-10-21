@@ -197,6 +197,26 @@ observables:
     # reconstructed file's metadata, or else from the detector geometry.
     cell_id_encoding: null
     metric: jensen_shannon
+  # The reconstructed energy of each event, the sum of the energies of its
+  # reconstructed particles, against the incident photon's true energy (the
+  # paper's energy linearity and resolution). At each true energy the figures
+  # take mu90 and sigma90, the mean and standard deviation of the central 90%
+  # of the events' reconstructed energies: the linearity is mu90 against the
+  # true energy E, fitted with a straight line, and the resolution
+  # sigma90/mu90, fitted with a + b/sqrt(E) + c/E. It needs inputs at fixed
+  # energies, like the particle gun's `energies`.
+  energy:
+    scenarios: [single_photon]
+    # The collections of reconstructed particles whose energies are summed:
+    # PandoraPFA's particle flow objects.
+    particle_collections: [PandoraPFOs]
+    # Count only the reconstructed particles of these PDG codes (either sign),
+    # e.g. [22] for photons; null counts them all.
+    pdg: null
+    # How it is compared to Geant4: the mean absolute difference over the
+    # energies of mu90 and of sigma90/mu90, like the L1 of the paper's
+    # summary table.
+    metric: l1
 
 # The slurm jobs of ./slurm_pipeline.sh, which runs every stage of the pipeline
 # as jobs of one file each (one input, one simulation, one reconstruction),

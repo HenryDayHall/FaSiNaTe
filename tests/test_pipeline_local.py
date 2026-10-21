@@ -39,16 +39,30 @@ def test_pipeline_runs_every_stage(bench):
     assert sorted({row["simulator"] for row in rows}) == ["caloclouds3"]
     assert {(row["observable"], row["profile"]) for row in rows} == {
         ("radial_profile", "r100"), ("radial_profile", "r30"),
-        ("longitudinal_profile", "layers")}
+        ("longitudinal_profile", "layers"), ("energy", "linearity"), ("energy", "resolution")}
     assert all(float(row["value"]) > 0 for row in rows)
-    assert os.path.isfile(bench.path("observables", "plots",
-                                     "radial_profile_r30__single_photon.png"))
+    for figure in ("radial_profile_r30__single_photon", "energy_linearity__single_photon",
+                   "energy_resolution__single_photon"):
+        assert os.path.isfile(bench.path("observables", "plots", figure + ".png")), figure
+    # The two energies fix the straight line of the linearity, but not the
+    # three parameters of the resolution's fit
+    fits = read_metrics(bench.path("observables", "plots", "fits.csv"))
+    assert sorted((row["profile"], row["simulator"], row["parameter"]) for row in fits) == sorted(
+        ("linearity", simulator, parameter) for simulator in SIMULATORS
+        for parameter in ("slope", "intercept"))
+    assert all(row["ndf"] == "0" for row in fits)
 
     # The measurements record the reconstructed files relative to the data folder
     with np.load(bench.path("observables", "geant4.npz")) as data:
         assert [str(f) for f in data["single_photon__files"]] == [
             "rec_output/single_photon/geant4/%s_REC.edm4hep.root" % name for name in INPUTS]
         assert list(data["single_photon__n_events"]) == [6, 6]
+        # and the reconstructed energy of each event, the sum of its
+        # PandoraPFOs', with its true energy
+        np.testing.assert_allclose(data["energy__single_photon__true"], [20] * 6 + [80] * 6,
+                                   rtol=1e-5)
+        ratio = data["energy__single_photon__reconstructed"] / data["energy__single_photon__true"]
+        assert ((ratio > 0.8) & (ratio < 1.2)).all(), ratio
 
     # The simulations ran as the stages run ddsim
     with open(bench.path("sim_output", "single_photon", "caloclouds3",
@@ -98,7 +112,8 @@ def test_stage_scripts_keep_one_sample_through_every_stage(bench):
             name + ending for name in names
             for ending in ("_AIDA.root", "_PfoAnalysis.root", "_REC.edm4hep.root", ".log"))
     assert bench.files("observables") == ["caloclouds3_n3.npz", "geant4_n3.npz", "plots"]
-    assert "metrics_n3.csv" in bench.files("observables", "plots")
+    for name in ("metrics_n3.csv", "fits_n3.csv", "energy_resolution__single_photon_n3.png"):
+        assert name in bench.files("observables", "plots"), name
     with np.load(bench.path("observables", "caloclouds3_n3.npz")) as data:
         assert list(data["single_photon__n_events"]) == [3, 3]
     # The reconstruction ran on the whole test simulation, of 3 events

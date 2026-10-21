@@ -10,7 +10,8 @@ Everything is written under paths.data_dir:
       each simulation reconstructed, with _AIDA.root, _PfoAnalysis.root and .log
   observables/<simulator><sample>.npz                         each simulator's measurements
   observables/plots/<observable>_<profile>__<scenario><sample>.<format>
-  observables/plots/metrics<sample>.csv                       the figures and metrics
+  observables/plots/metrics<sample>.csv                       the figures and metrics,
+  observables/plots/fits<sample>.csv                          and the energy figures' fits
 
 <sample> is empty for the full inputs, and _n<N> for a test on the first N
 events of each (-n N). It is set once, when an input is simulated: the
