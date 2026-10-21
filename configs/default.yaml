@@ -234,7 +234,7 @@ observables:
     # How the figures bin the residuals: from -max_residual to max_residual
     # degrees in n_bins bins, each a number for every fraction or a list with
     # one for each. Changing them needs no measuring again, only plotting.
-    max_residual: 5
+    max_residual: [20, 5]
     n_bins: 100
     # How it is compared to Geant4, as in the paper's summary table.
     metric: jensen_shannon
