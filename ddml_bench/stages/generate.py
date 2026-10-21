@@ -40,11 +40,15 @@ class Generate(Stage):
             graph.inputs.append((CUSTOM_SCENARIO, path, None))
 
     def check_environment(self, tasks):
-        modules = set()
-        for task in tasks:
-            if task["params"]["type"] == "particle_gun":
-                modules.update(("numpy", "pyLCIO", "h5py", "particle"))
-        return missing_modules(sorted(modules), "ILD_Particle_Gun.py")
+        problems = []
+        for kind in sorted({task["params"]["type"] for task in tasks}):
+            if kind in INPUT_TYPES:
+                command = next(task["params"]["command"] for task in tasks
+                               if task["params"]["type"] == kind)
+                # (the script, after python3)
+                problems += missing_modules(INPUT_TYPES[kind].modules,
+                                            os.path.basename(command[1]))
+        return problems
 
     def run(self, task):
         """Make one input with its command, writing to a hidden folder next to it,
@@ -75,8 +79,8 @@ class Generate(Stage):
             if not os.path.isfile(made) or os.path.getsize(made) == 0:
                 raise StageError("the command made no %s (it made: %s)" % (
                     os.path.basename(output), ", ".join(sorted(os.listdir(work))) or "nothing"))
-            # What else it made (the gun's .h5 file of the true momenta) first,
-            # and the input itself last, as that marks it done
+            # What else it made (the guns' .h5 files of the truth) first, and
+            # the input itself last, as that marks it done
             for name in sorted(os.listdir(work)):
                 if name != os.path.basename(output):
                     os.replace(os.path.join(work, name), os.path.join(folder, name))

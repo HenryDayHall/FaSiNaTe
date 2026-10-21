@@ -5,7 +5,8 @@ It checks that it is run as the simulation stages run ddsim (from DDML's
 scripts/ folder, with a steering file, a compact file and a hidden output file
 ending in .root), then copies the first --numberOfEvents events of the input
 (the JSON "LCIO" of tests/fakes/python/pyLCIO) into the output, noting which
-simulator it was: geant4 (the Geant4 steering file) or the presets.
+simulator it was, geant4 (the Geant4 steering file) or the presets, and the
+seed it was given (--random.seed), if any.
 
 It fails when "<simulator> <input file name>" matches the shell pattern in
 $FAKE_CONTROL/ddsim_fail, if there is one, e.g. "geant4 *en80*" or "* *en80*".
@@ -25,12 +26,15 @@ def fail(message, status=2):
 
 
 args = sys.argv[1:]
-options = {"ml-model": []}
+options = {"ml-model": [], "seed": None}
 i = 0
 while i < len(args):
     arg = args[i]
     if arg.startswith("--numberOfEvents="):
         options["numberOfEvents"] = int(arg.split("=", 1)[1])
+        i += 1
+    elif arg.startswith("--random.seed="):
+        options["seed"] = int(arg.split("=", 1)[1])
         i += 1
     elif arg in ("--steeringFile", "--compactFile", "--inputFiles", "--outputFile"):
         options[arg[2:]] = args[i + 1]
@@ -68,7 +72,7 @@ if os.path.exists(control):
     if fnmatch.fnmatch("%s %s" % (simulator, os.path.basename(options["inputFiles"])), pattern):
         fail("failing on %s, as %s says" % (options["inputFiles"], control), 3)
 with open(options["outputFile"], "w") as stream:
-    json.dump({"simulator": simulator, "compact": options["compactFile"], "events": events},
-              stream)
+    json.dump({"simulator": simulator, "compact": options["compactFile"],
+               "seed": options["seed"], "events": events}, stream)
 print("ddsim (fake): simulated %d events of %s with %s" % (len(events), options["inputFiles"],
                                                           simulator))

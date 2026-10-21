@@ -12,8 +12,8 @@ one that marks it done last), so the outputs that exist are complete.
 ILDConfig isn't part of Key4hep releases; setup.sh clones it to
 detector_configs.ildconfig.source_dir with scripts/fetch_detector_configs.sh.
 Arguments for ILDReconstruction.py go in reconstruction.extra_args;
---noBeamCalReco is always added, and --usingParticleGun for particle_gun
-scenarios.
+--noBeamCalReco is always added, and --usingParticleGun for the scenarios of
+a particle gun (the particle_gun and di_photon_gun inputs).
 """
 
 import glob
@@ -84,9 +84,11 @@ class Reconstruct(Stage):
         for simulation in graph.simulations:
             self._add(graph, layout.reconstruction_base(simulation["scenario"],
                                                         simulation["simulator"],
-                                                        simulation["input_file"]),
+                                                        simulation["input_file"],
+                                                        simulation["seed"]),
                       simulation["output"], [simulation["key"]], simulation["scenario"],
-                      simulation["simulator"], simulation["name"], simulation["input_file"])
+                      simulation["simulator"], simulation["name"], simulation["input_file"],
+                      simulation["seed"])
         # Simulations given directly: a task of the graph if they are its
         # simulations, and one of their own if not
         for path in graph.plan["given_simulations"]:
@@ -102,7 +104,8 @@ class Reconstruct(Stage):
                                      % (task["inputs"][0], path, task["output"]))
             graph.given.add(task["key"])
 
-    def _add(self, graph, base, simulation, needs, scenario, simulator, name, input_file):
+    def _add(self, graph, base, simulation, needs, scenario, simulator, name, input_file,
+             seed=None):
         plan = graph.plan
         settings = plan["reconstruction"]
         compact = settings["compact"] or plan["compact"].get(simulator)
@@ -123,7 +126,7 @@ class Reconstruct(Stage):
         }
         task = graph.add(self.name, base + settings["done_suffix"], needs, scenario=scenario,
                          simulator=simulator, name=name, inputs=[simulation],
-                         input_file=input_file, params=params)
+                         input_file=input_file, params=params, seed=seed)
         graph.reconstructions.setdefault((simulator, scenario), []).append(task)
         return task
 

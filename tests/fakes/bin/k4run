@@ -6,13 +6,16 @@ links to ILDConfig's StandardConfig/production, with --noBeamCalReco, which
 it always adds), then writes what ILDReconstruction.py writes, <base>_REC.edm4hep.root,
 _AIDA.root and _PfoAnalysis.root: the REC file a real EDM4hep-style ROOT file
 (a podio "events" tree, written with uproot) with the MC particles of the
-simulation, made-up ECAL barrel hits around each photon's line of flight, a
-little wider for the models than for Geant4 and more energetic nearer it (so
-that the most energetic hits lie along it, as in a shower's core), and
-made-up PandoraPFOs: the
-photon, its energy smeared a little more for the models, and in some events a
-small neutral hadron split off it, so the observables have something to
-measure and compare.
+simulation, made-up ECAL barrel hits around each incident photon's line of
+flight, a little wider for the models than for Geant4 and more energetic
+nearer it (so that the most energetic hits lie along it, as in a shower's
+core), and made-up PandoraPFOs: the photon, its energy smeared a little more
+for the models, and in some events a small neutral hadron split off it, so the
+observables have something to measure and compare. Of an event of two photons
+(a di-photon scenario's), the PandoraPFOs are the two photons once they are
+far enough apart to be told apart, which depends on their energy and is a
+little further for the models, and one photon of both their energies before
+that, with now and then a small photon split off as well.
 """
 
 import json
@@ -77,14 +80,11 @@ columns = dict((name, []) for name in (
     "EcalBarrelCollectionRec.energy", "EcalBarrelCollectionRec.cellID",
     "EcalBarrelCollectionRec.position.x", "EcalBarrelCollectionRec.position.y",
     "EcalBarrelCollectionRec.position.z", "PandoraPFOs.energy", "PandoraPFOs.PDG"))
-for event in events:
-    particle = event["particles"][0]
-    for name, value in (("generatorStatus", particle["generatorStatus"]),
-                        ("PDG", particle["PDG"]), ("mass", particle["mass"])):
-        columns["MCParticles." + name].append([value])
-    for i, c in enumerate("xyz"):
-        columns["MCParticles.vertex." + c].append([particle["vertex"][i]])
-        columns["MCParticles.momentum." + c].append([particle["momentum"][i]])
+
+
+def shower(particle):
+    """Made-up ECAL barrel hits of a photon's shower: energies, cellIDs and
+    positions [hit, xyz]."""
     vertex = np.array(particle["vertex"])
     direction = np.array(particle["momentum"]) / np.linalg.norm(particle["momentum"])
     across = np.cross(direction, [0.0, 0.0, 1.0])
@@ -98,16 +98,58 @@ for event in events:
                  + radius[:, None] * (np.cos(angle)[:, None] * across
                                       + np.sin(angle)[:, None] * other))
     core = np.exp(-radius / spread)
+    energies = 0.01 * energy * core / core.sum() * rng.uniform(0.5, 1.5, N_HITS)
+    return energies, [int(layer) << LAYER_OFFSET for layer in layers], positions
+
+
+def smeared(energy):
+    """A photon's reconstructed energy."""
+    resolution = np.hypot(stochastic / np.sqrt(energy), 0.01)
+    return energy * scale * (1 + resolution * pfo_rng.normal())
+
+
+def pair_pfos(photons):
+    """The reconstructed particles of two photons: two photons once they are
+    far enough apart on the ECAL face (where they start) to be told apart,
+    the sooner the more energetic they are, a little later for the models
+    than for Geant4; one photon before that."""
+    energies = [float(np.linalg.norm(p["momentum"])) for p in photons]
+    separation = np.linalg.norm(np.subtract(photons[0]["vertex"], photons[1]["vertex"]))
+    told_apart = (6.0 + 25.0 * np.sqrt(5.0 / np.mean(energies))) * (1.0 if geant4 else 1.1)
+    if pfo_rng.random() < 1 / (1 + np.exp(-(separation - told_apart) / 2.5)):
+        pfo_energies = [smeared(energy) for energy in energies]
+    else:
+        pfo_energies = [smeared(sum(energies))]
+    pdgs = [22] * len(pfo_energies)
+    if pfo_rng.random() < 0.1:
+        pfo_energies.append(sum(energies) * 0.02 * pfo_rng.uniform(0.5, 1.5))
+        pdgs.append(22)
+    return pfo_energies, pdgs
+
+
+for event in events:
+    particles = event["particles"]
+    for name in ("generatorStatus", "PDG", "mass"):
+        columns["MCParticles." + name].append([p[name] for p in particles])
+    for i, c in enumerate("xyz"):
+        columns["MCParticles.vertex." + c].append([p["vertex"][i] for p in particles])
+        columns["MCParticles.momentum." + c].append([p["momentum"][i] for p in particles])
+    incident = [p for p in particles if p["generatorStatus"] == 1] or particles[:1]
+    hits = [shower(photon) for photon in incident]
     columns["EcalBarrelCollectionRec.energy"].append(
-        (0.01 * energy * core / core.sum() * rng.uniform(0.5, 1.5, N_HITS)).tolist())
+        np.concatenate([energies for energies, _, _ in hits]).tolist())
     columns["EcalBarrelCollectionRec.cellID"].append(
-        [int(layer) << LAYER_OFFSET for layer in layers])
+        [cell for _, cells, _ in hits for cell in cells])
+    positions = np.concatenate([positions for _, _, positions in hits])
     for i, c in enumerate("xyz"):
         columns["EcalBarrelCollectionRec.position." + c].append(positions[:, i].tolist())
-    resolution = np.hypot(stochastic / np.sqrt(energy), 0.01)
-    pfo_energies = [energy * scale * (1 + resolution * pfo_rng.normal())]
-    pfo_pdgs = [22]
+    if len(incident) == 2:
+        pfo_energies, pfo_pdgs = pair_pfos(incident)
+    else:
+        energy = np.linalg.norm(incident[0]["momentum"])
+        pfo_energies, pfo_pdgs = [smeared(energy)], [22]
     if pfo_rng.random() < 0.25:
+        energy = sum(np.linalg.norm(p["momentum"]) for p in incident)
         pfo_energies.append(energy * 0.02 * pfo_rng.uniform(0.5, 1.5))
         pfo_pdgs.append(2112)
     columns["PandoraPFOs.energy"].append(pfo_energies)

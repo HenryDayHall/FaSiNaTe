@@ -37,6 +37,15 @@ degrees, n_bins of them, in the observable's settings in the configuration
 outside them still count among all the showers, and those without an axis
 (fewer than two hits) don't.
 
+The di-photon separation (the observable photon_separation) gives a figure
+for each energy of the photons, as in the benchmark paper: the mean number of
+reconstructed photons per event in bins of the separation of the two photons
+on the ECAL face, drawn as the profiles are, with a line at two photons. Each
+simulator's curve is the mean over the ddsim seeds of each seed's mean, and
+its band the spread over the seeds (separation_points()). The metric compares
+the number of reconstructed photons in each bin, seed by seed, and gives the
+mean over the seeds with their spread as its uncertainty (seed_metric()).
+
   python3 -m ddml_bench.plot [--dir DIR] [--out DIR] [--events N]
                              [--format pdf,png] [--reference NAME] [SIMULATOR ...]
 
@@ -44,12 +53,13 @@ outside them still count among all the showers, and those without an axis
 observable, profile and scenario, named <observable>_<profile>__<scenario>.<format>
 (energy_linearity__<scenario> and energy_resolution__<scenario> for the
 energy, intrinsic_angle_<angle>_<hits>__<scenario> for the intrinsic angles,
-e.g. intrinsic_angle_theta_top4__single_photon), with the metrics in
-metrics.csv and the fitted parameters of the energy figures, with their
-uncertainties, chi^2 and degrees of freedom, in fits.csv. It needs numpy and
-matplotlib, and PyYAML only to read the configuration for the default folder,
-the metrics and the bins of the residuals, so it also works on .npz files
-copied to a laptop.
+e.g. intrinsic_angle_theta_top4__single_photon, and
+photon_separation_<E>GeV__<scenario> for the separation), with the metrics in
+metrics.csv (and their uncertainties, for those that have one) and the fitted
+parameters of the energy figures, with their uncertainties, chi^2 and degrees
+of freedom, in fits.csv. It needs numpy and matplotlib, and PyYAML only to
+read the configuration for the default folder, the metrics and the bins of the
+residuals and separations, so it also works on .npz files copied to a laptop.
 """
 
 import argparse
@@ -67,11 +77,15 @@ REFERENCE_EDGE = "#8c8c8c"
 INK = "#1f1f1f"
 MUTED = "#6b6b6b"
 GRID = "#e6e6e6"
+# A line across the axes at a value the figure is about (e.g. the two photons
+# a di-photon event should be reconstructed as), red as in the benchmark paper
+GUIDE = "#c4302b"
 # How each kind of observable is drawn: axis labels, and a logarithmic y axis
 STYLES = {
     "radial_profile": ("Distance to the shower axis [mm]", True),
     "longitudinal_profile": ("ECAL layer", False),
     "intrinsic_angle": ("Reconstructed \u2212 true [\u00b0]", False),
+    "photon_separation": ("Separation on the ECAL face [mm]", False),
 }
 PER_BIN = "Mean energy per event [GeV]"
 
@@ -236,21 +250,29 @@ def stairs_band(ax, edges, low, high, color, alpha):
 
 
 def plot_profile(observable, scenario, profile, curves, reference, metric_name, out_base,
-                 formats, xlabel=None, note=None, trim=True, room=False):
-    """One figure; returns [(simulator, metric, value)]. xlabel, and note, the
-    text in the corner, replace the observable's own; with trim, the bins at
-    either end that are empty for every simulator are left out; with room, the
-    top of the axes is left to the legend and the note, which goes at the top
-    left (for distributions peaked in the middle)."""
+                 formats, xlabel=None, note=None, trim=True, room=False, ylabel=None,
+                 guide=None, metric_texts=None, every_deviation=False):
+    """One figure; returns [(simulator, metric, value)]. xlabel, ylabel and note,
+    the text in the corner, replace the observable's own; with trim, the bins
+    at either end that are empty for every simulator are left out; with room,
+    the top of the axes is left to the legend and the note, which goes at the
+    top left (for distributions peaked in the middle); guide is a value to
+    draw a line at, across the axes. With metric_name None, the metric is the
+    caller's: metric_texts, [(simulator, text)], gives what each simulator's
+    label says of it. The axis of the deviations from Geant4 shows the 95% of
+    them in the bins it measures well, or with every_deviation all of them
+    (for a few bins, all measured well)."""
     import numpy as np
 
     default_xlabel, log_y = STYLES.get(observable, (profile, False))
     xlabel = xlabel or default_xlabel
-    ylabel = DENSITIES[observable][1] if observable in DENSITIES else PER_BIN
+    if ylabel is None:
+        ylabel = DENSITIES[observable][1] if observable in DENSITIES else PER_BIN
     short, metric = METRICS.get(metric_name, (metric_name, None))
-    if metric is None:
+    if metric is None and metric_name is not None:
         say("no metric '%s' is known (known: %s), so none is shown"
             % (metric_name, ", ".join(METRICS)))
+    metric_texts = list(metric_texts or ())
 
     # Leave out the bins that are empty for every simulator (e.g. layer numbers
     # the detector doesn't have)
@@ -295,6 +317,10 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
             value = metric(ref[2][keep], mean)
             results.append((simulator, short, value))
             label = "%s (%s %.2e)" % (label, short, value)
+        else:
+            given = next((t for s, t in metric_texts if s is simulator), None)
+            if given:
+                label = "%s (%s)" % (label, given)
         mean, err = mean / scale, err / scale
         top.stairs(drawable(mean, log_y), edges, color=simulator.color,
                    linestyle=simulator.linestyle, linewidth=1.6, label=label,
@@ -309,8 +335,12 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
             top.set_ylim(positive.min() / 3, positive.max() * 3)
     elif room:
         drawn = np.concatenate([(c[2][keep] + c[3][keep]) / scale for c in curves])
+        drawn = drawn[np.isfinite(drawn)]
+        highest = max(float(drawn.max()) if drawn.size else 0.0, guide or 0.0) or 1.0
         # (the legend has a line for each simulator)
-        top.set_ylim(0, float(drawn.max()) * (1.15 + 0.08 * len(curves)))
+        top.set_ylim(0, highest * (1.15 + 0.08 * len(curves)))
+    if guide is not None:
+        top.axhline(guide, color=GUIDE, linewidth=1.0, linestyle=(0, (4, 2)), zorder=2.5)
     top.set_ylabel(ylabel, color=INK)
     if note is None:
         n_ref = ref[4] if ref is not None else curves[0][4]
@@ -341,7 +371,7 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
             stairs_band(bottom, edges, dev - band, dev + band, simulator.color, 0.2)
             deviations.append(np.abs(dev[measured & np.isfinite(dev)]))
         spread = np.concatenate(deviations) if deviations else np.array([])
-        limit = np.percentile(spread, 95) * 1.3 if spread.size else 10
+        limit = np.percentile(spread, 100 if every_deviation else 95) * 1.3 if spread.size else 10
         limit = float(np.clip(limit, 5, 100))
         bottom.set_ylim(-limit, limit)
         bottom.set_ylabel("Rel. dev. [%]", color=INK)
@@ -841,13 +871,236 @@ def angle_figures(observable, scenario, simulators, reference, settings, out, su
     return results, []
 
 
+# ---------------------------------------------------------------------------
+# The di-photon separation: the mean number of reconstructed photons against
+# the separation of the two incident photons on the ECAL face (the observable
+# photon_separation, ddml_bench/measure.py)
+
+SEPARATION_XLABEL = r"Separation on the ECAL face $d_{\gamma\gamma}$ [mm]"
+# The number of photons an event of two photons should be reconstructed as,
+# drawn as a line across the figures
+PHOTONS_PER_EVENT = 2
+
+
+def event_seeds(simulator, scenario, n_events):
+    """The ddsim seed of each of a scenario's events (as the observables stored
+    per event have them), from the seed of each file (<scenario>__seeds, -1
+    where ddsim chose it) and its number of events (<scenario>__n_events); all
+    -1 if the measurements don't record them."""
+    import numpy as np
+    data = getattr(simulator, "data", None) or {}
+    counts = data.get(SEP.join((scenario, "n_events")))
+    seeds = data.get(SEP.join((scenario, "seeds")))
+    if counts is None or seeds is None or len(seeds) != len(counts) \
+            or int(np.sum(counts)) != n_events:
+        return np.full(n_events, -1, dtype=np.int64)
+    return np.repeat(np.asarray(seeds, dtype=np.int64), np.asarray(counts, dtype=np.int64))
+
+
+def separation_points(separation, photons, seeds, edges):
+    """The mean number of reconstructed photons per event in each bin of the
+    separation, from the events of each ddsim seed: a dict of "mean", the mean
+    over the seeds of each seed's mean; "error", the standard deviation of
+    those over the seeds (the sample's, ddof 1), or with one seed the
+    statistical uncertainty of its mean; "spread", whether the error is the
+    spread over the seeds; "seeds", the seeds in order; "photons", {seed: the
+    photons in each bin}, which the metric compares; "events", {seed: its
+    events}; and "outside", the fraction of the events outside the bins.
+    Events without a separation (NaN) are left out."""
+    import numpy as np
+    separation = np.asarray(separation, dtype=float)
+    photons = np.asarray(photons, dtype=float)
+    seeds = np.asarray(seeds)
+    found = np.isfinite(separation)
+    order = sorted(set(int(s) for s in seeds[found]))
+    means, sums, sums_sq, counts = [], [], [], []
+    points = {"seeds": order, "photons": {}, "events": {}}
+    for seed in order:
+        chosen = found & (seeds == seed)
+        n = np.histogram(separation[chosen], edges)[0].astype(float)
+        total = np.histogram(separation[chosen], edges, weights=photons[chosen])[0]
+        total_sq = np.histogram(separation[chosen], edges, weights=photons[chosen] ** 2)[0]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            means.append(np.where(n > 0, total / n, np.nan))
+        sums.append(total)
+        sums_sq.append(total_sq)
+        counts.append(n)
+        points["photons"][seed] = total
+        points["events"][seed] = int(chosen.sum())
+    n_bins = len(edges) - 1
+    means = np.array(means).reshape(len(order), n_bins)
+    have = np.isfinite(means)
+    k = have.sum(axis=0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mean = np.where(k > 0, np.where(have, means, 0).sum(axis=0) / k, np.nan)
+        if len(order) > 1:
+            deviation = np.where(have, means - mean, 0)
+            error = np.where(k > 1, np.sqrt((deviation ** 2).sum(axis=0) / (k - 1)), np.nan)
+        elif order:
+            n, total, total_sq = counts[0], sums[0], sums_sq[0]
+            variance = np.clip(total_sq / n - (total / n) ** 2, 0, None)
+            error = np.where(n > 0, np.sqrt(variance / n), np.nan)
+        else:
+            error = np.full(n_bins, np.nan)
+    events = sum(points["events"].values())
+    beyond = events - sum(float(c.sum()) for c in counts)
+    points.update(mean=mean, error=error, spread=len(order) > 1,
+                  outside=beyond / events if events else 0.0)
+    return points
+
+
+def seed_metric(metric, reference, points):
+    """The metric of the photons in each bin of a simulator's events from those
+    of the reference's, seed by seed (the seeds of each in order, paired):
+    the mean of its values, their standard deviation (the sample's, ddof 1;
+    nan with fewer than two pairs), and the number of pairs."""
+    import numpy as np
+    values = [metric(reference["photons"][r], points["photons"][s])
+              for r, s in zip(reference["seeds"], points["seeds"])]
+    values = [value for value in values if np.isfinite(value)]
+    if not values:
+        return float("nan"), float("nan"), 0
+    spread = float(np.std(values, ddof=1)) if len(values) > 1 else float("nan")
+    return float(np.mean(values)), spread, len(values)
+
+
+def energy_name(energy):
+    """A figure's name for photons of an energy, GeV: 20GeV, 12.5GeV, 100GeV."""
+    return "%gGeV" % float("%.3g" % energy)
+
+
+def plot_separation(observable, scenario, measured, reference, settings, out, suffix, formats):
+    """The figures of the di-photon separation, from measured, [(simulator, and
+    of each event its separation, number of reconstructed photons, photon
+    energy and ddsim seed)]: one per energy of the photons,
+    photon_separation_<E>GeV__<scenario>, with each simulator's mean number of
+    reconstructed photons per event in each bin of the separation and the
+    spread over the seeds as its band (separation_points()), drawn as the
+    profiles are, with a line at two photons and each model's relative
+    deviation from Geant4 below. The legend gives each model's metric (by
+    default jensen_shannon) of the photons in the bins from Geant4's, the mean
+    over the seeds and its spread (seed_metric()). Returns ([(simulator,
+    figure, metric, value, uncertainty)], [])."""
+    import numpy as np
+    settings = settings or {}
+    try:
+        first, last, n_bins = measure.separation_binning(observable, settings)
+    except measure.ObservableError as error:
+        first, last, n_bins = 0.0, measure.MAX_SEPARATION, measure.SEPARATION_BINS
+        say("%s, so the separation is drawn from 0 to %g mm in %d bins" % (error, last, n_bins))
+    edges = np.linspace(first, last, n_bins + 1)
+    metric_name = metric_of(observable, settings)
+    short, metric = METRICS.get(metric_name, (metric_name, None))
+    if metric is None:
+        say("no metric '%s' is known (known: %s), so none is shown"
+            % (metric_name, ", ".join(METRICS)))
+    codes = sorted({abs(int(code)) for code in settings.get("pdg") or []})
+    counted = "particles" if "pdg" in settings and codes != [22] else "photons"
+
+    # The events of each simulator that have a separation, by the energy of
+    # their photons
+    groups = []  # [[energy, [(simulator, its events' separation, photons, seeds)]]]
+    for simulator, separation, photons, energy, seeds in measured:
+        separation = np.asarray(separation, dtype=float)
+        energy = np.asarray(energy, dtype=float)
+        found = np.flatnonzero(np.isfinite(separation) & np.isfinite(energy))
+        if len(found) < len(separation):
+            say("%s, %s: %d of %d events haven't two incident photons heading into the ECAL "
+                "face, so they're left out" % (simulator.name, scenario,
+                                              len(separation) - len(found), len(separation)))
+        spread = []
+        for index in same_energies(energy[found]) if len(found) else []:
+            chosen = found[index]
+            value = float(energy[chosen].mean())
+            if energy[chosen].max() - energy[chosen].min() > SAME_ENERGY * abs(value):
+                spread.append("%.4g to %.4g" % (energy[chosen].min(), energy[chosen].max()))
+                continue
+            group = next((g for g in groups if abs(g[0] - value) <= SAME_ENERGY * abs(g[0])),
+                         None)
+            if group is None:
+                group = [value, []]
+                groups.append(group)
+            group[1].append((simulator, separation[chosen], np.asarray(photons)[chosen],
+                             np.asarray(seeds)[chosen]))
+        if spread:
+            say("%s, %s: %d set(s) of events whose photons' energies differ by more than %g%% "
+                "(%s GeV) are left out: the separation figures need inputs at fixed energies"
+                % (simulator.name, scenario, len(spread), 100 * SAME_ENERGY, _some(spread)))
+
+    results = []
+    for energy, members in sorted(groups, key=lambda group: group[0]):
+        profile = energy_name(energy)
+        entries = [(simulator, separation_points(separation, photons, seeds, edges))
+                   for simulator, separation, photons, seeds in members]
+        entries = [(simulator, points) for simulator, points in entries if points["seeds"]]
+        if not entries:
+            continue
+        ref = next((points for simulator, points in entries if simulator is reference), None)
+        curves = [(simulator, edges, points["mean"], points["error"],
+                   sum(points["events"].values())) for simulator, points in entries]
+        texts = []
+        for simulator, points in entries:
+            if ref is None or simulator is reference or metric is None:
+                continue
+            value, spread, pairs = seed_metric(metric, ref, points)
+            if not pairs:
+                continue
+            results.append((simulator, profile, short, value, spread))
+            texts.append((simulator, "%s %.2e \u00b1 %.1e" % (short, value, spread)
+                          if np.isfinite(spread) else "%s %.2e" % (short, value)))
+        # The text in the corner is of Geant4, if it is there
+        shown = ref if ref is not None else entries[0][1]
+        events = sorted(set(shown["events"].values()))
+        note = "%s, %s GeV photons\n%s events \u00d7 %d seed%s%s\nbands: %s" % (
+            scenario, profile[:-len("GeV")],
+            events[0] if len(events) == 1 else "%d\u2013%d" % (events[0], events[-1]),
+            len(shown["seeds"]), "" if len(shown["seeds"]) == 1 else "s",
+            " (%s)" % reference.label if ref is not None else "",
+            "the spread over the seeds" if shown["spread"] else "statistical")
+        if shown["outside"] > 0:
+            note += "\n%.2g%% beyond %g mm" % (100 * shown["outside"], last)
+        base = figure_base(out, observable, profile, scenario, suffix)
+        plot_profile(observable, scenario, profile, curves,
+                     reference if ref is not None else None, None, base, formats,
+                     xlabel=SEPARATION_XLABEL, ylabel="Mean reconstructed %s per event" % counted,
+                     note=note, trim=False, room=True, guide=PHOTONS_PER_EVENT,
+                     metric_texts=texts, every_deviation=True)
+        say("%s: %s" % (", ".join(c[0].label for c in curves),
+                        ", ".join("%s.%s" % (os.path.basename(base), f) for f in formats)))
+    return results, []
+
+
+def separation_figures(observable, scenario, simulators, reference, settings, out, suffix,
+                       formats):
+    """The figures of the di-photon separation (plot_separation()) of the
+    simulators that measured it."""
+    measured = []
+    for simulator in simulators:
+        stored = simulator.stored(observable, scenario)
+        separation = stored["separation"]
+        measured.append((simulator, separation, stored["n_photons"], stored["energy"],
+                         event_seeds(simulator, scenario, len(separation))))
+    return plot_separation(observable, scenario, measured, reference, settings, out, suffix,
+                           formats)
+
+
 # How the observables stored per event are drawn: each is called with the
 # observable, the scenario, the simulators that measured it, the reference,
 # the observable's settings in the configuration ({} without one), the folder
 # of the figures, the sample's suffix and the formats, and gives ([(simulator,
 # figure, metric, value)], [(simulator, figure, parameter, value, uncertainty,
-# chi^2, degrees of freedom)])
-EVENT_FIGURES = {"energy": energy_figures, "intrinsic_angle": angle_figures}
+# chi^2, degrees of freedom)]); a metric may have its uncertainty after its
+# value
+EVENT_FIGURES = {"energy": energy_figures, "intrinsic_angle": angle_figures,
+                 "photon_separation": separation_figures}
+
+
+def uncertainty_text(row, form="%.6g"):
+    """A metric's uncertainty, written out, if it has one: the seventh item of
+    its row; empty without one, or if it couldn't be estimated (nan)."""
+    import math
+    error = row[6] if len(row) > 6 else None
+    return form % error if error is not None and math.isfinite(error) else ""
 
 
 def main(argv=None):
@@ -938,17 +1191,20 @@ def main(argv=None):
         results, fits = EVENT_FIGURES[observable](observable, scenario, measured, reference,
                                                   observables.get(observable) or {}, out,
                                                   suffix, formats)
-        for simulator, figure, short, value in results:
-            rows.append((observable, scenario, figure, simulator.name, short, value))
+        for result in results:
+            simulator, figure, short, value = result[:4]
+            rows.append((observable, scenario, figure, simulator.name, short, value)
+                        + tuple(result[4:5]))
         for simulator, figure, parameter, value, error, chi2, ndf in fits:
             fit_rows.append((observable, scenario, figure, simulator.name, parameter, value,
                              error, chi2, ndf))
 
     with open(os.path.join(out, "metrics%s.csv" % suffix), "w", newline="") as stream:
         writer = csv.writer(stream)
-        writer.writerow(["observable", "scenario", "profile", "simulator", "metric", "value"])
+        writer.writerow(["observable", "scenario", "profile", "simulator", "metric", "value",
+                         "uncertainty"])
         for row in rows:
-            writer.writerow(row[:5] + ("%.6g" % row[5],))
+            writer.writerow(row[:5] + ("%.6g" % row[5], uncertainty_text(row)))
     # The functions fitted in the energy figures, a row per parameter
     with open(os.path.join(out, "fits%s.csv" % suffix), "w", newline="") as stream:
         writer = csv.writer(stream)
@@ -956,9 +1212,11 @@ def main(argv=None):
                          "error", "chi2", "ndf"])
         for row in fit_rows:
             writer.writerow(row[:5] + tuple("%.6g" % v for v in row[5:8]) + (row[8],))
-    for observable, scenario, profile, name, short, value in rows:
-        print("%-22s %-14s %-10s %-14s %s %.3e" % (observable, scenario, profile, name, short,
-                                                  value))
+    for row in rows:
+        observable, scenario, profile, name, short, value = row[:6]
+        error = uncertainty_text(row, "%.1e")
+        print("%-22s %-14s %-10s %-14s %s %.3e%s" % (observable, scenario, profile, name, short,
+                                                    value, " +- " + error if error else ""))
     for observable, scenario, profile, name, parameter, value, error, chi2, ndf in fit_rows:
         print("%-22s %-14s %-10s %-14s %-9s %.4g +- %.2g" % (
             observable, scenario, profile, name, parameter, value, error))

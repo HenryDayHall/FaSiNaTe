@@ -4,13 +4,15 @@
 #   ./slurm_pipeline.sh --config configs/pipeline_test.yaml --dry-run
 #   ./slurm_pipeline.sh --config configs/pipeline_test.yaml
 #
-# It keeps the single_photon scenario, its observables and every model in
-# models/, but with two energies of 10 photons each. That is 2 inputs, each
-# simulated by Geant4 and by each model, each simulation reconstructed, then
-# the measurements of each simulator and the plots: at least one job of each
-# kind, and each kind of dependency between them (13 jobs with CaloClouds3
-# alone). Its data goes to a folder of its own, so it never mixes with the full
-# samples, and its jobs ask for short time limits, so that they start sooner.
+# It keeps the scenarios, their observables and every model in models/, but
+# with two energies of 10 photons each for single_photon, and one energy of
+# 10 photon pairs, simulated with two seeds, for di_photon. That is 3 inputs,
+# each simulated by Geant4 and by each model (di_photon's twice each), each
+# simulation reconstructed, then the measurements of each simulator and the
+# plots: at least one job of each kind, and each kind of dependency between
+# them (22 jobs with CaloClouds3 alone). Its data goes to a folder of its own,
+# so it never mixes with the full samples, and its jobs ask for short time
+# limits, so that they start sooner.
 # The software (DDML, ILDConfig, the container) is the one the full run uses.
 #
 # Like configs/local.yaml, this only changes the settings it names, and it is
@@ -44,6 +46,11 @@ scenarios:
       # leaves photons below 10 GeV to Geant4)
       energies: [20, 80]
       n_events: 10
+  di_photon:
+    input:
+      energies: [20]
+      n_events: 10
+    simulation_seeds: [1, 2]
 
 slurm:
   stages:

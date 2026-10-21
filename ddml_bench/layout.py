@@ -17,7 +17,11 @@ Everything is written under paths.data_dir:
 events of each (-n N). It is set once, when an input is simulated: the
 simulation of the first N events of <input> is <input>_n<N>, and everything
 made from it carries that name on, so -n N means the same sample at every
-stage.
+stage. A scenario whose inputs are simulated with ddsim seeds of its own
+(simulation_seeds) adds _simseed<S> to <sample> for the seed S, likewise: the
+simulation of <input> with seed 2 is <input>_simseed2, and of its first N
+events <input>_n<N>_simseed2. (The inputs' own names may have _seed<S>, the
+gun's seed, which this isn't.)
 
 Inputs given directly (simulate_*.sh --input) are simulated as the scenario
 "custom"; simulations given directly to reconstruct_simulation.sh are
@@ -60,6 +64,9 @@ REC_SUFFIX_LCIO_ONLY = "_REC.slcio"
 # Between the parts of .npz keys and of figure names
 SEP = "__"
 
+# What the names of the simulations of a ddsim seed have, before the seed
+SEED_TAG = "_simseed"
+
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]*$")
 _SAMPLE = re.compile(r"_n\d+$")
 
@@ -84,6 +91,18 @@ def sample_suffix(events):
     if not isinstance(events, int) or isinstance(events, bool) or events < 1:
         raise LayoutError("the number of events must be at least 1, not %r" % (events,))
     return "_n%d" % events
+
+
+def seed_suffix(seed):
+    """What the names of the simulation of an input with a ddsim seed, and of
+    everything made from it, end in: nothing without a seed of its own (None),
+    _simseed<S> with seed S."""
+    if seed is None:
+        return ""
+    if not isinstance(seed, int) or isinstance(seed, bool) or seed < 0:
+        raise LayoutError("a simulation seed must be a whole number, at least 0, not %r"
+                          % (seed,))
+    return "%s%d" % (SEED_TAG, seed)
 
 
 def input_stem(path):
@@ -148,19 +167,20 @@ class Layout(object):
     def sim_dir(self):
         return os.path.join(self.data_dir, SIM_DIR)
 
-    def sample_name(self, input_file):
-        """The name of an input's simulation in this sample, which everything
-        made from that simulation is named after too."""
-        return input_stem(input_file) + self.suffix
+    def sample_name(self, input_file, seed=None):
+        """The name of an input's simulation in this sample (with the ddsim
+        seed, if it has one of its own), which everything made from that
+        simulation is named after too."""
+        return input_stem(input_file) + self.suffix + seed_suffix(seed)
 
-    def simulation(self, scenario, simulator, input_file):
+    def simulation(self, scenario, simulator, input_file, seed=None):
         ending = SIM_ENDINGS.get(simulator, MODEL_SIM_ENDING)
         return os.path.join(self.sim_dir, scenario, simulator,
-                            self.sample_name(input_file) + ending)
+                            self.sample_name(input_file, seed) + ending)
 
-    def simulation_log(self, scenario, simulator, input_file):
+    def simulation_log(self, scenario, simulator, input_file, seed=None):
         return os.path.join(self.sim_dir, scenario, simulator,
-                            self.sample_name(input_file) + ".log")
+                            self.sample_name(input_file, seed) + ".log")
 
     # The reconstructions
 
@@ -168,10 +188,11 @@ class Layout(object):
     def rec_dir(self):
         return os.path.join(self.data_dir, REC_DIR)
 
-    def reconstruction_base(self, scenario, simulator, input_file):
+    def reconstruction_base(self, scenario, simulator, input_file, seed=None):
         """What a reconstruction's outputs are named after: <base>_REC.edm4hep.root,
         <base>_AIDA.root, <base>_PfoAnalysis.root and <base>.log."""
-        return os.path.join(self.rec_dir, scenario, simulator, self.sample_name(input_file))
+        return os.path.join(self.rec_dir, scenario, simulator,
+                            self.sample_name(input_file, seed))
 
     def given_simulation(self, path):
         """(scenario, simulator, reconstruction base) of a simulation file given

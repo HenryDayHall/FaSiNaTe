@@ -2,9 +2,10 @@
 own, and a fake software stack for the environment the pipeline runs in.
 
 The copy (so that the tests never touch the real data/ or configs/local.yaml)
-is configured by test.yaml: a small single_photon scenario of two energies, a
-data folder of its own, no container, ILDConfig cloned from a local repository
-and no patches. Its "DDML build" is a folder with the files setup.sh and the
+is configured by test.yaml: a small single_photon scenario of two energies and
+a small di_photon one of one energy simulated with two seeds, a data folder of
+its own, no container, ILDConfig cloned from a local repository and no
+patches. Its "DDML build" is a folder with the files setup.sh and the
 stages' environment checks look for, and an env file that puts the fakes in
 tests/fakes on PATH and PYTHONPATH: ddsim, k4run, DDML's Python package and
 pyLCIO, and slurm's sbatch and squeue. So every script runs as it does on the
@@ -26,7 +27,8 @@ FAKES = os.path.join(REPO, "tests", "fakes")
 sys.path.insert(0, REPO)
 
 # What the copy of the repository has
-COPIED = ["ddml_bench", "scripts", "configs", "models", "ILD_Particle_Gun.py", "setup.sh",
+COPIED = ["ddml_bench", "scripts", "configs", "models", "ILD_Particle_Gun.py",
+          "ILD_Di_Photon_Gun.py", "setup.sh",
           "pipeline.sh", "slurm_pipeline.sh", "slurm_simulate_geant4.sh", "generate_input.sh",
           "simulate_geant4.sh", "simulate_models.sh", "reconstruct_simulation.sh",
           "observables_from_reconstruction.sh", "plot_observables.sh"]
@@ -58,6 +60,11 @@ scenarios:
     input:
       energies: [20, 80]
       n_events: 6
+  di_photon:
+    input:
+      energies: [20]
+      n_events: 30
+    simulation_seeds: [1, 2]
 observables:
   longitudinal_profile:
     cell_id_encoding: "{encoding}"

@@ -3,7 +3,9 @@ models/, one task per input and simulator.
 
 Both run ddsim as DDML's README does: with DDML's steering file from the DDML
 build that setup.sh sets up, from its scripts/ folder (presets can give model
-paths relative to it), on one thread. The models run with their presets
+paths relative to it), on one thread. A scenario with simulation_seeds has
+each input simulated once with each seed (ddsim's --random.seed), each a task
+of its own; otherwise ddsim chooses a seed. The models run with their presets
 (--ml-model). Geant4, the reference, runs scripts/ddsim_steer_geant4.py, which
 runs DDML's steering file without DDML's fast simulation, so that every other
 setting (physics list, crossing angle, filters, ...) is the same.
@@ -38,22 +40,33 @@ class Simulate(Stage):
         """The simulators this stage runs, as models.py describes them."""
         raise NotImplementedError
 
-    def params(self, simulator, layout, scenario, path, events):
-        return {"log": layout.simulation_log(scenario, simulator["name"], path),
+    def params(self, simulator, layout, scenario, path, events, seed):
+        return {"log": layout.simulation_log(scenario, simulator["name"], path, seed),
                 "compact": simulator["compact_file"],
-                "events": -1 if events is None else events}
+                "events": -1 if events is None else events,
+                "seed": seed}
 
     def add_tasks(self, graph):
         layout = graph.layout
         for simulator in self.simulators(graph):
             for scenario, path, source in graph.inputs:
-                task = graph.add(
-                    self.name, layout.simulation(scenario, simulator["name"], path),
-                    [source["key"]] if source else [], scenario=scenario,
-                    simulator=simulator["name"], name=layout.sample_name(path), inputs=[path],
-                    input_file=path,
-                    params=self.params(simulator, layout, scenario, path, graph.plan["events"]))
-                graph.simulations.append(task)
+                # Once with each of the scenario's seeds, or once with ddsim's own
+                for seed in graph.seeds.get(scenario, [None]):
+                    task = graph.add(
+                        self.name, layout.simulation(scenario, simulator["name"], path, seed),
+                        [source["key"]] if source else [], scenario=scenario,
+                        simulator=simulator["name"], name=layout.sample_name(path, seed),
+                        inputs=[path], input_file=path, seed=seed,
+                        params=self.params(simulator, layout, scenario, path,
+                                           graph.plan["events"], seed))
+                    graph.simulations.append(task)
+
+    @staticmethod
+    def seed_args(params):
+        """ddsim's seed for the simulation, if it has one of its own (otherwise
+        ddsim draws one, and writes it in the log)."""
+        seed = params.get("seed")
+        return [] if seed is None else ["--random.seed=%d" % seed]
 
     def command(self, task, compact, partial):
         raise NotImplementedError
@@ -77,10 +90,13 @@ class Simulate(Stage):
         cwd = os.path.join(source, "scripts")
 
         os.makedirs(folder, exist_ok=True)
+        seed = params.get("seed")
         with open(log, "w") as stream:
             for line in self.header(task) + [
                     "# input     %s" % task["inputs"][0],
                     "# output    %s, once ddsim succeeds" % output,
+                    "# seed      %s" % (seed if seed is not None
+                                        else "ddsim's own, chosen at random (see below)"),
                     "# started   %s on %s" % (process.now(), socket.gethostname()),
                     "# Key4hep   %s" % (os.environ.get("DDML_KEY4HEP_RELEASE") or "unknown"),
                     self.ddml_line(source),
@@ -151,9 +167,9 @@ class Geant4(Simulate):
         params = task["params"]
         # The command the models run, with the Geant4 steering file in place of
         # DDML's (it runs DDML's, leaving out the fast simulation)
-        return ["ddsim", "--steeringFile", GEANT4_STEERING, "--compactFile", compact,
-                "--inputFiles", task["inputs"][0], "--outputFile", partial,
-                "--numberOfEvents=%d" % params["events"]]
+        return (["ddsim", "--steeringFile", GEANT4_STEERING, "--compactFile", compact,
+                 "--inputFiles", task["inputs"][0], "--outputFile", partial,
+                 "--numberOfEvents=%d" % params["events"]] + self.seed_args(params))
 
     def header(self, task):
         return ["# ddml-bench geant4: Geant4 on %s" % task["scenario"]]
@@ -193,8 +209,8 @@ class Models(Simulate):
     def simulators(self, graph):
         return graph.plan["models"]
 
-    def params(self, simulator, layout, scenario, path, events):
-        params = Simulate.params(self, simulator, layout, scenario, path, events)
+    def params(self, simulator, layout, scenario, path, events, seed):
+        params = Simulate.params(self, simulator, layout, scenario, path, events, seed)
         params.update(presets=list(simulator["presets"]), model=simulator)
         return params
 
@@ -211,7 +227,7 @@ class Models(Simulate):
                  os.path.join(os.environ["DDML_SOURCE_DIR"], "scripts", "ddsim_steer.py"),
                  "--compactFile", compact] + presets
                 + ["--inputFiles", task["inputs"][0], "--outputFile", partial,
-                   "--numberOfEvents=%d" % params["events"]])
+                   "--numberOfEvents=%d" % params["events"]] + self.seed_args(params))
 
     def header(self, task):
         return ["# ddml-bench models: %s on %s" % (task["simulator"], task["scenario"])]

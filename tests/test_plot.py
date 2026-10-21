@@ -348,3 +348,128 @@ def test_without_settings_the_residuals_are_drawn_in_the_default_bins(figures, t
     assert figures[0].axes[0].get_xlim() == (-measure.MAX_RESIDUAL, measure.MAX_RESIDUAL)
     assert len(drawn_steps(figures[0].axes[0])[0]) == measure.RESIDUAL_BINS
     assert os.path.isfile(str(tmp_path / "intrinsic_angle_phi_top4__single_photon_n4000.png"))
+
+
+# ---------------------------------------------------------------------------
+# The di-photon separation: the mean number of reconstructed photons in bins
+# of the separation, with the spread over the seeds
+
+
+def di_photon_sample(told_apart, seed, energies=(20.0,), seeds=(1, 2, 3), n=3000):
+    """Of each event: its separation, uniform from 0 to 90 mm, its number of
+    reconstructed photons (two once the photons are further apart than
+    told_apart mm, one before, sometimes a third), its photons' energy, and its
+    seed; n events of each energy for each seed."""
+    rng = np.random.default_rng(seed)
+    columns = []
+    for energy in energies:
+        for simulation_seed in seeds:
+            separation = rng.uniform(0, 90, n)
+            two = rng.random(n) < 1 / (1 + np.exp(-(separation - told_apart) / 3))
+            photons = 1 + two + (rng.random(n) < 0.05)
+            columns.append((separation, photons, np.full(n, energy), np.full(n, simulation_seed)))
+    return [np.concatenate(parts) for parts in zip(*columns)]
+
+
+def test_the_mean_number_of_photons_and_its_spread_over_the_seeds():
+    edges = np.array([0.0, 10.0, 20.0, 30.0])
+    # Seed 1: 1, 2 photons in the first bin, 2 in the second; seed 2: 1 and 2;
+    # a third bin without events, one beyond the bins, and one without a separation
+    separation = np.array([1, 2, 15, 3, 15, 50, np.nan])
+    photons = np.array([1, 2, 2, 1, 2, 2, 2])
+    seeds = np.array([1, 1, 1, 2, 2, 2, 2])
+    points = plot.separation_points(separation, photons, seeds, edges)
+    assert points["seeds"] == [1, 2] and points["spread"]
+    np.testing.assert_allclose(points["mean"][:2], [(1.5 + 1.0) / 2, 2.0])
+    np.testing.assert_allclose(points["error"][:2], [np.std([1.5, 1.0], ddof=1), 0.0])
+    assert np.isnan(points["mean"][2]) and np.isnan(points["error"][2])
+    np.testing.assert_allclose(points["photons"][1], [3, 2, 0])
+    np.testing.assert_allclose(points["photons"][2], [1, 2, 0])
+    assert points["events"] == {1: 3, 2: 3} and points["outside"] == pytest.approx(1 / 6)
+
+    # With one seed, the uncertainty is the statistical one of the mean
+    points = plot.separation_points(separation[:3], photons[:3], seeds[:3], edges)
+    assert not points["spread"]
+    np.testing.assert_allclose(points["error"][:2], [np.std([1, 2]) / np.sqrt(2), 0.0])
+
+
+def test_the_metric_compares_the_photons_in_the_bins_seed_by_seed():
+    edges = np.linspace(0, 90, 19)
+    reference = plot.separation_points(*di_photon_sample(20, 1)[:2],
+                                       di_photon_sample(20, 1)[3], edges)
+    separation, photons, _, seeds = di_photon_sample(24, 2)
+    points = plot.separation_points(separation, photons, seeds, edges)
+    value, spread, pairs = plot.seed_metric(plot.jensen_shannon, reference, points)
+    values = [plot.jensen_shannon(reference["photons"][s], points["photons"][s]) for s in (1, 2, 3)]
+    assert pairs == 3
+    assert value == pytest.approx(np.mean(values)) and spread == pytest.approx(np.std(values, ddof=1))
+    # (the photons in each bin, not their mean per event)
+    assert values[0] == pytest.approx(plot.jensen_shannon(
+        np.histogram(separation[seeds == 1], edges, weights=photons[seeds == 1])[0],
+        reference["photons"][1]))
+    # A model of other seeds is paired with Geant4's in order
+    moved = plot.separation_points(separation, photons, seeds + 10, edges)
+    assert plot.seed_metric(plot.jensen_shannon, reference, moved) == (value, spread, 3)
+    # and with one pair the spread is unknown
+    single = plot.separation_points(separation[seeds == 1], photons[seeds == 1],
+                                    seeds[seeds == 1], edges)
+    value, spread, pairs = plot.seed_metric(plot.jensen_shannon, reference, single)
+    assert pairs == 1 and value == pytest.approx(values[0]) and np.isnan(spread)
+
+
+def test_a_separation_figure_for_each_energy(figures, tmp_path):
+    geant4, model = simulators()
+    measured = [(geant4,) + tuple(di_photon_sample(20, 1, energies=(20.0, 100.0))),
+                (model,) + tuple(di_photon_sample(24, 2, energies=(20.0, 100.0)))]
+    # A third simulator measured only at 20 GeV
+    other = types.SimpleNamespace(name="other", label="Other", color="#2a9a3a", linestyle=":")
+    measured.append((other,) + tuple(di_photon_sample(21, 3)))
+    settings = {"pdg": [22], "max_separation": 90, "n_bins": 18}
+    results, fits = plot.plot_separation("photon_separation", "di_photon", measured, geant4,
+                                         settings, str(tmp_path), "", ["png"])
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "photon_separation_100GeV__di_photon.png", "photon_separation_20GeV__di_photon.png"]
+    assert fits == []
+    assert [(r[0].name, r[1], r[2]) for r in results] == [
+        ("model", "20GeV", "JS"), ("other", "20GeV", "JS"), ("model", "100GeV", "JS")]
+
+    edges = np.linspace(0, 90, 19)
+    for figure, energy in zip(figures, (20.0, 100.0)):
+        top, bottom = figure.axes
+        assert top.get_ylabel() == "Mean reconstructed photons per event"
+        assert bottom.get_xlabel() == plot.SEPARATION_XLABEL
+        # Geant4's filled histogram and its outline, then each model's line:
+        # the mean over the seeds of each seed's mean number of photons
+        expected = []
+        for simulator, separation, photons, energies, seeds in measured:
+            chosen = energies == energy
+            if chosen.any():
+                expected.append(plot.separation_points(separation[chosen], photons[chosen],
+                                                       seeds[chosen], edges))
+        steps = drawn_steps(top)
+        assert len(steps) == len(expected) + 1
+        for values, points in zip(steps, [expected[0]] + expected):
+            np.testing.assert_allclose(values, points["mean"])
+        # and two photons, the target, as a line across
+        assert [line.get_ydata()[0] for line in top.lines] == [2]
+        labels = [text.get_text() for text in top.get_legend().get_texts()]
+        value, spread, _ = plot.seed_metric(plot.jensen_shannon, expected[0], expected[1])
+        assert labels[0] == "Geant4" and labels[1] == "Model (JS %.2e ± %.1e)" % (value,
+                                                                                    spread)
+        (result,) = [r for r in results if r[0] is model and r[1] == plot.energy_name(energy)]
+        assert result[3:] == (value, spread)
+        (note,) = [text.get_text() for text in top.texts]
+        assert note == ("di_photon, %g GeV photons\n3000 events × 3 seeds (Geant4)\n"
+                        "bands: the spread over the seeds" % energy)
+
+
+def test_the_seeds_of_the_events_come_from_their_files():
+    stored = {"s__n_events": np.array([2, 3]), "s__seeds": np.array([4, -1])}
+    simulator = types.SimpleNamespace(data=stored)
+    assert list(plot.event_seeds(simulator, "s", 5)) == [4, 4, -1, -1, -1]
+    # Measurements without the seeds, or of other events, have none
+    assert list(plot.event_seeds(types.SimpleNamespace(data={"s__n_events": np.array([5])}), "s",
+                                 5)) == [-1] * 5
+    assert list(plot.event_seeds(simulator, "s", 4)) == [-1] * 4
+    assert [plot.energy_name(e) for e in (20.0000004, 99.999, 12.5, 5)] == [
+        "20GeV", "100GeV", "12.5GeV", "5GeV"]

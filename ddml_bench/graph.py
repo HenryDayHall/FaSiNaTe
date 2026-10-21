@@ -195,7 +195,7 @@ def make_plan(simulators=(), scenarios=(), stages=(), events=None, force=(), inp
         "compact": compact,
         "ildconfig_dir": os.path.join(config["detector_configs"]["ildconfig"]["source_dir"],
                                       reconstruct.ILDCONFIG_PRODUCTION),
-        "particle_gun": [g["scenario"] for g in groups if g["type"] == "particle_gun"],
+        "particle_gun": [g["scenario"] for g in groups if INPUT_TYPES[g["type"]].particle_gun],
     }
 
     # The observables
@@ -254,6 +254,10 @@ class Graph(object):
         self.writers = {}  # output: key
         # What the stages make, for the stages after them
         self.inputs = []  # (scenario, input file, its generate task or None)
+        # The ddsim seeds each scenario's inputs are simulated with ([None]: once,
+        # with ddsim's own)
+        self.seeds = dict((group["scenario"], group.get("seeds") or [None])
+                          for group in plan["scenarios"])
         self.simulations = []  # simulation tasks
         self.reconstructions = {}  # (simulator, scenario): [reconstruction tasks]
         self.measuring = []  # observables tasks
@@ -265,14 +269,16 @@ class Graph(object):
             raise PlanError(str(error))
 
     def add(self, stage, output, needs, scenario=None, simulator=None, name=None, inputs=(),
-            input_file=None, params=None):
-        """Add a task; its key is <stage>:<output>, as only one task makes a file."""
+            input_file=None, params=None, seed=None):
+        """Add a task; its key is <stage>:<output>, as only one task makes a file.
+        seed is the ddsim seed of the simulation it is or is made from, if it
+        has one of its own (the scenario's simulation_seeds)."""
         key = "%s:%s" % (stage, output)
         if output in self.writers:
             raise PlanError("%s and %s would both write %s" % (self.writers[output], key, output))
         self.writers[output] = key
         task = {"key": key, "stage": stage, "scenario": scenario, "simulator": simulator,
-                "name": name, "inputs": list(inputs), "input_file": input_file,
+                "name": name, "seed": seed, "inputs": list(inputs), "input_file": input_file,
                 "output": output, "needs": list(needs), "params": params or {}}
         self.list.append(task)
         self.by_key[key] = task

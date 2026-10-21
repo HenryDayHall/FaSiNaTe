@@ -35,10 +35,21 @@ The observables known (the keys of `observables` in the configuration):
                         leaves out the peripheral hits that tilt the axis
                         (most_energetic()). The figures histogram the residuals
                         (ddml_bench/plot.py)
+  photon_separation     of an event of two incident photons (a di-photon
+                        scenario): their separation on the front face of the
+                        ECAL barrel, the distance between the points where their
+                        lines of flight cross it (separations_on_surface()), the
+                        mean of their energies, and the number of the event's
+                        reconstructed photons (its reconstructed particles in
+                        particle_collections of the PDG codes in pdg, [22]; all
+                        of them without pdg). The figures take the mean number
+                        of reconstructed photons in bins of the separation
 
 The incident particle is the first MC particle with generator status 1 (the
 particle gun's), from the MC truth collection: MCParticles, as ddsim names it in
-EDM4hep and the reconstruction passes it on, or MCParticle, its LCIO name. Each
+EDM4hep and the reconstruction passes it on, or MCParticle, its LCIO name (the
+separation takes both of an event that has exactly two, the photons of a
+di-photon event). Each
 profile is stored per input file of the scenario, as the sum over events of each
 bin's energy and of its square, with the number of events; the mean energy per
 event in a bin, and its statistical uncertainty, follow from those. The energy
@@ -61,8 +72,17 @@ file's events in turn. Keys, with "__" between the parts:
   intrinsic_angle__<scenario>__theta_true           [event] theta and phi of the incident
   intrinsic_angle__<scenario>__phi_true             particle's direction, degrees
   intrinsic_angle__<scenario>__settings             the settings, as JSON
+  photon_separation__<scenario>__separation         [event] separation of the two incident
+                                                    photons on the ECAL face, mm; NaN for
+                                                    an event without exactly two, or with
+                                                    one not heading into the face
+  photon_separation__<scenario>__energy             [event] mean energy of the two, GeV
+  photon_separation__<scenario>__n_photons          [event] reconstructed photons
+  photon_separation__<scenario>__settings           the settings, as JSON
   <scenario>__files                                 the reconstructed files, relative
                                                     to paths.data_dir
+  <scenario>__seeds                                 [file] the ddsim seed each was
+                                                    simulated with, -1 if ddsim chose it
   <scenario>__n_events                              [file] events used
   <scenario>__n_no_primary                          [file] events left out
   <scenario>__true_energy                           [file] mean incident energy, GeV
@@ -352,6 +372,124 @@ def measure_angles(observable, settings, branches, start, stop, primary, hits):
     return values
 
 
+# The separation of the two photons of a di-photon event on the front face of
+# the ECAL barrel, against the number of reconstructed photons
+
+# The front face of the ECAL barrel when the settings don't say: the distance
+# of the planes of its staves from the beam axis (mm), where the guns start
+# their photons in ILD_l5_o1_v02, and the number of staves, one of them the
+# top one, centred at phi = 90 degrees (ILD's octagon)
+SURFACE_DISTANCE = 1804.7
+BARREL_SYMMETRY = 8
+# The separation's bins in the figures when the settings don't say: from 0 to
+# 90 mm in 18 bins of 5 mm, as in the earlier di-photon analysis
+MAX_SEPARATION = 90.0
+SEPARATION_BINS = 18
+
+
+def surface(observable, settings):
+    """(distance, staves) of the ECAL barrel's front face that the separation is
+    measured on: surface_distance and barrel_symmetry, or their defaults."""
+    distance = settings.get("surface_distance")
+    staves = settings.get("barrel_symmetry")
+    distance = SURFACE_DISTANCE if distance is None else distance
+    staves = BARREL_SYMMETRY if staves is None else staves
+    if isinstance(distance, bool) or not isinstance(distance, (int, float)) or not distance > 0:
+        raise ObservableError("observables.%s.surface_distance should be the distance of the "
+                              "front face of the ECAL barrel's staves from the beam axis, in mm "
+                              "(%g in ILD_l5_o1_v02)" % (observable, SURFACE_DISTANCE))
+    if isinstance(staves, bool) or not isinstance(staves, int) or staves < 3:
+        raise ObservableError("observables.%s.barrel_symmetry should be the number of staves of "
+                              "the ECAL barrel (%d in ILD), at least 3" % (observable,
+                                                                           BARREL_SYMMETRY))
+    return float(distance), staves
+
+
+def separation_binning(observable, settings):
+    """(0, max_separation, n_bins): how the figures bin the separation (mm),
+    MAX_SEPARATION and SEPARATION_BINS if not given."""
+    given = dict(settings)
+    for key, default in (("max_separation", MAX_SEPARATION), ("n_bins", SEPARATION_BINS)):
+        if given.get(key) is None:
+            given[key] = default
+    limits = _numbers(given, "max_separation", observable)
+    n_bins = _numbers(given, "n_bins", observable, int)
+    if len(limits) != 1 or len(n_bins) != 1 or not limits[0] > 0 or n_bins[0] < 1:
+        raise ObservableError("observables.%s: max_separation and n_bins should be a positive "
+                              "number each" % observable)
+    return (0.0, limits[0], n_bins[0])
+
+
+def check_separation(observable, settings):
+    """The settings of the photon separation."""
+    check_particles(observable, settings)
+    surface(observable, settings)
+    separation_binning(observable, settings)
+
+
+def separation_items(observable, settings):
+    return ("separation", "energy", "n_photons")
+
+
+def separations_on_surface(vertex, momentum, distance, staves):
+    """The separation of each pair of photons ([event, photon, xyz], two
+    photons each) on the front face of the ECAL barrel: the distance between
+    the points where their lines of flight (from their vertices, along their
+    momenta) cross the plane of the face of the stave they head into. The
+    barrel has that many staves, one centred at phi = 90 degrees, their planes
+    at that distance from the beam axis; the pair's stave is the one nearest in
+    phi to the sum of the two photons' directions. A photon that starts on the
+    face crosses it where it starts. NaN for a pair with a photon heading away
+    from the face (or without two photons: NaN vertices or momenta)."""
+    import numpy as np
+    with np.errstate(divide="ignore", invalid="ignore"):
+        direction = momentum / np.linalg.norm(momentum, axis=2, keepdims=True)
+        total = direction.sum(axis=1)
+        step = 2 * np.pi / staves
+        phi = np.arctan2(total[:, 1], total[:, 0])
+        stave = np.pi / 2 + step * np.round((phi - np.pi / 2) / step)
+        normal = np.stack([np.cos(stave), np.sin(stave), np.zeros_like(stave)], axis=1)
+        along = np.einsum("epc,ec->ep", direction, normal)
+        reach = (distance - np.einsum("epc,ec->ep", vertex, normal)) / along
+        crossing = vertex + reach[:, :, None] * direction
+        separation = np.linalg.norm(crossing[:, 0] - crossing[:, 1], axis=1)
+    heads_in = np.all(along > 0, axis=1)
+    return np.where(heads_in & np.isfinite(separation), separation, np.nan)
+
+
+def read_incident_pairs(branches, start, stop):
+    """Vertices and momenta [event, photon, xyz] and masses [event, photon] of
+    the MC particles of generator status 1 of each event that has two of them,
+    the incident photons of a di-photon event; NaN for the other events."""
+    import awkward as ak
+    import numpy as np
+    mc = branches.collection_with(MC_COLLECTIONS, "generatorStatus")
+    mask = branches.jagged(mc + ".generatorStatus", start, stop) == 1
+    two = ak.to_numpy(ak.sum(mask, axis=1)) == 2
+
+    def pair(name):
+        values = ak.pad_none(branches.jagged(name, start, stop)[mask], 2, axis=1, clip=True)
+        values = ak.to_numpy(ak.fill_none(values, np.nan)).astype(np.float64).reshape(-1, 2)
+        values[~two] = np.nan
+        return values
+
+    vertex = np.stack([pair(mc + ".vertex." + c) for c in "xyz"], axis=2)
+    momentum = np.stack([pair(mc + ".momentum." + c) for c in "xyz"], axis=2)
+    return vertex, momentum, pair(mc + ".mass")
+
+
+def measure_separation(observable, settings, branches, start, stop, primary, hits):
+    """The separation of each event's two incident photons on the ECAL face,
+    the mean of their energies, and the number of its reconstructed photons."""
+    import numpy as np
+    vertex, momentum, mass = read_incident_pairs(branches, start, stop)
+    distance, staves = surface(observable, settings)
+    energy = np.sqrt(np.sum(momentum ** 2, axis=2) + np.nan_to_num(mass) ** 2).mean(axis=1)
+    return {"separation": separations_on_surface(vertex, momentum, distance, staves),
+            "energy": energy,
+            "n_photons": count_reconstructed(branches, settings, observable, start, stop)}
+
+
 # The observables of each event as a whole, stored per event rather than in
 # bins, as the figures need every event: observable: (what checks its
 # settings, what is stored of each event (given the settings), and what
@@ -359,6 +497,7 @@ def measure_angles(observable, settings, branches, start, stop, primary, hits):
 PER_EVENT = {
     "energy": (check_particles, energy_items, measure_energy),
     "intrinsic_angle": (check_angles, angle_items, measure_angles),
+    "photon_separation": (check_separation, separation_items, measure_separation),
 }
 
 
@@ -369,7 +508,8 @@ def event_items(name, settings):
 
 # The settings of each observable that only change its figures, not what is
 # measured, so changing them only needs plotting again (./plot_observables.sh)
-DRAWING = {"intrinsic_angle": ("max_residual", "n_bins")}
+DRAWING = {"intrinsic_angle": ("max_residual", "n_bins"),
+           "photon_separation": ("max_separation", "n_bins")}
 
 
 def observable_settings(name, settings):
@@ -585,14 +725,14 @@ def read_hits(branches, collections, start, stop, need_cell_id):
 PDG_MEMBERS = ("PDG", "type")
 
 
-def read_reconstructed_energy(branches, settings, observable, start, stop):
-    """The reconstructed energy of each event: the sum of the energies of its
-    reconstructed particles in the particle collections, or of those whose PDG
-    code (either sign) is in pdg, if given. 0 for an event with none."""
+def selected_particles(branches, settings, observable, start, stop):
+    """The energies of each event's reconstructed particles, jagged, for each of
+    the particle collections: all of them, or those whose PDG code (either
+    sign) is in pdg, if given."""
     import awkward as ak
     import numpy as np
     codes = np.abs(np.array(settings.get("pdg") or [], dtype=np.int64))
-    total = np.zeros(stop - start)
+    selected = []
     for collection in settings["particle_collections"]:
         name = collection + ".energy"
         if name not in branches.keys:
@@ -611,8 +751,31 @@ def read_reconstructed_energy(branches, settings, observable, start, stop):
             pdg = branches.jagged("%s.%s" % (collection, member), start, stop)
             keep = np.isin(np.abs(ak.to_numpy(ak.flatten(pdg)).astype(np.int64)), codes)
             energy = energy[ak.unflatten(keep, ak.num(pdg))]
+        selected.append(energy)
+    return selected
+
+
+def read_reconstructed_energy(branches, settings, observable, start, stop):
+    """The reconstructed energy of each event: the sum of the energies of its
+    reconstructed particles in the particle collections, or of those whose PDG
+    code (either sign) is in pdg, if given. 0 for an event with none."""
+    import awkward as ak
+    import numpy as np
+    total = np.zeros(stop - start)
+    for energy in selected_particles(branches, settings, observable, start, stop):
         total += ak.to_numpy(ak.sum(energy, axis=1))
     return total
+
+
+def count_reconstructed(branches, settings, observable, start, stop):
+    """The number of each event's reconstructed particles in the particle
+    collections, or of those whose PDG code (either sign) is in pdg, if given."""
+    import awkward as ak
+    import numpy as np
+    count = np.zeros(stop - start, dtype=np.int64)
+    for energy in selected_particles(branches, settings, observable, start, stop):
+        count += ak.to_numpy(ak.num(energy, axis=1)).astype(np.int64)
+    return count
 
 
 def accumulate(edges, values, energy, event, n_events, keep_events):
@@ -677,7 +840,7 @@ def is_up_to_date(path, profiles, files, relative=None):
                 if str(data[profile_key(name, scenario, profile, "settings")]) != settings_json:
                     return False, "the settings of %s changed" % name
             for scenario, paths in files.items():
-                for what in ("files", "n_events", "n_no_primary", "true_energy"):
+                for what in ("files", "seeds", "n_events", "n_no_primary", "true_energy"):
                     if SEP.join((scenario, what)) not in keys:
                         return False, "%s has no %s" % (os.path.basename(path),
                                                        SEP.join((scenario, what)))
@@ -795,10 +958,12 @@ def measure_file(path, observables, profiles, simulator, cache):
     return sums, events, n_events, n_no_primary, mean_energy
 
 
-def compute_simulator(observables, simulator, files, profiles, out_path, relative=None):
+def compute_simulator(observables, simulator, files, profiles, out_path, relative=None,
+                      seeds=None):
     """Measure one simulator: every profile, and observable stored per event
     (from wanted()), on its reconstructed files ({scenario: [path]}), into
-    out_path. The files are recorded as relative(path)."""
+    out_path. The files are recorded as relative(path), with the ddsim seed
+    each was simulated with ({scenario: [seed]}, None where ddsim chose it)."""
     import numpy as np
     arrays = {
         "meta__simulator": np.array(simulator["name"]),
@@ -835,6 +1000,12 @@ def compute_simulator(observables, simulator, files, profiles, out_path, relativ
             energies.append(energy)
         arrays[SEP.join((scenario, "files"))] = np.array(
             [relative(p) for p in paths] if relative else paths)
+        file_seeds = list((seeds or {}).get(scenario) or [None] * len(paths))
+        if len(file_seeds) != len(paths):
+            raise ObservableError("%d seeds for the %d reconstructed files of %s"
+                                  % (len(file_seeds), len(paths), scenario))
+        arrays[SEP.join((scenario, "seeds"))] = np.array(
+            [-1 if seed is None else seed for seed in file_seeds], dtype=np.int64)
         arrays[SEP.join((scenario, "n_events"))] = np.array(counts, dtype=np.int64)
         arrays[SEP.join((scenario, "n_no_primary"))] = np.array(no_primary, dtype=np.int64)
         arrays[SEP.join((scenario, "true_energy"))] = np.array(energies)

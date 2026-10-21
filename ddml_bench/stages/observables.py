@@ -28,19 +28,22 @@ class Observables(Stage):
         settings = plan["observables"]
         for simulator in [plan["reference"]] + plan["models"]:
             name = simulator["name"]
-            # The reconstructions of every input of the scenarios measured
-            files, needs = {}, []
+            # The reconstructions of every input of the scenarios measured, with
+            # the ddsim seed of each (None if ddsim chose it)
+            files, seeds, needs = {}, {}, []
             for scenario in settings["scenarios"]:
                 tasks = [task for task in graph.reconstructions.get((name, scenario), [])
                          if task["input_file"] is not None]
                 files[scenario] = [task["output"] for task in tasks]
+                seeds[scenario] = [task["seed"] for task in tasks]
                 needs += [task["key"] for task in tasks]
             style = dict((key, simulator[key])
                          for key in ("name", "label", "color", "linestyle", "compact_file"))
             task = graph.add(self.name, graph.layout.observables(name), needs, simulator=name,
                              name=name, inputs=[p for s in files for p in files[s]],
                              params={"observables": settings["observables"], "files": files,
-                                     "simulator": style, "data_dir": plan["data_dir"]})
+                                     "seeds": seeds, "simulator": style,
+                                     "data_dir": plan["data_dir"]})
             graph.measuring.append(task)
 
     def current(self, task):
@@ -62,7 +65,8 @@ class Observables(Stage):
         try:
             measure.compute_simulator(params["observables"], params["simulator"],
                                       params["files"], measure.wanted(params["observables"]),
-                                      task["output"], Layout(params["data_dir"]).relative)
+                                      task["output"], Layout(params["data_dir"]).relative,
+                                      seeds=params.get("seeds"))
         except (measure.ObservableError, OSError) as error:
             raise StageError("measuring %s failed: %s" % (task["simulator"], error))
         except Exception as error:  # e.g. a file uproot can't read

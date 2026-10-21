@@ -6,11 +6,15 @@ import csv
 import json
 import os
 
+import h5py
 import numpy as np
 
 INPUTS = ["p22_th43-137_ph79-109_en20_seed0_ip_surface",
           "p22_th43-137_ph79-109_en80_seed1_ip_surface"]
 SIMULATORS = ["caloclouds3", "geant4"]
+# The di_photon scenario's input, simulated with the seeds 1 and 2
+DI_PHOTON_INPUT = "diphoton_en20_sep90_x0_z70_r10_seed0"
+DI_PHOTON_SIMULATIONS = [DI_PHOTON_INPUT + "_simseed1", DI_PHOTON_INPUT + "_simseed2"]
 
 
 def read_metrics(path):
@@ -20,12 +24,12 @@ def read_metrics(path):
 
 def test_pipeline_runs_every_stage(bench):
     status, output = bench.run("pipeline.sh", "--dry-run")
-    assert "would run 13 task(s)" in output, output
+    assert "would run 22 task(s)" in output, output
 
     status, output = bench.run("pipeline.sh")
-    assert "made 13 of 13" in output, output
+    assert "made 22 of 22" in output, output
     assert bench.files("input_single_particle_gun") == sorted(
-        name + ending for name in INPUTS for ending in (".h5", ".slcio"))
+        name + ending for name in INPUTS + [DI_PHOTON_INPUT] for ending in (".h5", ".slcio"))
     assert bench.files("sim_output", "single_photon", "geant4") == sorted(
         name + ending for name in INPUTS for ending in (".edm4hep.root", ".log"))
     assert bench.files("sim_output", "single_photon", "caloclouds3") == sorted(
@@ -34,6 +38,11 @@ def test_pipeline_runs_every_stage(bench):
         assert bench.files("rec_output", "single_photon", simulator) == sorted(
             name + ending for name in INPUTS
             for ending in ("_AIDA.root", "_PfoAnalysis.root", "_REC.edm4hep.root", ".log"))
+    # di_photon's input once with each of its seeds
+    assert bench.files("sim_output", "di_photon", "geant4") == sorted(
+        name + ending for name in DI_PHOTON_SIMULATIONS for ending in (".edm4hep.root", ".log"))
+    assert bench.files("sim_output", "di_photon", "caloclouds3") == sorted(
+        name + ending for name in DI_PHOTON_SIMULATIONS for ending in (".root", ".log"))
     assert bench.files("observables") == ["caloclouds3.npz", "geant4.npz", "plots"]
     rows = read_metrics(bench.path("observables", "plots", "metrics.csv"))
     assert sorted({row["simulator"] for row in rows}) == ["caloclouds3"]
@@ -41,11 +50,18 @@ def test_pipeline_runs_every_stage(bench):
         ("radial_profile", "r100"), ("radial_profile", "r30"),
         ("longitudinal_profile", "layers"), ("energy", "linearity"), ("energy", "resolution"),
         ("intrinsic_angle", "theta_all"), ("intrinsic_angle", "phi_all"),
-        ("intrinsic_angle", "theta_top4"), ("intrinsic_angle", "phi_top4")}
+        ("intrinsic_angle", "theta_top4"), ("intrinsic_angle", "phi_top4"),
+        ("photon_separation", "20GeV")}
     assert all(float(row["value"]) > 0 for row in rows)
+    # Only the separation's metric has an uncertainty, from its two seeds
+    for row in rows:
+        if row["observable"] == "photon_separation":
+            assert row["metric"] == "JS" and float(row["uncertainty"]) > 0, row
+        else:
+            assert row["uncertainty"] == "", row
     for figure in ("radial_profile_r30__single_photon", "energy_linearity__single_photon",
                    "energy_resolution__single_photon", "intrinsic_angle_theta_all__single_photon",
-                   "intrinsic_angle_phi_top4__single_photon"):
+                   "intrinsic_angle_phi_top4__single_photon", "photon_separation_20GeV__di_photon"):
         assert os.path.isfile(bench.path("observables", "plots", figure + ".png")), figure
     # The two energies fix the straight line of the linearity, but not the
     # three parameters of the resolution's fit
@@ -84,14 +100,51 @@ def test_pipeline_runs_every_stage(bench):
         np.testing.assert_allclose(data["intrinsic_angle__single_photon__phi_true"],
                                    np.degrees(np.arctan2(momenta[:, 1], momenta[:, 0])), atol=1e-4)
 
-    # The simulations ran as the stages run ddsim
+    # The separation of di_photon's pairs, from the MC truth of the
+    # reconstructed events, against the number of reconstructed photons
+    with h5py.File(bench.path("input_single_particle_gun", DI_PHOTON_INPUT + ".h5"), "r") as h5:
+        generated = h5["separation"][:]
+    assert generated.shape == (30,)
+    for simulator in SIMULATORS:
+        with np.load(bench.path("observables", simulator + ".npz")) as data:
+            assert [str(f) for f in data["di_photon__files"]] == [
+                "rec_output/di_photon/%s/%s_REC.edm4hep.root" % (simulator, name)
+                for name in DI_PHOTON_SIMULATIONS]
+            assert list(data["di_photon__seeds"]) == [1, 2]
+            assert list(data["single_photon__seeds"]) == [-1, -1]
+            assert list(data["di_photon__n_events"]) == [30, 30]
+            # The photons start on the ECAL face, so they are separated on it
+            # as the gun placed them, the same events for each seed
+            np.testing.assert_allclose(data["photon_separation__di_photon__separation"],
+                                       np.tile(generated, 2), rtol=1e-9)
+            np.testing.assert_allclose(data["photon_separation__di_photon__energy"], 20,
+                                       rtol=1e-5)
+            photons = data["photon_separation__di_photon__n_photons"]
+            separation = data["photon_separation__di_photon__separation"]
+            assert set(photons) <= {1, 2, 3}
+            # (the seeded input has 3 pairs closer than 15 mm, and 19 further than 40)
+            assert photons[separation > 40].mean() > photons[separation < 15].mean()
+
+    # The simulations ran as the stages run ddsim, di_photon's with their seeds
     with open(bench.path("sim_output", "single_photon", "caloclouds3",
                          INPUTS[0] + ".root")) as stream:
         simulation = json.load(stream)
     assert simulation["simulator"] == "CC3_BARREL_PY_INTERFACE"
-    assert len(simulation["events"]) == 6
+    assert len(simulation["events"]) == 6 and simulation["seed"] is None
     log = open(bench.path("sim_output", "single_photon", "geant4", INPUTS[0] + ".log")).read()
     assert "ddsim_steer_geant4.py" in log and "# finished" in log
+    assert "--random.seed" not in log and "# seed      ddsim's own" in log
+    for seed, name in zip((1, 2), DI_PHOTON_SIMULATIONS):
+        with open(bench.path("sim_output", "di_photon", "caloclouds3", name + ".root")) as stream:
+            simulation = json.load(stream)
+        assert simulation["seed"] == seed and len(simulation["events"]) == 30
+        assert all(len(event["particles"]) == 2 for event in simulation["events"])
+        log = open(bench.path("sim_output", "di_photon", "geant4", name + ".log")).read()
+        assert "--random.seed=%d" % seed in log and "# seed      %d\n" % seed in log
+    # and their reconstruction is told they are a particle gun's
+    log = open(bench.path("rec_output", "di_photon", "geant4",
+                          DI_PHOTON_SIMULATIONS[0] + ".log")).read()
+    assert "--usingParticleGun" in log
 
     # Everything is done, so a second run has nothing to do
     status, output = bench.run("pipeline.sh")
@@ -109,7 +162,7 @@ def test_pipeline_runs_every_stage(bench):
 
     # Remaking the reconstructions remakes what is made from them, and only that
     status, output = bench.run("pipeline.sh", "--dry-run", "-f", "reconstruct")
-    assert "would run 7 task(s)" in output, output
+    assert "would run 11 task(s)" in output, output
     assert "(--force reconstruct)" in output
     assert "(the reconstruction of the geant4 simulation of %s is made again)" % INPUTS[0] \
         in output
@@ -131,11 +184,15 @@ def test_stage_scripts_keep_one_sample_through_every_stage(bench):
         assert bench.files("rec_output", "single_photon", simulator) == sorted(
             name + ending for name in names
             for ending in ("_AIDA.root", "_PfoAnalysis.root", "_REC.edm4hep.root", ".log"))
+    assert bench.files("sim_output", "di_photon", "caloclouds3") == sorted(
+        "%s_n3_simseed%d%s" % (DI_PHOTON_INPUT, seed, ending) for seed in (1, 2)
+        for ending in (".root", ".log"))
     assert bench.files("observables") == ["caloclouds3_n3.npz", "geant4_n3.npz", "plots"]
     for name in ("metrics_n3.csv", "fits_n3.csv", "energy_resolution__single_photon_n3.png"):
         assert name in bench.files("observables", "plots"), name
     with np.load(bench.path("observables", "caloclouds3_n3.npz")) as data:
         assert list(data["single_photon__n_events"]) == [3, 3]
+        assert list(data["di_photon__n_events"]) == [3, 3]
     # The reconstruction ran on the whole test simulation, of 3 events
     log = open(bench.path("rec_output", "single_photon", "geant4", names[0] + ".log")).read()
     assert "--num-events=-1" in log and "--usingParticleGun" in log
@@ -144,14 +201,14 @@ def test_stage_scripts_keep_one_sample_through_every_stage(bench):
     status, output = bench.run("pipeline.sh", "--dry-run", "-n", "3")
     assert "everything selected is done" in output, output
     status, output = bench.run("pipeline.sh", "--dry-run")
-    assert "would run 11 task(s)" in output, output
+    assert "would run 19 task(s)" in output, output
 
 
 def test_a_failure_stops_only_what_needs_it(bench):
     bench.fail_ddsim("geant4 *en80*")
     status, output = bench.run("pipeline.sh", check=False)
     assert status == 1, output
-    assert "made 9 of 13" in output, output
+    assert "made 18 of 22" in output, output
     log = bench.path("sim_output", "single_photon", "geant4", INPUTS[1] + ".log")
     assert "# FAILED" in open(log).read()
     # Nothing half made is left, and only the Geant4 simulation of en80 is missing

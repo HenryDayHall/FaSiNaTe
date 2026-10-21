@@ -161,6 +161,38 @@ scenarios:
       distribution: surface
       # The i-th energy uses seed + i, so the samples are independent.
       seed: 0
+    # Each input is simulated once, with a seed ddsim chooses. List ddsim
+    # seeds here (e.g. [1, 2, 3]) to simulate each input once with each
+    # instead, as di_photon does.
+    simulation_seeds: null
+  # Pairs of photons of the same energy from the IP into the top stave of the
+  # ECAL barrel, with their separation on its front face uniform from 0 to
+  # 90 mm (the paper's di-photon dataset). The paper's 5 GeV set waits for a
+  # model trigger below 10 GeV: CaloClouds3's preset leaves photons below
+  # 10 GeV to Geant4.
+  di_photon:
+    input:
+      # ILD_Di_Photon_Gun.py, run once per energy, the other keys its options
+      type: di_photon_gun
+      # GeV, each photon of a pair; a file each.
+      energies: [20, 100]
+      # Per energy.
+      n_events: 15000
+      # Where the pairs start on the front face of the stave (mm), as in the
+      # earlier di-photon generator: the pair's midpoint uniform over a disc
+      # of centre_radius about (centre_x, centre_z), the separation uniform
+      # from 0 to max_separation, and the line between the two photons at a
+      # random angle. Each photon flies along the line from the IP through
+      # where it starts.
+      max_separation: 90
+      centre_radius: 10
+      centre_x: 0
+      centre_z: 70
+      # The i-th energy uses seed + i, so the samples are independent.
+      seed: 0
+    # Each input is simulated once with each of these ddsim seeds, so that the
+    # figures can show the spread over them, and the metric its uncertainty.
+    simulation_seeds: [1, 2, 3]
 
 # Measured on the reconstructed events of each simulator by
 # ./observables_from_reconstruction.sh, which writes the numbers each plot
@@ -240,6 +272,31 @@ observables:
     max_residual: [20, 5]
     n_bins: 100
     # How it is compared to Geant4, as in the paper's summary table.
+    metric: jensen_shannon
+  # The number of reconstructed photons of each di-photon event, against the
+  # separation of its two photons on the front face of the ECAL barrel (the
+  # paper's di-photon benchmark). The figures show, for each energy of the
+  # photons, the mean number of reconstructed photons per event in bins of the
+  # separation, with the spread over the simulation seeds as the band.
+  photon_separation:
+    scenarios: [di_photon]
+    # The reconstructed particles counted: PandoraPFA's photons.
+    particle_collections: [PandoraPFOs]
+    pdg: [22]
+    # The front face of the ECAL barrel, where the separation is measured: the
+    # distance of its staves' planes from the beam axis (mm), and the number
+    # of staves, one of them centred at phi = 90 degrees. The separation is the
+    # distance between the points where the two photons' lines of flight cross
+    # the face, from the MC truth of the reconstructed events (MCParticles).
+    surface_distance: 1804.7
+    barrel_symmetry: 8
+    # How the figures bin the separation: from 0 to max_separation mm in
+    # n_bins bins. Changing them needs no measuring again, only plotting.
+    max_separation: 90
+    n_bins: 18
+    # How it is compared to Geant4: the Jensen-Shannon divergence of the
+    # numbers of reconstructed photons in the bins, seed by seed, as the mean
+    # over the seeds with their spread as its uncertainty.
     metric: jensen_shannon
 
 # The slurm jobs of ./slurm_pipeline.sh, which runs every stage of the pipeline

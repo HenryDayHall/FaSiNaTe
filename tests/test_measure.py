@@ -124,7 +124,7 @@ def test_the_energy_settings_are_checked():
     with pytest.raises(measure.ObservableError) as error:
         measure.check_observables({"observables": {"energy_resolution": {"scenarios": ["s"]}}})
     assert str(error.value).endswith(
-        "radial_profile, longitudinal_profile, energy, intrinsic_angle")
+        "radial_profile, longitudinal_profile, energy, intrinsic_angle, photon_separation")
 
 
 # ---------------------------------------------------------------------------
@@ -370,4 +370,158 @@ def test_the_intrinsic_angle_settings_are_checked():
             ({"n_bins": [100, 50, 20]}, "or one for each of hit_fractions")):
         with pytest.raises(measure.ObservableError) as error:
             configured_angles(**settings)
+        assert message in str(error.value), (settings, str(error.value))
+
+
+# ---------------------------------------------------------------------------
+# The di-photon separation: of the two incident photons, on the front face of
+# the ECAL barrel, against the number of reconstructed photons
+
+FACE = 1804.7
+
+
+def on_face(x, z, stave_phi=90.0):
+    """A point on the front face of the stave centred at stave_phi (degrees):
+    x along the face, across the beam, and z along it."""
+    phi = np.radians(stave_phi)
+    normal = np.array([np.cos(phi), np.sin(phi), 0.0])
+    along = np.array([np.sin(phi), -np.cos(phi), 0.0])
+    return FACE * normal + x * along + np.array([0.0, 0.0, z])
+
+
+def from_ip(point, energy=20.0, start=None):
+    """An incident photon flying from the IP through the point, starting there
+    (or at start): (generator status, vertex, momentum)."""
+    point = np.asarray(point, dtype=float)
+    return (1, point if start is None else np.asarray(start, dtype=float),
+            energy * point / np.linalg.norm(point))
+
+
+def write_pairs(path, events):
+    """A reconstructed file of events, each ([(generator status, vertex,
+    momentum)] of its MC particles, [PDG code] of its reconstructed particles)."""
+    import awkward as ak
+    import uproot
+    columns = {"MCParticles.generatorStatus": [[s for s, _, _ in mc] for mc, _ in events],
+               "MCParticles.mass": [[0.0] * len(mc) for mc, _ in events],
+               "PandoraPFOs.energy": [[10.0] * len(pfos) for _, pfos in events],
+               "PandoraPFOs.PDG": [list(pfos) for _, pfos in events]}
+    for i, c in enumerate("xyz"):
+        columns["MCParticles.vertex." + c] = [[float(v[i]) for _, v, _ in mc] for mc, _ in events]
+        columns["MCParticles.momentum." + c] = [[float(p[i]) for _, _, p in mc]
+                                                for mc, _ in events]
+    types = {"MCParticles.generatorStatus": np.int32, "PandoraPFOs.PDG": np.int32,
+             "PandoraPFOs.energy": np.float32}
+    arrays = dict((name, ak.values_astype(ak.Array(values), types.get(name, np.float64)))
+                  for name, values in columns.items())
+    with uproot.recreate(path) as output:
+        output.mktree("events", dict((name, array.type) for name, array in arrays.items()))
+        output["events"].extend(arrays)
+    return path
+
+
+def configured_separation(**separation):
+    settings = dict({"scenarios": ["s"], "particle_collections": ["PandoraPFOs"], "pdg": [22]},
+                    **separation)
+    return measure.check_observables({"observables": {"photon_separation": settings}})[0]
+
+
+@pytest.fixture
+def pairs_file(tmp_path):
+    secondary = (0, on_face(5.0, 75.0), np.array([0.0, 0.1, 0.0]))
+    return write_pairs(str(tmp_path / "pairs_REC.edm4hep.root"), [
+        # Two photons starting on the face, 30 mm apart, reconstructed as two
+        # photons and a neutron, with a secondary of the simulation
+        ([from_ip(on_face(-15.0, 70.0)), from_ip(on_face(15.0, 70.0)), secondary],
+         [22, 22, 2112]),
+        # Two starting at the IP, which reach the face 40 mm apart, as one
+        ([from_ip(on_face(0.0, 50.0), start=(0, 0, 0)),
+          from_ip(on_face(0.0, 90.0), start=(0, 0, 0))], [22]),
+        # On the stave at phi = 0 (x = 1804.7), 12 mm apart, of 100 GeV
+        ([from_ip(on_face(-6.0, 0.0, 0.0), 100.0), from_ip(on_face(6.0, 0.0, 0.0), 100.0)],
+         [22, 22, 22]),
+        # One heading away from the face; then only one incident photon; then three
+        ([from_ip(on_face(0.0, 70.0)), (1, on_face(10.0, 70.0), np.array([0.0, -20.0, 0.0]))],
+         [22]),
+        ([from_ip(on_face(0.0, 70.0))], [22, 22]),
+        ([from_ip(on_face(0.0, 70.0)), from_ip(on_face(9.0, 70.0)), from_ip(on_face(18, 70.0))],
+         []),
+    ])
+
+
+def test_the_separation_is_of_the_two_photons_on_the_ecal_face(pairs_file, tmp_path):
+    data = measured(configured_separation(), pairs_file, str(tmp_path / "geant4.npz"))
+    key = "photon_separation__s__"
+    assert sorted(k[len(key):] for k in data if k.startswith(key)) == [
+        "energy", "n_photons", "separation", "settings"]
+    separation = data[key + "separation"]
+    np.testing.assert_allclose(separation[:3], [30.0, 40.0, 12.0], rtol=1e-9)
+    # Without two photons heading into the face, there is none
+    assert np.isnan(separation[3:]).all()
+    np.testing.assert_allclose(data[key + "energy"][:3], [20.0, 20.0, 100.0])
+    # the photons (PDG 22) among the reconstructed particles
+    assert list(data[key + "n_photons"]) == [2, 1, 3, 1, 2, 0]
+    assert list(data["s__n_events"]) == [6] and list(data["s__seeds"]) == [-1]
+
+
+def test_the_separation_crosses_the_face_of_the_stave_the_pair_heads_into():
+    """Photons from the IP crossing the face at known points, on each of the
+    eight staves, whether they start there or at the IP."""
+    for stave_phi in np.arange(0, 360, 45.0):
+        points = np.array([[on_face(-20.0, 30.0, stave_phi), on_face(10.0, 70.0, stave_phi)]])
+        expected = np.linalg.norm(points[0, 0] - points[0, 1])
+        momentum = 50 * points / np.linalg.norm(points, axis=2, keepdims=True)
+        for vertex in (points, np.zeros_like(points), 0.5 * points):
+            separation = measure.separations_on_surface(vertex, momentum, FACE, 8)
+            np.testing.assert_allclose(separation, [expected], rtol=1e-12)
+    # A pair that isn't a pair (NaN) has none
+    assert np.isnan(measure.separations_on_surface(np.full((1, 2, 3), np.nan),
+                                                   np.full((1, 2, 3), np.nan), FACE, 8)).all()
+
+
+def test_drawing_the_separation_differently_needs_no_measuring_again(pairs_file, tmp_path):
+    out = str(tmp_path / "geant4.npz")
+    measured(configured_separation(), pairs_file, out)
+    files = {"s": [pairs_file]}
+    for drawn in ({"max_separation": 60}, {"n_bins": 30}, {"metric": "l1"}):
+        assert measure.is_up_to_date(out, measure.wanted(configured_separation(**drawn)),
+                                     files) == (True, ""), drawn
+    assert measure.is_up_to_date(out, measure.wanted(configured_separation(surface_distance=1460)),
+                                 files) == (False, "the settings of photon_separation changed")
+    # Measurements made before the seeds were recorded lack them
+    with np.load(out) as data:
+        arrays = dict((key, data[key]) for key in data.files if key != "s__seeds")
+    np.savez_compressed(out, **arrays)
+    assert measure.is_up_to_date(out, measure.wanted(configured_separation()), files) == (
+        False, "geant4.npz has no s__seeds")
+
+
+def test_each_files_seed_is_recorded(pairs_file, tmp_path):
+    observables = configured_separation()
+    out = str(tmp_path / "geant4.npz")
+    measure.compute_simulator(observables, SIMULATOR, {"s": [pairs_file, pairs_file]},
+                              measure.wanted(observables), out, seeds={"s": [3, None]})
+    with np.load(out) as data:
+        assert list(data["s__seeds"]) == [3, -1] and list(data["s__n_events"]) == [6, 6]
+    with pytest.raises(measure.ObservableError, match="1 seeds for the 2 reconstructed files"):
+        measure.compute_simulator(observables, SIMULATOR, {"s": [pairs_file, pairs_file]},
+                                  measure.wanted(observables), out, seeds={"s": [3]})
+
+
+def test_the_separation_settings_are_checked():
+    assert measure.separation_binning("photon_separation", {}) == (0.0, 90.0, 18)
+    assert measure.separation_binning("photon_separation",
+                                      {"max_separation": 60, "n_bins": 12}) == (0.0, 60.0, 12)
+    assert measure.surface("photon_separation", {}) == (1804.7, 8)
+    for settings, message in (
+            ({"particle_collections": None}, "observables.photon_separation needs "
+                                             "particle_collections"),
+            ({"surface_distance": -1804.7}, "surface_distance should be the distance"),
+            ({"surface_distance": "far"}, "surface_distance should be the distance"),
+            ({"barrel_symmetry": 2}, "barrel_symmetry should be the number of staves"),
+            ({"barrel_symmetry": 8.5}, "barrel_symmetry should be the number of staves"),
+            ({"max_separation": 0}, "max_separation and n_bins should be a positive number"),
+            ({"n_bins": [10, 20]}, "max_separation and n_bins should be a positive number")):
+        with pytest.raises(measure.ObservableError) as error:
+            configured_separation(**settings)
         assert message in str(error.value), (settings, str(error.value))

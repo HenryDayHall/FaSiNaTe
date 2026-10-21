@@ -3,7 +3,7 @@
 FaSiNaTe benchmarks generative fast-simulation models of calorimeter showers in a full detector chain.
 Each model runs inside ILD's `ddsim` simulation through [DDML](https://github.com/key4hep/DDML), its events go through ILD's standard reconstruction, and observables measured on the reconstructed events are compared with full Geant4 simulation of the same inputs.
 
-The benchmark follows the paper *"A First Full Physics Benchmark for Highly Granular Calorimeter Surrogates"*, starting with its single-photon shower profiles, energy linearity and resolution, and intrinsic shower angles. The first model included is CaloClouds3.
+The benchmark follows the paper *"A First Full Physics Benchmark for Highly Granular Calorimeter Surrogates"*, starting with its single-photon shower profiles, energy linearity and resolution, and intrinsic shower angles, and its di-photon separation. The first model included is CaloClouds3.
 
 <p align="center">
   <img src="docs/images/longitudinal_profile_layers__single_photon.png" alt="Longitudinal shower profile, CaloClouds3 against Geant4" width="48%">
@@ -208,6 +208,8 @@ Each scenario's `input` section says how its events are made. The `particle_gun`
 
 The default `single_photon` scenario fires photons from the IP into one stave of the ECAL barrel, at 10, 20, …, 100 GeV with 3000 events each, spread uniformly over the front face of the stave.
 
+The `di_photon_gun` type runs [`ILD_Di_Photon_Gun.py`](ILD_Di_Photon_Gun.py) in the same way. The default `di_photon` scenario makes pairs of photons of the same energy, 20 and 100 GeV with 15 000 pairs each, both starting on the front face of the ECAL barrel's top stave and flying from the IP. They are placed as in the earlier di-photon analysis: the pair's midpoint uniform over a disc of 10 mm (`centre_radius`) about x = 0, z = 70 mm (`centre_x`, `centre_z`), the separation uniform from 0 to 90 mm (`max_separation`), and the line between the two photons at a random angle. Its `.h5` file holds both photons' momenta and starting points, and their separation. The paper's 5 GeV set needs a model trigger below 10 GeV, which CaloClouds3's preset doesn't have yet, so it is left out for now.
+
 ### 2. Simulate with Geant4
 
 Full Geant4 is the reference the models are compared with. `simulate_geant4.sh` runs `ddsim` with DDML's steering file but without DDML's fast simulation ([`scripts/ddsim_steer_geant4.py`](scripts/ddsim_steer_geant4.py)), so every other setting (physics list, crossing angle, filters, …) matches the model simulations, in the detector `geant4.compact`.
@@ -239,6 +241,8 @@ Before simulating, it checks that the DDML libraries, the `ddml` Python package 
 
 Both simulation scripts accept `-i FILE` to simulate an arbitrary input file (written under the scenario name `custom`), `--file FILE` to simulate just that one of the scenarios' inputs, and `-f/--force` to redo existing outputs. `ddsim` writes to a hidden file that is renamed only on success, so an output that exists is always complete. An input that isn't made yet is an error.
 
+A scenario with `simulation_seeds` (`di_photon` has `[1, 2, 3]`) has each of its inputs simulated once with each seed, passed to `ddsim` as `--random.seed`, each a task of its own named `<input>_simseed<S>`, so that the plots can take the spread over the seeds. Otherwise `ddsim` chooses the seed, and writes it in its log.
+
 ### 4. Reconstruct
 
 The simulations are reconstructed with ILD's standard reconstruction under Gaudi: ILDConfig's `ILDReconstruction.py` run with `k4run`, as in the Key4hep tutorial [ILD Simulation and Reconstruction with Key4hep](https://key4hep.github.io/key4hep-doc/main/tutorials/key4hep-tutorials/gaudi_ild_reco/README.html).
@@ -262,14 +266,15 @@ It reconstructs the simulations of the scenarios' inputs, by Geant4 and by every
 ./observables_from_reconstruction.sh caloclouds3 geant4
 ```
 
-The current observables are the shower profiles, the energy response and the intrinsic shower angles from the benchmark paper, measured in the `single_photon` scenario, the profiles and the angles on reconstructed ECAL barrel hits and the energy on reconstructed particles:
+The current observables are the shower profiles, the energy response and the intrinsic shower angles from the benchmark paper, measured in the `single_photon` scenario, the profiles and the angles on reconstructed ECAL barrel hits and the energy on reconstructed particles, and the di-photon separation, measured in the `di_photon` scenario:
 
 - `radial_profile`: mean hit energy per unit area (GeV/mm²) against the distance from the incident photon's line of flight to the hit's cell centre, i.e. the energy in each ring around the line of flight divided by the ring's area, π(r<sub>out</sub>² − r<sub>in</sub>²), so that the rings growing with the radius don't skew it; once out to 100 mm (50 bins) and once out to 30 mm (30 bins) to resolve the core;
 - `longitudinal_profile`: mean hit energy per ECAL layer, decoded from the hits' cellIDs;
 - `energy`: the reconstructed energy of each event, the sum of the energies of its reconstructed particles (`particle_collections`, PandoraPFA's `PandoraPFOs`; set `pdg`, e.g. `[22]`, to count only those PDG codes), with the incident photon's true energy, from which the plots take the energy linearity and resolution;
 - `intrinsic_angle`: the residuals, reconstructed − true, of the polar angle θ and the azimuth φ of each shower's axis (the paper's iTheta and iPhi). The axis is the first principal component of an energy-weighted principal component analysis (PCA) of the shower's reconstructed hits: the direction in which they spread the most about their centre, both weighted by the hits' energies, taken along the photon's direction, since an axis has no sign of its own. There is one PCA for each fraction of the hits in `hit_fractions`, the most energetic first: all of them, and the top 4% (rounded up, at least 2 hits), which leaves out the peripheral hits, e.g. from backscatter, that tilt the axis. Angles are in degrees in the global frame, θ from the beam axis and φ = atan2(y, x), with Δφ wrapped to ±180°.
+- `photon_separation`: for each event of two incident photons, their separation on the front face of the ECAL barrel, from the MC truth of the reconstructed event (`MCParticles`, its two particles of generator status 1): the distance between the points where their lines of flight cross the plane of the stave they head into, `surface_distance` (1804.7 mm in ILD_l5_o1_v02) from the beam axis, of the `barrel_symmetry` (8) staves. The guns' photons start on the face, so they cross it where they start. With it go the mean of the two photons' energies and the number of the event's reconstructed photons, the reconstructed particles in `particle_collections` (`PandoraPFOs`) of the PDG codes in `pdg` (`[22]`).
 
-For each simulator it writes `observables/<simulator>.npz`, holding every profile per input file as sums over events of each bin's energy and squared energy, plus the event count. From these the mean per event and its statistical uncertainty follow, for all energies combined or each separately. The energy and the angles' residuals are kept per event, since the central 90% the plots take needs every event and the residuals can then be binned anew ([`ddml_bench/measure.py`](ddml_bench/measure.py) documents the keys). The reconstructed files are recorded relative to `paths.data_dir`, so the files stay valid when copied elsewhere. A simulator is skipped if its file already has every requested key, computed with the same settings from the same files; adding an observable, or changing its settings, measures every simulator again (only this stage, not the reconstruction).
+For each simulator it writes `observables/<simulator>.npz`, holding every profile per input file as sums over events of each bin's energy and squared energy, plus the event count and the `ddsim` seed of each file. From these the mean per event and its statistical uncertainty follow, for all energies combined or each separately. The energy, the angles' residuals and the separation are kept per event, since the central 90% the plots take needs every event and the residuals and separations can then be binned anew ([`ddml_bench/measure.py`](ddml_bench/measure.py) documents the keys). The reconstructed files are recorded relative to `paths.data_dir`, so the files stay valid when copied elsewhere. A simulator is skipped if its file already has every requested key, computed with the same settings from the same files; adding an observable, or changing its settings, measures every simulator again (only this stage, not the reconstruction).
 
 The cellID encoding is read from the reconstructed file, or failing that from the detector geometry; set `observables.longitudinal_profile.cell_id_encoding` to give it by hand. A warning is printed if more than 1% of a file's hits fall outside layers 0 to `max_layer`, which usually means the encoding is wrong.
 
@@ -282,7 +287,7 @@ The cellID encoding is read from the reconstructed file, or failing that from th
 ./plot_observables.sh --format pdf                        # default is pdf,png
 ```
 
-Each figure, `<observable>_<profile>__<scenario>.<format>` (e.g. `radial_profile_r30__single_photon.png`, shown [at the top](#fasinate)), puts every simulator on the same axes: Geant4 as a grey filled histogram, each model as a line with its uncertainty band, and each model's relative deviation from Geant4 underneath. The legend gives each model's distance from Geant4 using the observable's `metric` (the Jensen–Shannon divergence for the profiles), and all metrics are collected in `metrics.csv`. The `.npz` files hold the energy per ring of the radial profiles, which is divided by the rings' areas only when drawn; the metric compares the fractions of the energy in the bins, and the relative deviations are ratios, so neither depends on that division.
+Each figure, `<observable>_<profile>__<scenario>.<format>` (e.g. `radial_profile_r30__single_photon.png`, shown [at the top](#fasinate)), puts every simulator on the same axes: Geant4 as a grey filled histogram, each model as a line with its uncertainty band, and each model's relative deviation from Geant4 underneath. The legend gives each model's distance from Geant4 using the observable's `metric` (the Jensen–Shannon divergence for the profiles), and all metrics are collected in `metrics.csv`, with an `uncertainty` column for those that have one. The `.npz` files hold the energy per ring of the radial profiles, which is divided by the rings' areas only when drawn; the metric compares the fractions of the energy in the bins, and the relative deviations are ratios, so neither depends on that division.
 
 The `energy` gives two figures, as in the paper. At each true energy *E*, μ<sub>90</sub> and σ<sub>90</sub> are the mean and standard deviation of the central 90% of the events' reconstructed energies (sorted, without the lowest and highest 5%), with uncertainties from resampling the events (200 bootstrap resamplings, the same every time):
 
@@ -292,6 +297,8 @@ The `energy` gives two figures, as in the paper. At each true energy *E*, μ<sub
 Each simulator is a set of points with its fit (weighted least squares), Geant4 in grey, and the legend gives each fitted function; below, each model's relative deviation from Geant4. The metric, `l1` by default, is the mean absolute difference from Geant4 over the energies, like the L1 of the paper's summary table. The fitted parameters, with their uncertainties, χ² and degrees of freedom, go to `fits.csv`. A fit needs at least as many energies as it has parameters, so a run of two energies, such as [`configs/pipeline_test.yaml`](configs/pipeline_test.yaml), draws the resolution without its fit. The inputs must be at fixed energies (the particle gun's `energies`), with at least 3 events at each.
 
 The `intrinsic_angle` gives a figure for each angle and each PCA, `intrinsic_angle_<angle>_<hits>__<scenario>` with `<hits>` `all` or `top4` (e.g. `intrinsic_angle_theta_top4__single_photon`), as in the paper's two angle figures: the distribution of the residuals as the fraction of the showers per degree, drawn like the profiles, with Geant4 filled, the models as lines and the relative deviations below. The metric is the Jensen–Shannon divergence of the fractions in the bins, as in the paper's summary table. The bins go from −`max_residual` to `max_residual` degrees, `n_bins` of them (5° and 100 by default; each is one number for every PCA, or a list with one for each fraction in `hit_fractions`, in the same order, e.g. `max_residual: [10, 3]` for ±10° with all the hits and ±3° with the top 4%). They only affect the figures, so after changing them only `plot_observables.sh` needs to run again, not the measurements. Showers outside the bins still count towards the total, and the share of them is noted on the figure. Showers whose PCA has no axis (fewer than two hits) are left out.
+
+The `photon_separation` gives a figure for each energy of the photons, `photon_separation_<E>GeV__<scenario>` (e.g. `photon_separation_20GeV__di_photon`), as in the paper's di-photon figure: the mean number of reconstructed photons per event in bins of the separation, drawn like the profiles, with a red line at two photons. Each simulator's curve is the mean over the seeds of each seed's mean, and its band the spread over the seeds, their sample standard deviation (with one seed, the statistical uncertainty instead). The metric, by default the Jensen–Shannon divergence, compares the number of reconstructed photons in each bin, seed by seed, Geant4's seeds and the model's paired in order; the legend and `metrics.csv` give the mean over the seeds, with their standard deviation as its uncertainty. The bins go from 0 to `max_separation` mm, `n_bins` of them (90 mm and 18 by default); like the residuals' bins, they only affect the figures. Events without two incident photons heading into the face are left out.
 
 Plotting only needs numpy and matplotlib: it uses your own `python3` if it has them, and the `setup.sh` environment otherwise, so the `.npz` files can be copied elsewhere and plotted there.
 
@@ -315,7 +322,7 @@ Everything is written under `paths.data_dir`:
     └── pipeline_<time>/           # submissions of slurm_pipeline.sh (slurm.log_dir)
 ```
 
-One module, [`ddml_bench/layout.py`](ddml_bench/layout.py), names all of these. Test runs with `-n N` add `_n<N>` to every file name after the inputs, and files simulated with `-i` go under the scenario `custom` (reconstructions of files outside `sim_output` go to `rec_output/custom/files/`).
+One module, [`ddml_bench/layout.py`](ddml_bench/layout.py), names all of these. Test runs with `-n N` add `_n<N>` to every file name after the inputs, the simulations of a scenario's `simulation_seeds` add `_simseed<S>` after that, and files simulated with `-i` go under the scenario `custom` (reconstructions of files outside `sim_output` go to `rec_output/custom/files/`).
 
 ## Extending the benchmark
 
@@ -333,7 +340,7 @@ Put the weights in `paths.model_dir` (by default DDML's `models/` folder, mounte
 
 ### Adding a scenario
 
-Add an entry under `scenarios` with an `input` section. Input types are defined in `INPUT_TYPES` in [`ddml_bench/scenarios.py`](ddml_bench/scenarios.py) (currently `particle_gun`); a new type needs a function that returns the commands making the inputs, one that names the files they produce without running them, and the option that makes a command write into a given folder. List the scenario under the `scenarios` of each observable that should be measured on it.
+Add an entry under `scenarios` with an `input` section. Input types are defined in `INPUT_TYPES` in [`ddml_bench/scenarios.py`](ddml_bench/scenarios.py) (currently `particle_gun` and `di_photon_gun`); a new type needs a function that returns the commands making the inputs, one that names the files they produce without running them, the option that makes a command write into a given folder, the Python modules its commands need, and whether its events are a particle gun's (for `--usingParticleGun`). To simulate each input several times with different `ddsim` seeds, list them in the scenario's `simulation_seeds`. List the scenario under the `scenarios` of each observable that should be measured on it.
 
 ### Adding an observable
 
@@ -366,6 +373,7 @@ The tests run the scripts end to end, `pipeline.sh` and `slurm_pipeline.sh` incl
 ├── slurm_simulate_geant4.sh            #   ... just the Geant4 stage
 ├── setup.sh                            # interactive environment
 ├── ILD_Particle_Gun.py                 # particle-gun input generator
+├── ILD_Di_Photon_Gun.py                # di-photon input generator
 ├── configs/default.yaml                # shared configuration (override in configs/local.yaml)
 ├── configs/pipeline_test.yaml          # a very light test run of the whole pipeline
 ├── models/                             # one YAML file per model
@@ -376,7 +384,7 @@ The tests run the scripts end to end, `pipeline.sh` and `slurm_pipeline.sh` incl
 └── di_photon_old/                      # the earlier di-photon separation analysis (legacy)
 ```
 
-Some files predate the current pipeline and are kept for reference only: `di_photon_old/` (the di-photon separation analysis by Peter McKeown and Anatolii Korol; its `ddml_diphoton_analysis_submodule` is the only git submodule, and the pipeline doesn't need it), `MarlinStdReco_WITH_GAPS.xml` (the earlier Marlin reconstruction, replaced by the Gaudi one in stage 4), `create_singularity.sh` (an old Ubuntu 22.04 container setup; the image is now pulled automatically) and `MODELS.md` (names of older CaloClouds variants).
+Some files predate the current pipeline and are kept for reference only: `di_photon_old/` (the di-photon separation analysis by Peter McKeown and Anatolii Korol, which the `di_photon` scenario and the `photon_separation` observable replace; its `ddml_diphoton_analysis_submodule` is the only git submodule, and the pipeline doesn't need it), `MarlinStdReco_WITH_GAPS.xml` (the earlier Marlin reconstruction, replaced by the Gaudi one in stage 4), `create_singularity.sh` (an old Ubuntu 22.04 container setup; the image is now pulled automatically) and `MODELS.md` (names of older CaloClouds variants).
 
 ## Credits
 

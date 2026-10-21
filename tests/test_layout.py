@@ -8,7 +8,7 @@ import pytest
 
 from conftest import REPO
 from ddml_bench.layout import (Layout, LayoutError, measurement_files, sample_suffix,
-                               simulation_stem)
+                               seed_suffix, simulation_stem)
 
 INPUT = "/data/input_single_particle_gun/p22_en20.slcio"
 
@@ -38,6 +38,26 @@ def test_a_sample_is_named_alike_at_every_stage():
 def test_a_sample_has_at_least_one_event(events):
     with pytest.raises(LayoutError):
         sample_suffix(events)
+
+
+def test_a_simulation_with_a_seed_of_its_own_is_named_after_it():
+    layout = Layout("/data", events=10)
+    assert layout.sample_name(INPUT, 2) == "p22_en20_n10_simseed2"
+    assert layout.simulation("dp", "geant4", INPUT, 2) == \
+        "/data/sim_output/dp/geant4/p22_en20_n10_simseed2.edm4hep.root"
+    assert layout.simulation_log("dp", "cc3", INPUT, 2) == \
+        "/data/sim_output/dp/cc3/p22_en20_n10_simseed2.log"
+    base = layout.reconstruction_base("dp", "cc3", INPUT, 2)
+    assert base == "/data/rec_output/dp/cc3/p22_en20_n10_simseed2"
+    assert os.path.basename(base) == simulation_stem(
+        os.path.basename(layout.simulation("dp", "cc3", INPUT, 2)))
+    # Without a seed of its own, as before
+    assert Layout("/data").simulation("dp", "cc3", INPUT, None) == \
+        "/data/sim_output/dp/cc3/p22_en20.root"
+    assert seed_suffix(None) == "" and seed_suffix(0) == "_simseed0"
+    for seed in (-1, True, "2", 1.5):
+        with pytest.raises(LayoutError):
+            seed_suffix(seed)
 
 
 def test_simulations_given_directly(tmp_path):
@@ -81,10 +101,13 @@ def test_planning_needs_only_the_standard_library():
 import sys
 sys.path.insert(0, %r)
 import ddml_bench.cli, ddml_bench.plot
-from ddml_bench.scenarios import particle_gun_files
+from ddml_bench.scenarios import di_photon_gun_files, particle_gun_files
 files = particle_gun_files([["python3", "ILD_Particle_Gun.py", "--pid", "22", "--energy", "20",
                              "--save_dir", "/data/in"]])
 assert files == ["/data/in/p22_th90_ph90_en20_seed0_ip.slcio"], files
+files = di_photon_gun_files([["python3", "ILD_Di_Photon_Gun.py", "--energy", "100", "--seed", "1",
+                              "--save_dir", "/data/in"]])
+assert files == ["/data/in/diphoton_en100_sep90_x0_z70_r10_seed1.slcio"], files
 heavy = [m for m in ("yaml", "numpy", "pyLCIO", "h5py", "particle") if m in sys.modules]
 assert not heavy, heavy
 """ % REPO

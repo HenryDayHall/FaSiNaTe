@@ -65,9 +65,13 @@ full inputs, or the first N events of each (`-n N`). The sample is chosen
 once, when an input is simulated, and its name carries on: the simulation of
 the first N events of `<input>` is `<input>_n<N>`, its reconstruction
 `<input>_n<N>_REC.edm4hep.root`, the measurements `<simulator>_n<N>.npz`, and
-the metrics `metrics_n<N>.csv`. Records of files, such as the reconstructed
-files in a `.npz`, are relative to the data folder (`Layout.relative`), so
-they hold when the data is copied elsewhere.
+the metrics `metrics_n<N>.csv`. A scenario with `simulation_seeds` has each
+input simulated once with each `ddsim` seed, and the seed goes into the names
+the same way: `<input>_simseed<S>`, or `<input>_n<N>_simseed<S>`. Every task
+records its seed (`null` for those without one of their own), and the
+observables record each reconstructed file's seed in the `.npz`. Records of
+files, such as the reconstructed files in a `.npz`, are relative to the data
+folder (`Layout.relative`), so they hold when the data is copied elsewhere.
 
 ## The stage registry
 
@@ -101,6 +105,7 @@ there alone:
   "scenario": "single_photon",
   "simulator": "geant4",
   "name": "p22_..._seed0_ip_surface",
+  "seed": null,
   "inputs": ["/data/sim_output/single_photon/geant4/p22_..._seed0_ip_surface.edm4hep.root"],
   "input_file": "/data/input_single_particle_gun/p22_..._seed0_ip_surface.slcio",
   "output": "/data/rec_output/single_photon/geant4/p22_..._seed0_ip_surface_REC.edm4hep.root",
