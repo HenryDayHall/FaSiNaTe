@@ -264,7 +264,7 @@ It reconstructs the simulations of the scenarios' inputs, by Geant4 and by every
 
 The current observables are the shower profiles from the benchmark paper, measured on reconstructed ECAL barrel hits in the `single_photon` scenario:
 
-- `radial_profile`: mean hit energy against the distance from the incident photon's line of flight to the hit's cell centre, once out to 100 mm (50 bins) and once out to 30 mm (30 bins) to resolve the core;
+- `radial_profile`: mean hit energy per unit area (GeV/mm²) against the distance from the incident photon's line of flight to the hit's cell centre, i.e. the energy in each ring around the line of flight divided by the ring's area, π(r<sub>out</sub>² − r<sub>in</sub>²), so that the rings growing with the radius don't skew it; once out to 100 mm (50 bins) and once out to 30 mm (30 bins) to resolve the core;
 - `longitudinal_profile`: mean hit energy per ECAL layer, decoded from the hits' cellIDs.
 
 For each simulator it writes `observables/<simulator>.npz`, holding every profile per input file as sums over events of each bin's energy and squared energy, plus the event count. From these the mean per event and its statistical uncertainty follow, for all energies combined or each separately ([`ddml_bench/measure.py`](ddml_bench/measure.py) documents the keys). The reconstructed files are recorded relative to `paths.data_dir`, so the files stay valid when copied elsewhere. A simulator is skipped if its file already has every requested key, computed with the same settings from the same files.
@@ -280,7 +280,7 @@ The cellID encoding is read from the reconstructed file, or failing that from th
 ./plot_observables.sh --format pdf                        # default is pdf,png
 ```
 
-Each figure, `<observable>_<profile>__<scenario>.<format>` (e.g. `radial_profile_r30__single_photon.png`, shown [at the top](#fasinate)), puts every simulator on the same axes: Geant4 as a grey filled histogram, each model as a line with its uncertainty band, and each model's relative deviation from Geant4 underneath. The legend gives each model's distance from Geant4 using the observable's `metric` (currently the Jensen–Shannon divergence), and all metrics are collected in `metrics.csv`.
+Each figure, `<observable>_<profile>__<scenario>.<format>` (e.g. `radial_profile_r30__single_photon.png`, shown [at the top](#fasinate)), puts every simulator on the same axes: Geant4 as a grey filled histogram, each model as a line with its uncertainty band, and each model's relative deviation from Geant4 underneath. The legend gives each model's distance from Geant4 using the observable's `metric` (currently the Jensen–Shannon divergence), and all metrics are collected in `metrics.csv`. The `.npz` files hold the energy per ring of the radial profiles, which is divided by the rings' areas only when drawn; the metric compares the fractions of the energy in the bins, and the relative deviations are ratios, so neither depends on that division.
 
 Plotting only needs numpy and matplotlib: it uses your own `python3` if it has them, and the `setup.sh` environment otherwise, so the `.npz` files can be copied elsewhere and plotted there.
 

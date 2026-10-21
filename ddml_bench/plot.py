@@ -3,12 +3,14 @@
 Every profile found in the .npz files (one per simulator, in
 <paths.data_dir>/observables) is drawn with every simulator that has it on the
 same axes, as in the shower-profile figures of the benchmark paper: the mean
-energy per event in each bin, Geant4 as a grey filled histogram and each model
-as a line in its own colour and line style, each with its statistical
-uncertainty as a band, and below, each model's relative deviation from Geant4.
-The legend gives each model's distance from Geant4, by the metric of the
-observable in the configuration (jensen_shannon: the Jensen-Shannon divergence,
-natural logarithm, of the normalised profiles).
+energy per event in each bin (for a radial profile, per unit area: divided by
+the area of the bin's ring around the shower axis; see DENSITIES), Geant4 as a
+grey filled histogram and each model as a line in its own colour and line
+style, each with its statistical uncertainty as a band, and below, each model's
+relative deviation from Geant4. The legend gives each model's distance from
+Geant4, by the metric of the observable in the configuration (jensen_shannon:
+the Jensen-Shannon divergence, natural logarithm, of the fractions of the
+energy in the bins).
 
   python3 -m ddml_bench.plot [--dir DIR] [--out DIR] [--events N]
                              [--format pdf,png] [--reference NAME] [SIMULATOR ...]
@@ -39,6 +41,35 @@ STYLES = {
     "radial_profile": ("Distance to the shower axis [mm]", True),
     "longitudinal_profile": ("ECAL layer", False),
 }
+PER_BIN = "Mean energy per event [GeV]"
+
+
+def ring_areas(edges):
+    """The area of each radial bin's ring around the shower axis, pi (r_out^2 -
+    r_in^2): the area element of polar coordinates about the axis, r dr dphi
+    (Jacobian r), integrated over the bin and all the way around."""
+    import numpy as np
+    edges = np.asarray(edges, dtype=float)
+    return np.pi * (edges[1:] ** 2 - edges[:-1] ** 2)
+
+
+# The kinds of observable drawn as densities: what each bin's energy is divided
+# by (from the bin edges), and the y axis label then. The rings of a radial
+# profile grow with the radius (as 2 pi r dr), so the energy in each is divided
+# by its area, giving the energy per unit area transverse to the shower axis.
+# The other kinds are drawn per bin.
+DENSITIES = {
+    "radial_profile": (ring_areas, "Mean energy density per event [GeV/mm$^2$]"),
+}
+
+
+def bin_scale(observable, edges):
+    """What each bin of the observable is divided by in the figures (ones if
+    it is drawn per bin)."""
+    import numpy as np
+    if observable in DENSITIES:
+        return DENSITIES[observable][0](edges)
+    return np.ones(len(edges) - 1)
 
 
 def say(message):
@@ -136,6 +167,7 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
     import numpy as np
 
     xlabel, log_y = STYLES.get(observable, (profile, False))
+    ylabel = DENSITIES[observable][1] if observable in DENSITIES else PER_BIN
     short, metric = METRICS.get(metric_name, (metric_name, None))
     if metric is None:
         say("no metric '%s' is known (known: %s), so none is shown"
@@ -153,6 +185,11 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
     first, last = np.flatnonzero(filled)[[0, -1]]
     keep = slice(first, last + 1)
     edges = edges[first:last + 2]
+    # The profiles are drawn divided by this (e.g. a radial profile's ring
+    # areas). The metric compares the fractions of the energy in the bins, so
+    # it takes the energy per bin, and the deviations from Geant4 are the same
+    # either way.
+    scale = bin_scale(observable, edges)
 
     ref = None
     if reference is not None:
@@ -166,7 +203,7 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
 
     if ref is not None:
         _, _, mean, err, n = ref
-        mean, err = mean[keep], err[keep]
+        mean, err = mean[keep] / scale, err[keep] / scale
         top.stairs(drawable(mean, log_y), edges, fill=True, color=REFERENCE_FILL,
                    label=ref[0].label, zorder=1)
         top.stairs(drawable(mean, log_y), edges, color=REFERENCE_EDGE, linewidth=1,
@@ -181,6 +218,7 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
             value = metric(ref[2][keep], mean)
             results.append((simulator, short, value))
             label = "%s (%s %.2e)" % (label, short, value)
+        mean, err = mean / scale, err / scale
         top.stairs(drawable(mean, log_y), edges, color=simulator.color,
                    linestyle=simulator.linestyle, linewidth=1.6, label=label,
                    baseline=None, zorder=3)
@@ -188,10 +226,11 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
 
     if log_y:
         top.set_yscale("log")
-        positive = np.concatenate([c[2][keep][c[2][keep] > 0] for c in curves])
+        drawn = np.concatenate([c[2][keep] / scale for c in curves])
+        positive = drawn[drawn > 0]
         if positive.size:
             top.set_ylim(positive.min() / 3, positive.max() * 3)
-    top.set_ylabel("Mean energy per event [GeV]", color=INK)
+    top.set_ylabel(ylabel, color=INK)
     n_ref = ref[4] if ref is not None else curves[0][4]
     top.text(0.02, 0.03 if not log_y else 0.03, "%s, %d events%s" % (
         scenario, n_ref, " (Geant4)" if ref is not None else ""),

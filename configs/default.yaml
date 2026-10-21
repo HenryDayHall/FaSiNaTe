@@ -168,9 +168,10 @@ scenarios:
 # Geant4 by ./plot_observables.sh. Each observable's name says what it is (see
 # ddml_bench/measure.py for the ones known).
 observables:
-  # Mean energy of the reconstructed hits against the distance from the
-  # incident particle's line of flight to the centre of the hit's cell (the
-  # paper's radial shower profiles).
+  # Mean energy of the reconstructed hits per unit area against the distance
+  # from the incident particle's line of flight to the centre of the hit's
+  # cell: the energy in each ring around the line of flight, divided by the
+  # ring's area when plotted (the paper's radial shower profiles).
   radial_profile:
     # The scenarios it is measured on.
     scenarios: [single_photon]
