@@ -12,7 +12,9 @@ The observables known (the keys of `observables` in the configuration):
   radial_profile        energy of the reconstructed hits against the distance
                         from the incident particle's line of flight (through its
                         vertex, along its momentum) to the hit's cell centre,
-                        one profile per max_radius
+                        one profile per max_radius; stored as the energy in
+                        each ring around the line of flight, which the figures
+                        divide by the ring's area (ddml_bench/plot.py)
   longitudinal_profile  energy of the reconstructed hits per calorimeter layer,
                         from the layer field of each hit's cellID
 
