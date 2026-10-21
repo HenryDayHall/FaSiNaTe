@@ -232,8 +232,11 @@ observables:
     # the peripheral hits (e.g. from backscatter) that tilt the axis.
     hit_fractions: [1.0, 0.04]
     # How the figures bin the residuals: from -max_residual to max_residual
-    # degrees in n_bins bins, each a number for every fraction or a list with
-    # one for each. Changing them needs no measuring again, only plotting.
+    # degrees in n_bins bins. Each is one number for every fraction, or a list
+    # with one for each fraction in hit_fractions, in the same order: e.g.
+    # max_residual: [10, 3] draws the PCA of all the hits out to 10 degrees
+    # and that of the top 4% out to 3. Changing them needs no measuring
+    # again, only plotting.
     max_residual: [20, 5]
     n_bins: 100
     # How it is compared to Geant4, as in the paper's summary table.
