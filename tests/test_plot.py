@@ -268,3 +268,83 @@ def test_two_energies_fit_only_the_linearity(figures, tmp_path):
     assert [text.get_text() for text in resolution.axes[0].get_legend().get_texts()] \
         == ["Geant4"]
     assert os.path.isfile(str(tmp_path / "energy_resolution__single_photon_n6.png"))
+
+
+# ---------------------------------------------------------------------------
+# The intrinsic angles: the distributions of the residuals of the showers' axes
+
+
+def angle_simulator(name, label, color, linestyle, stored):
+    """A simulator that measured the intrinsic angle: {what: [event]}."""
+    return types.SimpleNamespace(name=name, label=label, color=color, linestyle=linestyle,
+                                 stored=lambda observable, scenario: stored)
+
+
+def residual_sample(width, shift, seed, n=4000):
+    """Residuals of n showers for each angle and PCA, Gaussian, the top 4%'s
+    half as wide; a few showers without an axis from the top 4%, and a few far
+    out."""
+    rng = np.random.default_rng(seed)
+    stored = {"theta_true": rng.uniform(43, 137, n), "phi_true": rng.uniform(79, 109, n)}
+    for hits, scale in (("all", 1.0), ("top4", 0.5)):
+        for angle in ("theta", "phi"):
+            stored["d%s_%s" % (angle, hits)] = rng.normal(shift, width * scale, n)
+    stored["dtheta_top4"][:7] = np.nan
+    stored["dtheta_all"][:3] = 40.0
+    return stored
+
+
+def test_the_intrinsic_angles_are_drawn_as_fractions_of_the_showers_per_degree(figures,
+                                                                               tmp_path):
+    geant4 = angle_simulator("geant4", "Geant4", "#8c8c8c", "-", residual_sample(1.0, 0, 1))
+    model = angle_simulator("model", "Model", "#e66100", "--", residual_sample(1.2, 0.2, 2))
+    settings = {"hit_fractions": [1.0, 0.04], "max_residual": [5, 2], "n_bins": [50, 40]}
+    results, fits = plot.angle_figures("intrinsic_angle", "single_photon", [geant4, model],
+                                       geant4, settings, str(tmp_path), "", ["png"])
+    names = ["theta_all", "phi_all", "theta_top4", "phi_top4"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == sorted(
+        "intrinsic_angle_%s__single_photon.png" % name for name in names)
+    assert fits == [] and [result[1] for result in results] == names
+
+    for figure, name, (simulator, profile, short, value) in zip(figures, names, results):
+        angle, hits = name.split("_")
+        limit, n_bins = (5, 50) if hits == "all" else (2, 40)
+        edges = np.linspace(-limit, limit, n_bins + 1)
+        top, bottom = figure.axes
+        assert top.get_xlim() == (-limit, limit)
+        assert bottom.get_xlabel().startswith("Intrinsic angle $\\%s_\\mathrm{reco}" % angle)
+        # Each simulator's fractions of its showers with an axis in each bin,
+        # per degree: Geant4's filled, and the model's line
+        fractions = []
+        for stored in (geant4.stored(None, None), model.stored(None, None)):
+            residuals = stored["d" + name]
+            residuals = residuals[np.isfinite(residuals)]
+            fractions.append(np.histogram(residuals, edges)[0] / residuals.size)
+        steps = drawn_steps(top)
+        for values, expected in zip(steps, (fractions[0], fractions[0], fractions[1])):
+            np.testing.assert_allclose(values, expected / (2 * limit / n_bins))
+        # compared by the Jensen-Shannon divergence of the fractions
+        assert (simulator, profile, short) == (model, name, "JS")
+        assert value == pytest.approx(plot.jensen_shannon(*fractions))
+        # and the text in the corner says which PCA, of how many showers
+        (note,) = [text.get_text() for text in top.texts]
+        n = int(np.isfinite(geant4.stored(None, None)["d" + name]).sum())
+        assert note.startswith("single_photon, PCA of %s\n%d showers (Geant4)" % (
+            "all hits" if hits == "all" else "the top 4% of hits", n))
+        assert n == (3993 if name == "theta_top4" else 4000)
+        # with the share of them beyond the bins
+        if name == "theta_all":
+            assert note.endswith("\n0.075% beyond \u00b15\u00b0")
+        # and room above the curves for it and the legend
+        assert top.get_ylim()[1] > 1.3 * max(np.max(s) for s in steps)
+
+
+def test_without_settings_the_residuals_are_drawn_in_the_default_bins(figures, tmp_path):
+    model = angle_simulator("model", "Model", "#e66100", "--", residual_sample(1.2, 0.2, 2))
+    results, _ = plot.angle_figures("intrinsic_angle", "single_photon", [model], None, {},
+                                    str(tmp_path), "_n4000", ["png"])
+    # Nothing to compare to, so no metric and no deviations
+    assert results == [] and len(figures) == 4 and all(len(f.axes) == 1 for f in figures)
+    assert figures[0].axes[0].get_xlim() == (-measure.MAX_RESIDUAL, measure.MAX_RESIDUAL)
+    assert len(drawn_steps(figures[0].axes[0])[0]) == measure.RESIDUAL_BINS
+    assert os.path.isfile(str(tmp_path / "intrinsic_angle_phi_top4__single_photon_n4000.png"))

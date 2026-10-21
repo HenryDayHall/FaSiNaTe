@@ -25,17 +25,31 @@ simulator is a set of points with its fit, Geant4 in grey, and below, each
 model's relative deviation from Geant4; the metric (by default l1) compares
 the points at the same energies.
 
+The intrinsic angles (the observable intrinsic_angle) give a figure for each
+angle, theta and phi, and each PCA of the showers' hits (all of them, and the
+most energetic 4%), as in the benchmark paper: the distribution of the
+residuals, reconstructed - true, as the fraction of the showers per degree,
+drawn as the profiles are (Geant4 filled, the models as lines, the relative
+deviations from Geant4 below), and compared by the Jensen-Shannon divergence
+of the fractions in the bins. The bins are from -max_residual to max_residual
+degrees, n_bins of them, in the observable's settings in the configuration
+(only drawing them, so changing them needs no measuring again); showers
+outside them still count among all the showers, and those without an axis
+(fewer than two hits) don't.
+
   python3 -m ddml_bench.plot [--dir DIR] [--out DIR] [--events N]
                              [--format pdf,png] [--reference NAME] [SIMULATOR ...]
 
 (plot_observables.sh runs it.) The figures go to <dir>/plots (or --out), one per
 observable, profile and scenario, named <observable>_<profile>__<scenario>.<format>
 (energy_linearity__<scenario> and energy_resolution__<scenario> for the
-energy), with the metrics in metrics.csv and the fitted parameters of the
-energy figures, with their uncertainties, chi^2 and degrees of freedom, in
-fits.csv. It needs numpy and matplotlib, and PyYAML only to read the
-configuration for the default folder and the metrics, so it also works on .npz
-files copied to a laptop.
+energy, intrinsic_angle_<angle>_<hits>__<scenario> for the intrinsic angles,
+e.g. intrinsic_angle_theta_top4__single_photon), with the metrics in
+metrics.csv and the fitted parameters of the energy figures, with their
+uncertainties, chi^2 and degrees of freedom, in fits.csv. It needs numpy and
+matplotlib, and PyYAML only to read the configuration for the default folder,
+the metrics and the bins of the residuals, so it also works on .npz files
+copied to a laptop.
 """
 
 import argparse
@@ -44,6 +58,7 @@ import json
 import os
 import sys
 
+from . import measure
 from .layout import GEANT4, OBSERVABLES_DIR, PLOTS_DIR, SEP, figure_base, measurement_files
 
 REFERENCE = GEANT4
@@ -56,6 +71,7 @@ GRID = "#e6e6e6"
 STYLES = {
     "radial_profile": ("Distance to the shower axis [mm]", True),
     "longitudinal_profile": ("ECAL layer", False),
+    "intrinsic_angle": ("Reconstructed \u2212 true [\u00b0]", False),
 }
 PER_BIN = "Mean energy per event [GeV]"
 
@@ -69,13 +85,20 @@ def ring_areas(edges):
     return np.pi * (edges[1:] ** 2 - edges[:-1] ** 2)
 
 
+def bin_widths(edges):
+    import numpy as np
+    return np.diff(np.asarray(edges, dtype=float))
+
+
 # The kinds of observable drawn as densities: what each bin's energy is divided
 # by (from the bin edges), and the y axis label then. The rings of a radial
 # profile grow with the radius (as 2 pi r dr), so the energy in each is divided
 # by its area, giving the energy per unit area transverse to the shower axis.
-# The other kinds are drawn per bin.
+# The residuals of the intrinsic angles, fractions of the showers in each bin,
+# are divided by the bins' widths. The other kinds are drawn per bin.
 DENSITIES = {
     "radial_profile": (ring_areas, "Mean energy density per event [GeV/mm$^2$]"),
+    "intrinsic_angle": (bin_widths, "Fraction of showers per degree"),
 }
 
 
@@ -93,16 +116,17 @@ def say(message):
 
 
 def load_settings():
-    """(observables folder, {observable: metric}) from the configuration, if it can be read."""
+    """(observables folder, {observable: its settings}) from the configuration,
+    if it can be read."""
     try:
         from .config import load_config
         config = load_config()
     except Exception as error:  # no PyYAML, or no configuration
         say("can't read the configuration (%s), so give --dir" % error)
         return None, {}
-    metrics = {name: (settings or {}).get("metric")
-               for name, settings in (config.get("observables") or {}).items()}
-    return os.path.join(config["paths"]["data_dir"], OBSERVABLES_DIR), metrics
+    observables = {name: settings if isinstance(settings, dict) else {}
+                   for name, settings in (config.get("observables") or {}).items()}
+    return os.path.join(config["paths"]["data_dir"], OBSERVABLES_DIR), observables
 
 
 class Simulator:
@@ -140,12 +164,13 @@ class Simulator:
         return self.data[key + SEP + "edges"], mean, np.sqrt(variance / n), int(n)
 
     def per_event(self):
-        """[(observable, scenario)] of the observables stored per event."""
+        """[(observable, scenario)] of the observables stored per event: those
+        with settings of their own, <observable>__<scenario>__settings (the
+        profiles' have a profile too)."""
         found = []
         for key in self.data:
             parts = key.split(SEP)
-            if len(parts) == 3 and parts[2] == "reconstructed" \
-                    and SEP.join(parts[:2] + ["true"]) in self.data:
+            if len(parts) == 3 and parts[2] == "settings":
                 found.append(tuple(parts[:2]))
         return found
 
@@ -153,6 +178,14 @@ class Simulator:
         """The true and the reconstructed energy of each event, GeV."""
         key = SEP.join((observable, scenario))
         return self.data[key + SEP + "true"], self.data[key + SEP + "reconstructed"]
+
+    def stored(self, observable, scenario):
+        """What is stored of each event of an observable stored per event:
+        {what: [event]}, e.g. {"dtheta_all": ...} for the intrinsic angle."""
+        prefix = SEP.join((observable, scenario)) + SEP
+        return dict((key[len(prefix):], value) for key, value in self.data.items()
+                    if key.startswith(prefix) and SEP not in key[len(prefix):]
+                    and key[len(prefix):] != "settings")
 
 
 def jensen_shannon(p, q):
@@ -183,8 +216,9 @@ METRICS = {"jensen_shannon": ("JS", jensen_shannon), "l1": ("L1", l1_distance)}
 DEFAULT_METRICS = {"energy": "l1"}
 
 
-def metric_of(metrics, observable):
-    return metrics.get(observable) or DEFAULT_METRICS.get(observable, "jensen_shannon")
+def metric_of(observable, settings):
+    """The metric of an observable: its settings' metric, or its default."""
+    return (settings or {}).get("metric") or DEFAULT_METRICS.get(observable, "jensen_shannon")
 
 
 def drawable(values, log_y):
@@ -202,11 +236,16 @@ def stairs_band(ax, edges, low, high, color, alpha):
 
 
 def plot_profile(observable, scenario, profile, curves, reference, metric_name, out_base,
-                 formats):
-    """One figure; returns [(simulator, metric, value)]."""
+                 formats, xlabel=None, note=None, trim=True, room=False):
+    """One figure; returns [(simulator, metric, value)]. xlabel, and note, the
+    text in the corner, replace the observable's own; with trim, the bins at
+    either end that are empty for every simulator are left out; with room, the
+    top of the axes is left to the legend and the note, which goes at the top
+    left (for distributions peaked in the middle)."""
     import numpy as np
 
-    xlabel, log_y = STYLES.get(observable, (profile, False))
+    default_xlabel, log_y = STYLES.get(observable, (profile, False))
+    xlabel = xlabel or default_xlabel
     ylabel = DENSITIES[observable][1] if observable in DENSITIES else PER_BIN
     short, metric = METRICS.get(metric_name, (metric_name, None))
     if metric is None:
@@ -222,7 +261,7 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
     if not filled.any():
         say("%s: every bin is empty, so no plot" % out_base)
         return []
-    first, last = np.flatnonzero(filled)[[0, -1]]
+    first, last = np.flatnonzero(filled)[[0, -1]] if trim else (0, len(filled) - 1)
     keep = slice(first, last + 1)
     edges = edges[first:last + 2]
     # The profiles are drawn divided by this (e.g. a radial profile's ring
@@ -268,11 +307,16 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
         positive = drawn[drawn > 0]
         if positive.size:
             top.set_ylim(positive.min() / 3, positive.max() * 3)
+    elif room:
+        drawn = np.concatenate([(c[2][keep] + c[3][keep]) / scale for c in curves])
+        # (the legend has a line for each simulator)
+        top.set_ylim(0, float(drawn.max()) * (1.15 + 0.08 * len(curves)))
     top.set_ylabel(ylabel, color=INK)
-    n_ref = ref[4] if ref is not None else curves[0][4]
-    top.text(0.02, 0.03 if not log_y else 0.03, "%s, %d events%s" % (
-        scenario, n_ref, " (Geant4)" if ref is not None else ""),
-        transform=top.transAxes, fontsize=8, color=MUTED, va="bottom")
+    if note is None:
+        n_ref = ref[4] if ref is not None else curves[0][4]
+        note = "%s, %d events%s" % (scenario, n_ref, " (Geant4)" if ref is not None else "")
+    top.text(0.02, 0.97 if room else 0.03, note, transform=top.transAxes, fontsize=8,
+             color=MUTED, va="top" if room else "bottom")
     top.legend(frameon=False, fontsize=8, loc="upper right", labelcolor=INK)
 
     if with_ratio:
@@ -282,6 +326,10 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
         safe = np.where(valid, r_mean, np.nan)
         stairs_band(bottom, edges, -r_err / safe * 100, r_err / safe * 100, REFERENCE_EDGE, 0.3)
         bottom.axhline(0, color=REFERENCE_EDGE, linewidth=1)
+        # The deviations' axis is set by the bins Geant4 measures to 10% or
+        # better, if there are any, so that sparse tails don't set it
+        measured = valid & (r_err < 0.1 * np.where(valid, r_mean, np.inf))
+        measured = measured if measured.any() else valid
         deviations = []
         for simulator, _, mean, err, _ in curves:
             if simulator is reference:
@@ -291,7 +339,7 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
             bottom.stairs(dev, edges, color=simulator.color, baseline=None,
                           linestyle=simulator.linestyle, linewidth=1.4)
             stairs_band(bottom, edges, dev - band, dev + band, simulator.color, 0.2)
-            deviations.append(np.abs(dev[np.isfinite(dev)]))
+            deviations.append(np.abs(dev[measured & np.isfinite(dev)]))
         spread = np.concatenate(deviations) if deviations else np.array([])
         limit = np.percentile(spread, 95) * 1.3 if spread.size else 10
         limit = float(np.clip(limit, 5, 100))
@@ -686,8 +734,120 @@ def plot_energy_figure(spec, scenario, entries, reference, metric_name, out_base
     return results, fits
 
 
-# How the observables stored per event are drawn
-EVENT_FIGURES = {"energy": plot_energy}
+def energy_figures(observable, scenario, simulators, reference, settings, out, suffix, formats):
+    """The energy linearity and resolution figures (plot_energy()) of the
+    simulators that measured the energy."""
+    measured = [(simulator,) + simulator.events(observable, scenario) for simulator in simulators]
+    return plot_energy(observable, scenario, measured, reference, metric_of(observable, settings),
+                       out, suffix, formats)
+
+
+# ---------------------------------------------------------------------------
+# The intrinsic angles: the residuals, reconstructed - true, of theta and phi
+# of each shower's axis (the observable intrinsic_angle, ddml_bench/measure.py)
+
+ANGLE_LABELS = {
+    "theta": r"Intrinsic angle $\theta_\mathrm{reco} - \theta_\mathrm{true}$" + " [\u00b0]",
+    "phi": r"Intrinsic angle $\phi_\mathrm{reco} - \phi_\mathrm{true}$" + " [\u00b0]",
+}
+
+
+def hits_text(name):
+    """The hits of a PCA, from its name: all hits, or e.g. the top 4% of hits for top4."""
+    return "all hits" if name == "all" else "the top %s%% of hits" % name[len("top"):]
+
+
+def residual_histogram(residuals, edges):
+    """The fraction of the showers with an axis (a finite residual) in each
+    bin and its statistical uncertainty, the number of them, and the fraction
+    of them outside the bins; None if there are none."""
+    import numpy as np
+    residuals = np.asarray(residuals, dtype=float)
+    residuals = residuals[np.isfinite(residuals)]
+    if not residuals.size:
+        return None
+    counts = np.histogram(residuals, bins=edges)[0].astype(float)
+    n = residuals.size
+    return counts / n, np.sqrt(counts) / n, n, 1 - counts.sum() / n
+
+
+def angle_figures(observable, scenario, simulators, reference, settings, out, suffix, formats):
+    """The figures of the intrinsic angles of a scenario, of the simulators that
+    measured them: for each PCA and each angle, the distribution of the
+    residuals, in the bins of the settings (measure.residual_binning(); its
+    defaults without settings). Returns ([(simulator, figure, metric, value)],
+    []), each figure named <angle>_<PCA>, e.g. theta_top4."""
+    import numpy as np
+    default = (-measure.MAX_RESIDUAL, measure.MAX_RESIDUAL, measure.RESIDUAL_BINS)
+    binning = {}
+    if settings:
+        try:
+            binning = measure.residual_binning(observable, settings)
+        except measure.ObservableError as error:
+            say("%s, so the residuals are drawn from %g to %g degrees in %d bins"
+                % ((error,) + default))
+    stored = [(simulator, simulator.stored(observable, scenario)) for simulator in simulators]
+    # The PCAs, in the order they were measured in
+    selections = []
+    for _, values in stored:
+        for what in values:
+            name = what[len("dtheta_"):]
+            if what.startswith("dtheta_") and name not in selections:
+                selections.append(name)
+    metric_name = metric_of(observable, settings)
+    results = []
+    for selection in selections:
+        first, last, n_bins = binning.get(selection, default)
+        edges = np.linspace(first, last, n_bins + 1)
+        for angle in measure.ANGLES:
+            what = "d%s_%s" % (angle, selection)
+            curves, outside = [], []
+            for simulator, values in stored:
+                if what not in values:
+                    continue
+                without = int(np.sum(~np.isfinite(values[what])))
+                if without:
+                    say("%s, %s: %d of %d showers have no axis from the PCA of %s (fewer "
+                        "than two hits), so they're left out" % (
+                            simulator.name, scenario, without, len(values[what]),
+                            hits_text(selection)))
+                histogram = residual_histogram(values[what], edges)
+                if histogram is None:
+                    continue
+                fractions, errors, n, beyond = histogram
+                curves.append((simulator, edges, fractions, errors, n))
+                outside.append(beyond)
+            if not curves:
+                say("no shower of %s has an axis from the PCA of %s, so there's no plot"
+                    % (scenario, hits_text(selection)))
+                continue
+            profile = "%s_%s" % (angle, selection)
+            base = figure_base(out, observable, profile, scenario, suffix)
+            # The text in the corner is of Geant4, if it is there
+            ref = reference if any(c[0] is reference for c in curves) else None
+            shown = next((i for i, c in enumerate(curves) if c[0] is ref), 0)
+            note = "%s, PCA of %s\n%d showers%s" % (
+                scenario, hits_text(selection), curves[shown][4],
+                " (%s)" % ref.label if ref is not None else "")
+            if outside[shown] > 0:
+                note += "\n%.2g%% beyond \u00b1%g\u00b0" % (100 * outside[shown], last)
+            figure_results = plot_profile(observable, scenario, profile, curves, ref, metric_name,
+                                          base, formats, xlabel=ANGLE_LABELS[angle], note=note,
+                                          trim=False, room=True)
+            results += [(simulator, profile, short, value)
+                        for simulator, short, value in figure_results]
+            say("%s: %s" % (", ".join(c[0].label for c in curves),
+                            ", ".join("%s.%s" % (os.path.basename(base), f) for f in formats)))
+    return results, []
+
+
+# How the observables stored per event are drawn: each is called with the
+# observable, the scenario, the simulators that measured it, the reference,
+# the observable's settings in the configuration ({} without one), the folder
+# of the figures, the sample's suffix and the formats, and gives ([(simulator,
+# figure, metric, value)], [(simulator, figure, parameter, value, uncertainty,
+# chi^2, degrees of freedom)])
+EVENT_FIGURES = {"energy": energy_figures, "intrinsic_angle": angle_figures}
 
 
 def main(argv=None):
@@ -706,7 +866,7 @@ def main(argv=None):
                         help="the simulator the others are compared to (default: geant4)")
     args = parser.parse_args(argv)
 
-    folder, metrics = load_settings() if not args.dir else (args.dir, load_settings()[1])
+    folder, observables = load_settings() if not args.dir else (args.dir, load_settings()[1])
     if not folder:
         return 1
     suffix = "" if args.events is None else "_n%d" % args.events
@@ -761,22 +921,23 @@ def main(argv=None):
         base = figure_base(out, observable, profile, scenario, suffix)
         results = plot_profile(observable, scenario, profile, curves,
                                reference if any(c[0] is reference for c in curves) else None,
-                               metric_of(metrics, observable), base, formats)
+                               metric_of(observable, observables.get(observable)), base, formats)
         say("%s: %s" % (", ".join(c[0].label for c in curves),
                         ", ".join("%s.%s" % (os.path.basename(base), f) for f in formats)))
         for simulator, short, value in results:
             rows.append((observable, scenario, profile, simulator.name, short, value))
 
-    # The observables stored per event: the energy linearity and resolution
+    # The observables stored per event: the energy linearity and resolution,
+    # and the intrinsic angles
     for observable, scenario in event_groups:
         if observable not in EVENT_FIGURES:
             say("there are no figures of %s, so it isn't plotted" % observable)
             continue
-        measured = [(simulator,) + simulator.events(observable, scenario)
-                    for simulator in simulators if (observable, scenario) in simulator.per_event()]
+        measured = [simulator for simulator in simulators
+                    if (observable, scenario) in simulator.per_event()]
         results, fits = EVENT_FIGURES[observable](observable, scenario, measured, reference,
-                                                  metric_of(metrics, observable), out, suffix,
-                                                  formats)
+                                                  observables.get(observable) or {}, out,
+                                                  suffix, formats)
         for simulator, figure, short, value in results:
             rows.append((observable, scenario, figure, simulator.name, short, value))
         for simulator, figure, parameter, value, error, chi2, ndf in fits:

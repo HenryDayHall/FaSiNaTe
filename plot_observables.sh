@@ -7,7 +7,10 @@
 # observable's metric in the configuration). The reconstructed energy gives
 # the energy linearity (mu90 against the true energy, fitted with a straight
 # line) and resolution (sigma90/mu90, fitted with a + b/sqrt(E) + c/E), from
-# the central 90% of the events at each energy.
+# the central 90% of the events at each energy. The intrinsic angles give the
+# distributions of the residuals, reconstructed - true, of theta and phi of
+# the showers' axes, from the PCA of all their hits and of the most energetic
+# 4%, binned as observables.intrinsic_angle says (max_residual, n_bins).
 #
 # Usage: ./plot_observables.sh [options] [SIMULATOR ...]
 #
@@ -22,7 +25,8 @@
 #   -h, --help         show this help
 #
 # Each figure is <observable>_<profile>__<scenario>.<format>, e.g.
-# radial_profile_r100__single_photon.pdf or energy_resolution__single_photon.pdf;
+# radial_profile_r100__single_photon.pdf, energy_resolution__single_photon.pdf
+# or intrinsic_angle_theta_top4__single_photon.pdf;
 # the metrics go to metrics.csv next to them, and the fitted parameters of the
 # energy figures to fits.csv. It runs with this shell's python3 if that has
 # numpy and matplotlib, and otherwise in the environment from setup.sh.

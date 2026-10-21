@@ -7,7 +7,9 @@ it always adds), then writes what ILDReconstruction.py writes, <base>_REC.edm4he
 _AIDA.root and _PfoAnalysis.root: the REC file a real EDM4hep-style ROOT file
 (a podio "events" tree, written with uproot) with the MC particles of the
 simulation, made-up ECAL barrel hits around each photon's line of flight, a
-little wider for the models than for Geant4, and made-up PandoraPFOs: the
+little wider for the models than for Geant4 and more energetic nearer it (so
+that the most energetic hits lie along it, as in a shower's core), and
+made-up PandoraPFOs: the
 photon, its energy smeared a little more for the models, and in some events a
 small neutral hadron split off it, so the observables have something to
 measure and compare.
@@ -25,7 +27,7 @@ import uproot
 # observables.longitudinal_profile.cell_id_encoding in the tests' configuration:
 # system:5,module:3,stave:4,tower:4 come first, so the layer starts at bit 16
 LAYER_OFFSET = 16
-N_HITS = 40
+N_HITS = 100
 
 
 def fail(message):
@@ -95,8 +97,9 @@ for event in events:
     positions = (vertex + direction * (5.0 * layers[:, None] + 2.5)
                  + radius[:, None] * (np.cos(angle)[:, None] * across
                                       + np.sin(angle)[:, None] * other))
+    core = np.exp(-radius / spread)
     columns["EcalBarrelCollectionRec.energy"].append(
-        (0.01 * energy / N_HITS * rng.uniform(0.5, 1.5, N_HITS)).tolist())
+        (0.01 * energy * core / core.sum() * rng.uniform(0.5, 1.5, N_HITS)).tolist())
     columns["EcalBarrelCollectionRec.cellID"].append(
         [int(layer) << LAYER_OFFSET for layer in layers])
     for i, c in enumerate("xyz"):

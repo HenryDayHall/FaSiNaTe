@@ -217,6 +217,27 @@ observables:
     # energies of mu90 and of sigma90/mu90, like the L1 of the paper's
     # summary table.
     metric: l1
+  # The intrinsic angles of each shower, theta and phi of its axis, against
+  # those of the incident photon's direction (the paper's intrinsic angle
+  # reconstruction, iTheta and iPhi): the figures show the residuals,
+  # reconstructed - true, in degrees. The axis is the first principal
+  # component of an energy-weighted principal component analysis (PCA) of the
+  # shower's reconstructed hits: the direction they spread the most in about
+  # their centre, both weighted by the hits' energies, taken along the photon.
+  intrinsic_angle:
+    scenarios: [single_photon]
+    hit_collections: [EcalBarrelCollectionRec]
+    # One PCA for each fraction of the hits, the most energetic first: all of
+    # them, and the top 4% (rounded up, but at least 2 hits), which leaves out
+    # the peripheral hits (e.g. from backscatter) that tilt the axis.
+    hit_fractions: [1.0, 0.04]
+    # How the figures bin the residuals: from -max_residual to max_residual
+    # degrees in n_bins bins, each a number for every fraction or a list with
+    # one for each. Changing them needs no measuring again, only plotting.
+    max_residual: 5
+    n_bins: 100
+    # How it is compared to Geant4, as in the paper's summary table.
+    metric: jensen_shannon
 
 # The slurm jobs of ./slurm_pipeline.sh, which runs every stage of the pipeline
 # as jobs of one file each (one input, one simulation, one reconstruction),

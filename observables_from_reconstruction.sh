@@ -24,8 +24,9 @@
 # writes
 #   <paths.data_dir>/observables/<simulator>.npz
 # with each profile per input file, as sums over events of each bin's energy
-# and of its square, and the reconstructed energy of each event
-# (ddml_bench/measure.py lists the keys). A simulator whose
+# and of its square, and the reconstructed energy of each event and the
+# residuals of its shower's intrinsic angles (ddml_bench/measure.py lists the
+# keys). A simulator whose
 # .npz file already has every key the configuration asks for, with the same
 # settings and from the same reconstructed files, is skipped.
 #

@@ -39,10 +39,13 @@ def test_pipeline_runs_every_stage(bench):
     assert sorted({row["simulator"] for row in rows}) == ["caloclouds3"]
     assert {(row["observable"], row["profile"]) for row in rows} == {
         ("radial_profile", "r100"), ("radial_profile", "r30"),
-        ("longitudinal_profile", "layers"), ("energy", "linearity"), ("energy", "resolution")}
+        ("longitudinal_profile", "layers"), ("energy", "linearity"), ("energy", "resolution"),
+        ("intrinsic_angle", "theta_all"), ("intrinsic_angle", "phi_all"),
+        ("intrinsic_angle", "theta_top4"), ("intrinsic_angle", "phi_top4")}
     assert all(float(row["value"]) > 0 for row in rows)
     for figure in ("radial_profile_r30__single_photon", "energy_linearity__single_photon",
-                   "energy_resolution__single_photon"):
+                   "energy_resolution__single_photon", "intrinsic_angle_theta_all__single_photon",
+                   "intrinsic_angle_phi_top4__single_photon"):
         assert os.path.isfile(bench.path("observables", "plots", figure + ".png")), figure
     # The two energies fix the straight line of the linearity, but not the
     # three parameters of the resolution's fit
@@ -63,6 +66,23 @@ def test_pipeline_runs_every_stage(bench):
                                    rtol=1e-5)
         ratio = data["energy__single_photon__reconstructed"] / data["energy__single_photon__true"]
         assert ((ratio > 0.8) & (ratio < 1.2)).all(), ratio
+        # and the residuals of the intrinsic angles: the axes of the fake
+        # showers, from all their hits and from their most energetic 4%, are
+        # near the photons' lines of flight
+        for angle in ("theta", "phi"):
+            for hits in ("all", "top4"):
+                residuals = data["intrinsic_angle__single_photon__d%s_%s" % (angle, hits)]
+                assert residuals.shape == (12,) and (np.abs(residuals) < 10).all(), residuals
+        # against the photons' own theta and phi
+        momenta = np.array([event["particles"][0]["momentum"] for name in INPUTS
+                            for event in json.load(open(bench.path(
+                                "sim_output", "single_photon", "geant4",
+                                name + ".edm4hep.root")))["events"]])
+        np.testing.assert_allclose(
+            data["intrinsic_angle__single_photon__theta_true"],
+            np.degrees(np.arccos(momenta[:, 2] / np.linalg.norm(momenta, axis=1))), atol=1e-4)
+        np.testing.assert_allclose(data["intrinsic_angle__single_photon__phi_true"],
+                                   np.degrees(np.arctan2(momenta[:, 1], momenta[:, 0])), atol=1e-4)
 
     # The simulations ran as the stages run ddsim
     with open(bench.path("sim_output", "single_photon", "caloclouds3",

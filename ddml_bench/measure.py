@@ -24,6 +24,17 @@ The observables known (the keys of `observables` in the configuration):
                         the figures take the energy linearity and resolution
                         from the central 90% of the events at each incident
                         energy (ddml_bench/plot.py)
+  intrinsic_angle       the intrinsic angles of each event's shower, theta and
+                        phi of its axis, less those of the incident particle's
+                        direction: the residuals, reconstructed - true. The
+                        axis is the first principal component of an
+                        energy-weighted principal component analysis (PCA) of
+                        the reconstructed hits (principal_axes()), once for
+                        each fraction of them in hit_fractions, the most
+                        energetic first: all of them, and the top 4%, which
+                        leaves out the peripheral hits that tilt the axis
+                        (most_energetic()). The figures histogram the residuals
+                        (ddml_bench/plot.py)
 
 The incident particle is the first MC particle with generator status 1 (the
 particle gun's), from the MC truth collection: MCParticles, as ddsim names it in
@@ -31,8 +42,9 @@ EDM4hep and the reconstruction passes it on, or MCParticle, its LCIO name. Each
 profile is stored per input file of the scenario, as the sum over events of each
 bin's energy and of its square, with the number of events; the mean energy per
 event in a bin, and its statistical uncertainty, follow from those. The energy
-is stored per event (the central 90% needs every event), in the order of the
-files, each file's events in turn. Keys, with "__" between the parts:
+and the intrinsic angles are stored per event (the central 90% needs every
+event, and the residuals can be binned anew), in the order of the files, each
+file's events in turn. Keys, with "__" between the parts:
 
   <observable>__<scenario>__<profile>__edges        bin edges
   <observable>__<scenario>__<profile>__sum          [file, bin] sum of energies, GeV
@@ -41,6 +53,14 @@ files, each file's events in turn. Keys, with "__" between the parts:
   energy__<scenario>__reconstructed                 [event] reconstructed energy, GeV
   energy__<scenario>__true                          [event] incident energy, GeV
   energy__<scenario>__settings                      the settings, as JSON
+  intrinsic_angle__<scenario>__dtheta_<hits>        [event] theta and phi of the axis
+  intrinsic_angle__<scenario>__dphi_<hits>          from the PCA of those hits, less the
+                                                    incident particle's, degrees (phi's
+                                                    from -180 to 180); NaN for a shower
+                                                    without an axis (fewer than 2 hits)
+  intrinsic_angle__<scenario>__theta_true           [event] theta and phi of the incident
+  intrinsic_angle__<scenario>__phi_true             particle's direction, degrees
+  intrinsic_angle__<scenario>__settings             the settings, as JSON
   <scenario>__files                                 the reconstructed files, relative
                                                     to paths.data_dir
   <scenario>__n_events                              [file] events used
@@ -48,10 +68,15 @@ files, each file's events in turn. Keys, with "__" between the parts:
   <scenario>__true_energy                           [file] mean incident energy, GeV
   meta__simulator, meta__label, meta__color, meta__linestyle
 
+where <hits> is all, for all the hits, or top<percent> for a fraction of them,
+e.g. top4 for the most energetic 4%. Theta is the polar angle, from the z axis
+(the beam), and phi the azimuth, atan2(y, x), in the global frame.
+
 A .npz file is up to date when it has every key the configuration asks for,
 made with the same settings from the same reconstructed files, none of them
 reconstructed again since. (Files measured before the paths were recorded
-relative to paths.data_dir, with full paths, still count.)
+relative to paths.data_dir, with full paths, still count.) Settings that only
+change the figures (see DRAWING) don't count.
 """
 
 import json
@@ -130,11 +155,14 @@ KINDS = {
     "longitudinal_profile": (longitudinal_profiles, "layer"),
 }
 
+
+# ---------------------------------------------------------------------------
 # The observables of each event as a whole, stored per event rather than in
-# bins, as the figures need every event: observable: what is stored of each
-PER_EVENT = {
-    "energy": ("reconstructed", "true"),
-}
+# bins (PER_EVENT, below): their settings, what is stored of each event, and
+# how it is measured on a chunk of events. Each measuring function takes the
+# observable, its settings, the file's Branches, the chunk (start, stop), the
+# incident particles (read_primary()) and the hits of the collections the
+# observables use (read_hits()), and gives {what: [event of the chunk]}.
 
 
 def check_particles(observable, settings):
@@ -152,9 +180,203 @@ def check_particles(observable, settings):
                               "or null for every reconstructed particle" % observable)
 
 
+def energy_items(observable, settings):
+    return ("reconstructed", "true")
+
+
+def measure_energy(observable, settings, branches, start, stop, primary, hits):
+    """The reconstructed energy of each event, and the incident particle's."""
+    return {"reconstructed": read_reconstructed_energy(branches, settings, observable, start,
+                                                       stop),
+            "true": primary[2]}
+
+
+# The intrinsic angles: theta and phi of the axis of each shower, from the PCA
+# of its hits, against those of the incident particle's direction
+
+ANGLES = ("theta", "phi")
+# The residuals' histograms in the figures when the settings don't say: from
+# -5 to 5 degrees, in 100 bins
+MAX_RESIDUAL = 5.0
+RESIDUAL_BINS = 100
+# Hits closer together than this (mm) have no axis between them; the centres
+# of any two cells are much further apart
+SAME_POINT = 1e-6
+
+
+def hit_selections(observable, settings):
+    """[(name, fraction)]: the PCAs of the intrinsic angle, one for each
+    fraction of the hits in hit_fractions, named all for all of them and
+    top<percent> for the rest, e.g. top4 for the most energetic 4%."""
+    fractions = _numbers(settings, "hit_fractions", observable)
+    if not fractions or not all(0 < f <= 1 for f in fractions):
+        raise ObservableError("observables.%s.hit_fractions should be fractions of the hits, "
+                              "above 0 and at most 1, e.g. [1.0, 0.04]" % observable)
+    names = ["all" if f == 1 else "top%g" % (100 * f) for f in fractions]
+    if len(set(names)) != len(names):
+        raise ObservableError("observables.%s.hit_fractions has a fraction twice: %s"
+                              % (observable, ", ".join("%g" % f for f in fractions)))
+    return list(zip(names, fractions))
+
+
+def residual_binning(observable, settings):
+    """{PCA name: (first edge, last edge, number of bins)}: how the figures
+    histogram the residuals of each PCA of hit_selections(), from
+    -max_residual to max_residual degrees in n_bins bins, each a number for
+    every PCA or a list with one for each (MAX_RESIDUAL and RESIDUAL_BINS
+    if not given)."""
+    selections = hit_selections(observable, settings)
+    given = dict(settings)
+    for key, default in (("max_residual", MAX_RESIDUAL), ("n_bins", RESIDUAL_BINS)):
+        if given.get(key) is None:
+            given[key] = default
+    limits = _numbers(given, "max_residual", observable)
+    n_bins = _numbers(given, "n_bins", observable, int)
+    limits = limits * len(selections) if len(limits) == 1 else limits
+    n_bins = n_bins * len(selections) if len(n_bins) == 1 else n_bins
+    if len(limits) != len(selections) or len(n_bins) != len(selections) \
+            or min(limits) <= 0 or min(n_bins) < 1:
+        raise ObservableError("observables.%s: max_residual and n_bins need a positive number "
+                              "each, or one for each of hit_fractions" % observable)
+    return dict((name, (-limit, limit, bins))
+                for (name, _), limit, bins in zip(selections, limits, n_bins))
+
+
+def check_angles(observable, settings):
+    """The settings of the intrinsic angle."""
+    collections = settings.get("hit_collections")
+    if not isinstance(collections, list) or not collections \
+            or not all(isinstance(c, str) and c for c in collections):
+        raise ObservableError("observables.%s needs hit_collections, a list of the collections "
+                              "of reconstructed calorimeter hits, e.g. [EcalBarrelCollectionRec]"
+                              % observable)
+    residual_binning(observable, settings)  # and hit_fractions with it
+
+
+def angle_items(observable, settings):
+    """dtheta_<PCA> and dphi_<PCA> for each PCA, then theta_true and phi_true."""
+    items = []
+    for name, _ in hit_selections(observable, settings):
+        items += ["d%s_%s" % (angle, name) for angle in ANGLES]
+    return tuple(items) + tuple(angle + "_true" for angle in ANGLES)
+
+
+def most_energetic(event, energy, n_events, fraction):
+    """Which hits are among the most energetic fraction of their event's hits:
+    as many as the fraction of them, rounded up, but at least two, the fewest
+    an axis needs (or all, for a fraction of 1). Equal energies go in the
+    order of the hits."""
+    import numpy as np
+    if fraction >= 1:
+        return np.ones(len(event), dtype=bool)
+    counts = np.bincount(event, minlength=n_events)
+    # The hits by event, the most energetic first, and the place of each in its event
+    order = np.lexsort((-energy, event))
+    rank = np.empty(len(event), dtype=np.int64)
+    rank[order] = np.arange(len(event)) - (np.cumsum(counts) - counts)[event[order]]
+    # (less a little, so that a product that should be whole isn't rounded up past it)
+    keep = np.maximum(np.ceil(fraction * counts - 1e-9), 2)
+    return rank < keep[event]
+
+
+def principal_axes(event, energy, position, n_events):
+    """The axis of the hits of each event: the first principal component of an
+    energy-weighted PCA, i.e. the direction in which the hits spread the most
+    about their centre, the spread and the centre both weighted by the hits'
+    energies (the eigenvector of the largest eigenvalue of the weighted
+    covariance of their positions). Unit vectors [event, 3] of either sign;
+    NaN for an event without hits with energy at two points apart."""
+    import numpy as np
+    keep = energy > 0
+    event, energy, position = event[keep], energy[keep], position[keep]
+    weight = np.bincount(event, weights=energy, minlength=n_events)
+    covariance = np.empty((n_events, 3, 3))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        centre = np.stack([np.bincount(event, weights=energy * position[:, c],
+                                       minlength=n_events) for c in range(3)], axis=1)
+        centre /= weight[:, None]
+        offset = position - centre[event]
+        for a in range(3):
+            for b in range(a, 3):
+                covariance[:, a, b] = covariance[:, b, a] = np.bincount(
+                    event, weights=energy * offset[:, a] * offset[:, b],
+                    minlength=n_events) / weight
+    has = (weight > 0) & np.isfinite(covariance).all(axis=(1, 2))
+    covariance[~has] = np.eye(3)  # anything that eigh takes; these have no axis
+    spread, vectors = np.linalg.eigh(covariance)  # eigenvalues from the smallest
+    axes = vectors[:, :, -1].copy()
+    axes[~has | ~(spread[:, -1] > SAME_POINT ** 2)] = np.nan
+    return axes
+
+
+def polar_angles(vectors):
+    """theta, from the z axis, and phi, atan2(y, x), of each of the vectors
+    [n, 3], in degrees."""
+    import numpy as np
+    with np.errstate(divide="ignore", invalid="ignore"):
+        cos_theta = vectors[:, 2] / np.linalg.norm(vectors, axis=1)
+    return (np.degrees(np.arccos(np.clip(cos_theta, -1, 1))),
+            np.degrees(np.arctan2(vectors[:, 1], vectors[:, 0])))
+
+
+def angle_residuals(axes, direction):
+    """theta and phi of each axis less those of the direction, in degrees, phi's
+    from -180 to 180; the axis taken along the direction (a principal axis has
+    no sign of its own)."""
+    import numpy as np
+    axes = np.where((np.einsum("ij,ij->i", axes, direction) < 0)[:, None], -axes, axes)
+    theta, phi = polar_angles(axes)
+    theta_true, phi_true = polar_angles(direction)
+    return theta - theta_true, (phi - phi_true + 180) % 360 - 180
+
+
+def measure_angles(observable, settings, branches, start, stop, primary, hits):
+    """The residuals of the intrinsic angles of each event, from each PCA of
+    hit_selections() of the hits of hit_collections, and the incident
+    particle's theta and phi."""
+    import numpy as np
+    direction = primary[1]
+    n_events = stop - start
+    parts = [hit for hit in hits if hit[0] in settings["hit_collections"]]
+    event = np.concatenate([p[1] for p in parts] + [np.zeros(0, dtype=np.int64)])
+    energy = np.concatenate([p[2] for p in parts] + [np.zeros(0)])
+    position = np.concatenate([p[3] for p in parts] + [np.zeros((0, 3))])
+    # Hits without energy have no weight in a PCA, so they aren't counted
+    with_energy = energy > 0
+    event, energy, position = event[with_energy], energy[with_energy], position[with_energy]
+    values = dict(zip(("theta_true", "phi_true"), polar_angles(direction)))
+    for name, fraction in hit_selections(observable, settings):
+        chosen = most_energetic(event, energy, n_events, fraction)
+        axes = principal_axes(event[chosen], energy[chosen], position[chosen], n_events)
+        values["dtheta_" + name], values["dphi_" + name] = angle_residuals(axes, direction)
+    return values
+
+
+# The observables of each event as a whole, stored per event rather than in
+# bins, as the figures need every event: observable: (what checks its
+# settings, what is stored of each event (given the settings), and what
+# measures that)
+PER_EVENT = {
+    "energy": (check_particles, energy_items, measure_energy),
+    "intrinsic_angle": (check_angles, angle_items, measure_angles),
+}
+
+
+def event_items(name, settings):
+    """What an observable stored per event stores of each event."""
+    return tuple(PER_EVENT[name][1](name, settings))
+
+
+# The settings of each observable that only change its figures, not what is
+# measured, so changing them only needs plotting again (./plot_observables.sh)
+DRAWING = {"intrinsic_angle": ("max_residual", "n_bins")}
+
+
 def observable_settings(name, settings):
-    """The settings that decide an observable's numbers (not how it is compared)."""
-    return {k: v for k, v in sorted(settings.items()) if k != "metric"}
+    """The settings that decide an observable's numbers (not how it is
+    compared, or drawn)."""
+    drawn = ("metric",) + DRAWING.get(name, ())
+    return {k: v for k, v in sorted(settings.items()) if k not in drawn}
 
 
 def check_observables(config):
@@ -171,7 +393,7 @@ def check_observables(config):
         if not isinstance(settings, dict) or not settings.get("scenarios"):
             raise ObservableError("observables.%s needs a list of scenarios" % name)
         if name in PER_EVENT:
-            check_particles(name, settings)
+            PER_EVENT[name][0](name, settings)
         else:
             KINDS[name][0](name, settings)  # check the binning early
             if not settings.get("hit_collections"):
@@ -438,7 +660,7 @@ def is_up_to_date(path, profiles, files, relative=None):
             keys = set(data.files)
             for name, scenario, profile, edges, settings_json in profiles:
                 if profile is None:
-                    for what in PER_EVENT[name] + ("settings",):
+                    for what in event_items(name, json.loads(settings_json)) + ("settings",):
                         if event_key(name, scenario, what) not in keys:
                             return False, "%s has no %s" % (
                                 os.path.basename(path), event_key(name, scenario, what))
@@ -501,13 +723,19 @@ def measure_file(path, observables, profiles, simulator, cache):
                     if name in KINDS)
     by_event = dict((name, settings) for name, settings in observables.items()
                     if name in PER_EVENT)
+    # The hit collections to read, with what the profiles need from each (those
+    # of the observables stored per event, e.g. the intrinsic angle, too)
     by_collection = {}
     for name, settings in profiled.items():
         for collection in settings["hit_collections"]:
             by_collection.setdefault(collection, set()).add(KINDS[name][1])
+    for name, settings in by_event.items():
+        for collection in settings.get("hit_collections") or ():
+            by_collection.setdefault(collection, set())
     sums = {key: [np.zeros(len(edges) - 1), np.zeros(len(edges) - 1)]
             for key, edges in profiles.items()}
-    events = dict((name, dict((what, []) for what in PER_EVENT[name])) for name in by_event)
+    events = dict((name, dict((what, []) for what in event_items(name, settings)))
+                  for name, settings in by_event.items())
     n_events = n_no_primary = 0
     energy_total = 0.0
     branches = Branches(path)
@@ -515,16 +743,18 @@ def measure_file(path, observables, profiles, simulator, cache):
         for start in range(0, branches.entries, CHUNK):
             stop = min(start + CHUNK, branches.entries)
             n = stop - start
-            vertex, direction, true_energy, has = read_primary(branches, start, stop)
+            primary = read_primary(branches, start, stop)
+            vertex, direction, true_energy, has = primary
             n_events += int(has.sum())
             n_no_primary += int(n - has.sum())
             energy_total += float(true_energy[has].sum())
-            for name, settings in by_event.items():
-                reconstructed = read_reconstructed_energy(branches, settings, name, start, stop)
-                events[name]["reconstructed"].append(reconstructed[has])
-                events[name]["true"].append(true_energy[has])
             hits = read_hits(branches, list(by_collection), start, stop,
                              any("layer" in v for v in by_collection.values()))
+            for name, settings in by_event.items():
+                measured = PER_EVENT[name][2](name, settings, branches, start, stop, primary,
+                                              hits)
+                for what, stored in events[name].items():
+                    stored.append(measured[what][has])
             for collection, event, energy, position, cell_id in hits:
                 values = {}
                 if "radius" in by_collection[collection]:
@@ -584,8 +814,8 @@ def compute_simulator(observables, simulator, files, profiles, out_path, relativ
                              for name, scen, profile, edges, _ in profiles
                              if scen == scenario and profile is not None}
         per_file = {key: ([], []) for key in scenario_profiles}
-        per_event = dict((name, dict((what, []) for what in PER_EVENT[name]))
-                         for name in measured if name in PER_EVENT)
+        per_event = dict((name, dict((what, []) for what in event_items(name, settings)))
+                         for name, settings in measured.items() if name in PER_EVENT)
         counts, no_primary, energies = [], [], []
         for i, path in enumerate(paths, 1):
             say("  %s [%d/%d] %s" % (scenario, i, len(paths), os.path.basename(path)))
