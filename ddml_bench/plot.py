@@ -343,7 +343,7 @@ def finish(fig, axes, out_base, formats):
 
 # Events whose true energies differ by less than this fraction of them are at
 # the same energy
-SAME_ENERGY = 1e-3
+SAME_ENERGY = 1e-2
 # Resamplings of the events at each energy, for the uncertainties of mu90 and
 # sigma90; the same every time, so the figures are too
 BOOTSTRAP = 200
