@@ -1,13 +1,32 @@
 #!/usr/bin/env python3
-"""Plot the wall time of each pipeline step from the ddml-bench slurm logs.
+"""Plot the time taken by each pipeline step, from the FaSiNaTe logs.
 
-Every *.out file under the given paths (default: ./slurm) is read.  A job's time
-is the gap between its two ddml-bench lines,
+Simulation and reconstruction (steps 2 and 3) are timed from the log written
+next to each output, which ends, when the job succeeded, in
+
+    # finished  2026-10-16 12:59:38, after 1793 s
+
+These logs are found in every data folder: the paths.data_dir of the FaSiNaTe
+configuration (scripts/fasinate_config.py of the repository, with
+configs/local.yaml and $FASINATE_CONFIG) and the data_dir in each pipeline
+run's plan.json; or only those given with --data-dir.  Their folder gives the
+scenario and simulator:
+
+    sim_output/<scenario>/<simulator>/<sample>.log      2  simulation
+    rec_output/<scenario>/<simulator>/<sample>.log      3  reconstruction
+
+Test samples (<input>_n<N>, from -n N) and the scenario "custom" (files given
+directly) are left out.  A log is rewritten each time its output is made
+again, so it times the latest attempt.
+
+The other steps are timed from the slurm logs, every *.out file under the given
+paths (default: ./slurm): the gap between the two ddml-bench lines of the job,
 
     ddml-bench: job 25369500 on max-wn148.desy.de, 2026-10-21 18:43:42: generate:...
     ddml-bench: job 25369500 finished 2026-10-21 18:44:26, with status 0
 
-and its step, model and scenario are read off the log name:
+with step, model and scenario read off the log name (slurm logs of
+simulation and reconstruction jobs are not used):
 
     001-generate-di_photon-diphoton_en20_..._seed0.out           1  -            di_photon
     003-geant4-di_photon-diphoton_en20_..._seed0_simseed1.out    2  geant4       di_photon
@@ -27,9 +46,11 @@ runs, other seeds and simseeds, other input configurations - with their mean as
 the marker and their spread as the error bar.  Colour = model, marker =
 scenario; steps not tied to one model (input generation, plotting) are grey.
 
-examples:
+examples, from the data folder:
   python3 plot_step_times.py                            # ./slurm -> step_times.png
   python3 plot_step_times.py slurm/pipeline_* -o step_times.pdf --csv jobs.csv
+  python3 plot_step_times.py --repo ~/training/analysis/FaSiNaTe
+  python3 plot_step_times.py --data-dir /data/dust/user/dayhallh/analysis/data
   python3 plot_step_times.py --error minmax --linear
 """
 from __future__ import annotations
@@ -39,12 +60,14 @@ import csv
 import itertools
 import json
 import math
+import os
 import re
 import statistics
+import subprocess
 import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # -----------------------------------------------------------------------------
@@ -110,6 +133,17 @@ END_RE = re.compile(
 RUN_STAMP = re.compile(r"_\d{8}_\d{6}_\d+$")  # pipeline_20261021_184320_3142239
 INDEX = re.compile(r"^\d+-")                  # 001-
 GATHERING_STEPS = {4, 5}  # one job covers every measured scenario: observables, plot
+
+# The logs next to the outputs (ddml_bench/layout.py, stages/simulate.py and
+# stages/reconstruct.py): <data_dir>/<folder>/<scenario>/<simulator>/<sample>.log
+OUTPUT_STEPS = {"sim_output": 2, "rec_output": 3}
+OUTPUT_STARTED_RE = re.compile(
+    r"^# started\s+(?P<time>\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d) on (?P<host>\S+)", re.M)
+OUTPUT_END_RE = re.compile(r"^# (?P<what>finished|FAILED|INTERRUPTED)\b", re.M)
+OUTPUT_FINISHED_RE = re.compile(
+    r"# finished\s+(?P<time>\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d), after (?P<seconds>\d+(?:\.\d+)?) s")
+TEST_SAMPLE = re.compile(r"(?:^|_)n\d+(?=_|$)")  # <input>_n<N>, from -n N
+CUSTOM_SCENARIO = "custom"
 
 
 @dataclass
@@ -187,21 +221,139 @@ def run_of(path):
     return path.parent
 
 
-_measured = {}
+_plans = {}
+
+
+def read_plan(run_dir):
+    """A pipeline run's plan.json, or {} without one."""
+    if run_dir not in _plans:
+        try:
+            with open(run_dir / "plan.json") as fh:
+                plan = json.load(fh)
+            _plans[run_dir] = plan if isinstance(plan, dict) else {}
+        except (OSError, ValueError):
+            _plans[run_dir] = {}
+    return _plans[run_dir]
 
 
 def measured_scenarios(run_dir):
     """The scenarios the observables of a pipeline run measure, as its plan.json
     lists them (plan["observables"]["scenarios"]), or None without one."""
-    if run_dir not in _measured:
-        try:
-            with open(run_dir / "plan.json") as fh:
-                found = json.load(fh)["observables"]["scenarios"]
-            found = [s for s in found if isinstance(s, str)] or None
-        except (OSError, ValueError, KeyError, TypeError):
-            found = None
-        _measured[run_dir] = found
-    return _measured[run_dir]
+    try:
+        found = read_plan(run_dir)["observables"]["scenarios"]
+        return [s for s in found if isinstance(s, str)] or None
+    except (KeyError, TypeError):
+        return None
+
+
+# ------------------------------------------------- logs next to the outputs
+
+def config_data_dir(repo, config_files):
+    """paths.data_dir of the FaSiNaTe configuration in repo, as
+    scripts/fasinate_config.py merges it, or (None, why not)."""
+    script = Path(repo).expanduser() / "scripts" / "fasinate_config.py"
+    if not script.is_file():
+        return None, f"no {script}"
+    env = dict(os.environ)
+    if config_files:
+        env["FASINATE_CONFIG"] = ":".join(
+            [f for f in env.get("FASINATE_CONFIG", "").split(":") if f] + list(config_files))
+    python = os.environ.get("FASINATE_PYTHON") or sys.executable
+    try:
+        result = subprocess.run([python, str(script), "--get", "paths.data_dir"],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                universal_newlines=True, env=env, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, f"{script} failed: {exc}"
+    if result.returncode != 0 or not result.stdout.strip():
+        why = (result.stderr or result.stdout).strip().splitlines()
+        return None, f"{script} failed: {why[-1] if why else result.returncode}"
+    return Path(result.stdout.strip().splitlines()[-1]), ""
+
+
+def find_data_dirs(args, run_dirs):
+    """[(data folder, where it came from)]: those given, or the configuration's
+    and those in the runs' plan.json."""
+    if args.data_dir:
+        found = [(d, "--data-dir") for d in args.data_dir]
+    else:
+        plans = [read_plan(r) for r in run_dirs]
+        found = [(Path(p["data_dir"]), "plan.json") for p in plans
+                 if isinstance(p.get("data_dir"), str)]
+        repos = Counter(p["repo_dir"] for p in plans if isinstance(p.get("repo_dir"), str))
+        repo = args.repo or os.environ.get("FASINATE_REPO_DIR") or \
+            (repos.most_common(1)[0][0] if repos else None)
+        if repo:
+            data_dir, why = config_data_dir(repo, args.fasinate_config)
+            if data_dir is None:
+                print(f"warning: can't read the FaSiNaTe configuration: {why}", file=sys.stderr)
+            else:
+                found.insert(0, (data_dir, f"configuration in {repo}"))
+        elif not found:
+            print("warning: no FaSiNaTe repository to read the configuration from; "
+                  "give one with --repo, or the data folder with --data-dir", file=sys.stderr)
+    unique, seen = [], set()
+    for path, source in found:
+        key = os.path.realpath(path)
+        if key not in seen:
+            seen.add(key)
+            unique.append((path, source))
+    return unique
+
+
+def read_ends(path, size=16384):
+    """The first and last few KB of a file, as text (the logs can be large)."""
+    with open(path, "rb") as fh:
+        head = fh.read(size)
+        fh.seek(0, os.SEEK_END)
+        end = fh.tell()
+        fh.seek(max(0, end - size))
+        tail = fh.read()
+    return head.decode("utf-8", "replace"), tail.decode("utf-8", "replace")
+
+
+def output_logs(data_dirs, args, parse_time, skip):
+    """Jobs timed from the logs next to the simulation and reconstruction outputs."""
+    jobs, seen = [], set()
+    for data_dir, _ in data_dirs:
+        for folder, step in OUTPUT_STEPS.items():
+            for path in sorted((data_dir / folder).glob("*/*/*.log")):
+                key = os.path.realpath(path)
+                if key in seen or path.name.startswith(".") or not path.is_file():
+                    continue
+                seen.add(key)
+                scenario, simulator = path.parent.parent.name, path.parent.name
+                sample = path.stem
+                log = Log(path, data_dir, folder, [], step, simulator, scenario, sample)
+                if scenario == CUSTOM_SCENARIO:
+                    skip("scenario 'custom' (files given directly)", log)
+                    continue
+                if TEST_SAMPLE.search(sample) and not args.include_test:
+                    skip("test sample (_n<N>; use --include-test)", log)
+                    continue
+                try:
+                    head, tail = read_ends(path)
+                except OSError as exc:
+                    skip(f"unreadable ({exc.strerror})", log)
+                    continue
+                ends = list(OUTPUT_END_RE.finditer(tail))
+                if not ends:
+                    skip("no '# finished' line (still running, or killed)", log)
+                    continue
+                if ends[-1]["what"] != "finished":
+                    skip(f"its last attempt ended {ends[-1]['what']}", log)
+                    continue
+                done = OUTPUT_FINISHED_RE.match(tail, ends[-1].start())
+                if done is None:
+                    skip("unreadable '# finished' line", log)
+                    continue
+                seconds = float(done["seconds"])
+                end = parse_time(done["time"])
+                started = OUTPUT_STARTED_RE.search(head)
+                start = parse_time(started["time"]) if started else end - timedelta(seconds=seconds)
+                host = started["host"] if started else ""
+                jobs.append(Job(log, seconds, 0, start, end, host, "", ""))
+    return jobs
 
 
 def run_words(run):
@@ -386,7 +538,7 @@ def write_csv(jobs, path):
     print(f"wrote {path}")
 
 
-def plot(points, unit, model_style, scenario_style, args, n_jobs, n_runs):
+def plot(points, unit, model_style, scenario_style, args, source):
     import matplotlib
     if not args.show:
         matplotlib.use("Agg")
@@ -439,9 +591,7 @@ def plot(points, unit, model_style, scenario_style, args, n_jobs, n_runs):
     ax.set_xlabel("Step")
     ax.set_ylabel(f"Wall time per job [{unit}]")
     ax.set_title(args.title, loc="left")
-    ax.set_title(f"{ERROR_TEXT[args.error]}\n{n_jobs} job{'s' if n_jobs != 1 else ''} "
-                 f"from {n_runs} run{'s' if n_runs != 1 else ''}",
-                 loc="right", fontsize=8, color="0.35")
+    ax.set_title(f"{ERROR_TEXT[args.error]}\n{source}", loc="right", fontsize=8, color="0.35")
 
     # Hand-made legends: colour <-> model, marker shape <-> scenario.
     def legend(handles, title, top, **kw):
@@ -485,6 +635,17 @@ def parse_args(argv=None):
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("paths", nargs="*", type=Path, default=[Path("slurm")],
                    help="slurm directories, run directories or single logs (default: ./slurm)")
+    p.add_argument("--data-dir", metavar="DIR", type=Path, action="append", default=[],
+                   help="data folder holding sim_output/ and rec_output/ (repeatable); by "
+                        "default the configuration's paths.data_dir and those in plan.json")
+    p.add_argument("--repo", metavar="DIR",
+                   help="FaSiNaTe repository whose configuration names the data folder "
+                        "(default: $FASINATE_REPO_DIR, else repo_dir in plan.json)")
+    p.add_argument("--fasinate-config", metavar="FILE", action="append", default=[],
+                   help="configuration file to merge over the repository's, as its scripts' "
+                        "--config (repeatable)")
+    p.add_argument("--include-test", action="store_true",
+                   help="also time test samples (<input>_n<N>, made with -n N)")
     p.add_argument("-o", "--out", type=Path, default=Path("step_times.png"),
                    help="figure to write; the suffix sets the format (default: step_times.png)")
     p.add_argument("--csv", type=Path, help="also write one row per timed job to this CSV")
@@ -517,14 +678,34 @@ def main(argv=None):
     parse_time = time_parser(args.tz)
     excludes = [re.compile(rx) for rx in args.exclude]
 
+    jobs, skipped, example = [], Counter(), {}
+
+    def skip(reason, log):
+        skipped[reason] += 1
+        example.setdefault(reason, log.path)
+
     logs = find_logs(args.paths, args.glob)
     if not logs:
-        sys.exit(f"No {args.glob} files under {' '.join(map(str, args.paths))}; run from "
-                 "the directory that holds slurm/ or pass its path.")
+        print(f"warning: no {args.glob} files under {' '.join(map(str, args.paths))}, so "
+              "only simulation and reconstruction are timed; run from the directory that "
+              "holds slurm/ or pass its path", file=sys.stderr)
 
-    # 1. Step, model and scenario of each log, from its name.
+    # 1. Simulation and reconstruction, from the logs next to their outputs.
+    data_dirs = find_data_dirs(args, sorted({log.run_dir for log in logs}))
+    for data_dir, source in data_dirs:
+        print(f"data folder {data_dir}  (from the {source})")
+    out_jobs = output_logs(data_dirs, args, parse_time, skip)
+    n_out_logs = len(out_jobs) + sum(skipped.values())
+    jobs += out_jobs
+    if not out_jobs:
+        print("warning: no finished simulation or reconstruction logs found, so steps 2 and 3 "
+              "are empty; give the data folder with --data-dir", file=sys.stderr)
+
+    # 2. Step, model and scenario of each slurm log, from its name.
     models, scenarios = learn_names(logs, stage_steps)
-    named, unknown_words = [], Counter()
+    models |= {j.log.model for j in out_jobs}  # e.g. observables-<model> of a new model
+    scenarios |= {j.log.scenario for j in out_jobs}
+    named, unknown_words, replaced = [], Counter(), 0
     for log in logs:
         parsed = classify(log.words, stage_steps, models, scenarios)
         if parsed is None and run_words(log.run):  # e.g. simulate_geant4_<stamp>/
@@ -533,6 +714,9 @@ def main(argv=None):
             unknown_words[log.words[0] if log.words else log.path.name] += 1
             continue
         log.step, log.model, log.scenario, log.config = parsed
+        if log.step in OUTPUT_STEPS.values():
+            replaced += 1  # timed from the log next to its output instead
+            continue
         named.append(log)
     # A name without a scenario: an observables or plot job covers every scenario
     # its run measures (plan.json); otherwise go by the other logs of the run.
@@ -546,13 +730,7 @@ def main(argv=None):
             found = set(found or run_scenarios[log.run_dir])
             log.scenario = next(iter(found)) if len(found) == 1 else ALL if found else UNKNOWN
 
-    # 2. Time of each job, from its ddml-bench lines.
-    jobs, skipped, example = [], Counter(), {}
-
-    def skip(reason, log):
-        skipped[reason] += 1
-        example.setdefault(reason, log.path)
-
+    # 3. Time of each other job, from its ddml-bench lines.
     for log in named:
         attempts, excluded = read_attempts(log.path, excludes)
         if excluded:
@@ -575,18 +753,23 @@ def main(argv=None):
             jobs.append(Job(log, seconds, status, t0, t1, start["host"], start["job"],
                             start["task"].strip()))
 
-    n_runs = len({log.run for log in logs})
-    print(f"{len(logs)} logs in {n_runs} run directories -> {len(jobs)} timed jobs")
+    n_runs = len({log.run_dir for log in logs})
+    n_slurm = len(jobs) - len(out_jobs)
+    print(f"{n_out_logs} simulation/reconstruction logs + {len(logs)} slurm logs in "
+          f"{n_runs} run directories -> {len(jobs)} timed jobs")
+    if replaced:
+        print(f"  not used {replaced:4d}: slurm logs of simulation/reconstruction jobs "
+              "(timed from the logs next to their outputs)")
     for reason, n in skipped.most_common():
-        print(f"  skipped {n:4d}: {reason}, e.g. {example[reason]}")
+        print(f"  skipped  {n:4d}: {reason}, e.g. {example[reason]}")
     if unknown_words:
         words = ", ".join(f"{w} ({n})" for w, n in unknown_words.most_common())
-        print(f"  skipped {sum(unknown_words.values()):4d}: name starts with an unknown word: "
-              f"{words}\n                 (map one to a step with --stage WORD=STEP)")
+        print(f"  skipped  {sum(unknown_words.values()):4d}: name starts with an unknown word: "
+              f"{words}\n                  (map one to a step with --stage WORD=STEP)")
     if not jobs:
         sys.exit("No finished jobs to plot.")
 
-    # 3. Pool, report and plot.
+    # 4. Pool, report and plot.
     points = summarise(jobs, args.error)
     unit = auto_unit(points) if args.unit == "auto" else args.unit
     model_style = styles(sorted({p.model for p in points}, key=model_rank), MODELS,
@@ -596,8 +779,11 @@ def main(argv=None):
     print_table(points, unit, model_style, scenario_style)
     if args.csv:
         write_csv(jobs, args.csv)
-    plot(points, unit, model_style, scenario_style, args,
-         n_jobs=len(jobs), n_runs=len({j.log.run for j in jobs}))
+    runs = len({j.log.run_dir for j in jobs if j.log.step not in OUTPUT_STEPS.values()})
+    source = (f"steps 2-3: {len(out_jobs)} output log{'s' if len(out_jobs) != 1 else ''}; "
+              f"steps 1, 4-5: {n_slurm} slurm job{'s' if n_slurm != 1 else ''} "
+              f"from {runs} run{'s' if runs != 1 else ''}")
+    plot(points, unit, model_style, scenario_style, args, source)
 
 
 if __name__ == "__main__":
