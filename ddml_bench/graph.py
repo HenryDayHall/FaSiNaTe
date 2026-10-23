@@ -16,15 +16,29 @@ run one stage, and pipeline.sh and slurm_pipeline.sh, which run them all.
                       run, and what each task to run waits for.
 
 A task is done when its output exists, unless its stage is forced; the
-measurements when they are up to date with the reconstructions, and the plots
-with the measurements. A task that isn't done waits for the tasks it needs that
-aren't done either. A task whose output exists stays done even if something it
-needs is still to be made, unless that is being made again (--force): then it
-is made again too.
+measurements when they are up to date by what their .npz files record, and the
+plots when they are up to date with the measurements. A task that isn't done
+waits for the tasks it needs that aren't done either. A task whose output
+exists stays done even if something it needs is still to be made, unless that
+is made anew (changes): forced (--force), or made from something made anew;
+then it is made again too.
+
+The simulations and reconstructions are intermediate: one that isn't there is
+made only if something still to be made needs it, or if nothing needs it at
+all (the reconstructions of a scenario that nothing measures), whichever
+stages run. What is done without it doesn't need it: a reconstruction that is
+there doesn't need its simulation, and measurements that are up to date don't
+need their reconstructions, as their .npz file records what it was made from.
+So the simulations and reconstructions of a simulator whose .npz file is up
+to date aren't made: not again when they were deleted, nor at all when the
+measurements were fetched with the inputs (e.g. the references', so that
+adding a model runs only its own tasks and the plots). Forcing their stage
+(--force) makes them, as does reconstructing a simulation file given.
 
 Each task gets a status: done; todo (to run); blocked (it needs what isn't done
-and won't be made this time); or unselected (not chosen by --stages, the
-simulators, --scenario or the files given).
+and won't be made this time); unneeded (an intermediate one that isn't there,
+but that nothing still to be made needs); or unselected (not chosen by
+--stages, the simulators, --scenario or the files given).
 """
 
 import os
@@ -39,8 +53,10 @@ from .scenarios import INPUT_TYPES, scenario_inputs
 from .stages import BY_NAME, STAGE_NAMES, STAGES, StageError
 from .stages import reconstruct
 
-DONE, TODO, BLOCKED, UNSELECTED = "done", "todo", "blocked", "unselected"
-STATUSES = (DONE, TODO, BLOCKED, UNSELECTED)
+DONE, TODO, BLOCKED, UNNEEDED, UNSELECTED = "done", "todo", "blocked", "unneeded", "unselected"
+STATUSES = (DONE, TODO, BLOCKED, UNNEEDED, UNSELECTED)
+# Why a task isn't needed: this, then the task that is done without it
+DONE_WITHOUT = "what it is for is done: "
 
 
 class PlanError(Exception):
@@ -313,24 +329,32 @@ class Graph(object):
     def find_status(self):
         """Set the status of every task (see the module docstring); for those to
         run, the tasks they wait for (after), and whether they make their output
-        again (redo)."""
+        again (redo). A task that isn't done changes what is made from it
+        (changes) unless it is to be made only because it isn't there."""
+        forced = set(self.plan["force"])
         for task in self.list:
             stage = BY_NAME[task["stage"]]
             needs = [self.by_key[key] for key in task["needs"]]
             waiting = [other for other in needs if other["status"] == TODO]
-            remade = [other for other in waiting if other["redo"]]
+            # What it needs that is made anew, rather than only because it isn't
+            # there: what it was made from changes
+            changing = [other for other in waiting if other["changes"]]
             missing = [other for other in needs if other["status"] in (BLOCKED, UNSELECTED)]
             done, why = stage.current(task)
-            if task["stage"] in self.plan["force"]:
+            if task["stage"] in forced:
                 done, why = False, "--force %s" % task["stage"]
-            elif remade:
-                done, why = False, "%s is made again" % self.describe(remade[0])
-            elif waiting and stage.gathers:
+            elif changing:
+                done, why = False, "%s is made again" % self.describe(changing[0])
+            elif waiting and stage.gathers and not stage.records_inputs:
+                # (A stage that records what it gathers knows from that record
+                # whether it is up to date without what isn't there)
                 done, why = False, "%s is still to be made" % self.describe(waiting[0])
 
-            task.update(status=DONE, why="", redo=False, after=[])
+            task.update(status=DONE, why="", redo=False, changes=False, after=[])
             if done:
                 continue
+            exists = os.path.exists(task["output"])
+            task["changes"] = exists or bool(changing) or task["stage"] in forced
             if not self.selected(task):
                 task.update(status=UNSELECTED, why=why)
             elif missing and not stage.takes_what_there_is:
@@ -342,9 +366,43 @@ class Graph(object):
                 task.update(status=BLOCKED, why=stage.nothing_to_use(task))
             else:
                 # Made again where it exists, without checking again when it runs
-                task.update(status=TODO, why=why, redo=os.path.exists(task["output"]),
+                task.update(status=TODO, why=why, redo=exists,
                             after=[other["key"] for other in waiting])
+        self._leave_out_what_isnt_needed()
         return self
+
+    def _leave_out_what_isnt_needed(self):
+        """Intermediate tasks to run, or blocked, only because their outputs
+        aren't there are unneeded if every task needing them is done without
+        them, or isn't needed either, selected to run or not (see the module
+        docstring); the latest first, so that each comes after those that need
+        it. A task is done without what it needs if its output is there (it
+        stays done when that is made), or if it records what it gathers (the
+        measurements); the plots, of whatever is measured, aren't."""
+        users = dict((task["key"], []) for task in self.list)
+        for task in self.list:
+            for key in task["needs"]:
+                users[key].append(task)
+        done_with = {}  # key of a task not needed: a task done without it
+        for task in reversed(self.list):
+            if (task["status"] == DONE or task["changes"] or task["key"] in self.given
+                    or not BY_NAME[task["stage"]].intermediate or not users[task["key"]]):
+                continue
+            found = []
+            for user in users[task["key"]]:
+                stage = BY_NAME[user["stage"]]
+                if user["key"] in done_with:
+                    found.append(done_with[user["key"]])
+                elif user["status"] == DONE and (stage.records_inputs or not stage.gathers):
+                    found.append(user)
+                else:
+                    break
+            else:
+                done_with[task["key"]] = found[0]
+                # (Those not selected keep their status, but don't need theirs)
+                if task["status"] in (TODO, BLOCKED):
+                    task.update(status=UNNEEDED, redo=False, after=[],
+                                why=DONE_WITHOUT + self.describe(found[0]))
 
     def tasks(self, status):
         return [task for task in self.list if task.get("status") == status]

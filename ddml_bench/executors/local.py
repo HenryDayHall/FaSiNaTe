@@ -3,7 +3,7 @@ environment (the one from setup.sh). A task whose needs failed is skipped;
 the others go on.
 """
 
-from ..graph import BLOCKED, TODO
+from ..graph import BLOCKED, TODO, UNNEEDED
 from ..stages import BY_NAME, StageError
 from . import ExecutorError, Report, describe, label, report_stages, run_task, say
 
@@ -27,7 +27,8 @@ def run(graph, dry_run=False, out=None):
         elif graph.tasks(BLOCKED):
             out("ddml-bench: nothing to run, but some tasks are blocked (see above)")
         else:
-            out("ddml-bench: everything selected is done, so there is nothing to run")
+            out("ddml-bench: everything selected is done%s, so there is nothing to run"
+                % (" or not needed" if graph.tasks(UNNEEDED) else ""))
         return 1 if blocked else 0
     if dry_run:
         out("ddml-bench: would run %d task(s), in this order:" % len(todo))

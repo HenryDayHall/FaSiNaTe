@@ -22,9 +22,9 @@
 #       --stages LIST    only these stages, separated by commas (default: all)
 #   -n, --events N       a test run on the first N events of each input, with
 #                        outputs named _n<N>, as the stage scripts' -n N makes
-#   -f, --force STAGE    make the outputs of STAGE again where they exist, and
-#                        everything made from them (repeatable, or a list
-#                        separated by commas)
+#   -f, --force STAGE    make the outputs of STAGE, again where they exist and
+#                        even where nothing needs them, and everything made
+#                        from them (repeatable, or a list separated by commas)
 #   -c, --config FILE    merge FILE over the configuration, for this and every
 #                        job it submits (repeatable), e.g. --config
 #                        configs/pipeline_test.yaml for a very light test run
@@ -36,10 +36,15 @@
 # rest come from the slurm section of the configuration (partition,
 # constraint and time limit of each stage's jobs).
 #
-# A task is done when its output exists; the measurements when they are up to
-# date with the reconstructions, and the plots with the measurements. A task
-# whose stage, simulator or scenario isn't selected isn't submitted, and nor is
-# anything that needs it. Run this again at any time, e.g. to resubmit what
+# A task is done when its output exists; the measurements when their .npz file
+# is up to date by what it records (the settings, and the reconstructions it
+# was made from, which needn't be there any more), and the plots when they are
+# up to date with the measurements. A simulation or reconstruction is made
+# only if something still to be made needs it, so none is made for
+# measurements that are up to date, e.g. fetched with the inputs: adding a
+# model then submits only its jobs and the plots'. A task whose stage,
+# simulator or scenario isn't selected isn't submitted, and nor is anything
+# that needs it. Run this again at any time, e.g. to resubmit what
 # failed or timed out: what is done is skipped, and a task that a job of an
 # earlier submission is still queued or running for isn't submitted again, but
 # waited for. Jobs that wait for a job that fails are cancelled.

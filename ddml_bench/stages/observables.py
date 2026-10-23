@@ -4,7 +4,11 @@ simulator, which gathers the numbers every plot needs into one .npz file
 
 A simulator is measured once every input of every scenario the observables
 use is reconstructed, and measured again when its .npz file is out of date:
-when the observables' settings change, or its reconstructions do.
+when the observables' settings change, or its reconstructions do. The .npz
+file records what it was made from, so it is up to date by that record alone,
+whether its reconstructions are still there or not (records_inputs): the
+measurements of a simulator can be fetched, e.g. those of the references,
+and then nothing is simulated or reconstructed for them (ddml_bench/graph.py).
 """
 
 import os
@@ -22,6 +26,7 @@ def say(message):
 class Observables(Stage):
     name = "observables"
     gathers = True
+    records_inputs = True
 
     def add_tasks(self, graph):
         plan = graph.plan
@@ -47,13 +52,10 @@ class Observables(Stage):
             graph.measuring.append(task)
 
     def current(self, task):
-        files = task["params"]["files"]
-        paths = [path for scenario in sorted(files) for path in files[scenario]]
-        absent = [path for path in paths if not os.path.isfile(path)]
-        if absent:
-            return False, "%d of its %d reconstructions aren't there" % (len(absent), len(paths))
+        # By the .npz file's record, whether or not the reconstructions are there
         return measure.is_up_to_date(task["output"],
-                                     measure.wanted(task["params"]["observables"]), files,
+                                     measure.wanted(task["params"]["observables"]),
+                                     task["params"]["files"],
                                      Layout(task["params"]["data_dir"]).relative)
 
     def check_environment(self, tasks):
@@ -61,6 +63,13 @@ class Observables(Stage):
 
     def run(self, task):
         params = task["params"]
+        files = params["files"]
+        paths = [path for scenario in sorted(files) for path in files[scenario]]
+        absent = [path for path in paths if not os.path.isfile(path)]
+        if absent:
+            raise StageError("measuring %s needs its reconstructions, but %d of its %d aren't "
+                             "there, e.g. %s" % (task["simulator"], len(absent), len(paths),
+                                                 absent[0]))
         say("%s: measuring %s" % (task["simulator"], task["output"]))
         try:
             measure.compute_simulator(params["observables"], params["simulator"],

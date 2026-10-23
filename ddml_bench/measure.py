@@ -94,9 +94,13 @@ e.g. top4 for the most energetic 4%. Theta is the polar angle, from the z axis
 
 A .npz file is up to date when it has every key the configuration asks for,
 made with the same settings from the same reconstructed files, none of them
-reconstructed again since. (Files measured before the paths were recorded
-relative to paths.data_dir, with full paths, still count.) Settings that only
-change the figures (see DRAWING) don't count.
+reconstructed again since. The file's own record of what it was made from
+decides this, so the reconstructed files needn't be there any more, or ever
+have been in this data folder (the .npz files of the references can be
+fetched rather than made): only those that are there are checked for being
+newer. (Files measured before the paths were recorded relative to
+paths.data_dir, with full paths, still count, from any data folder.) Settings
+that only change the figures (see DRAWING) don't count.
 """
 
 import json
@@ -811,10 +815,28 @@ def wanted(observables):
     return result
 
 
+def same_files(stored, paths, relative=None):
+    """Whether the reconstructed files a .npz file records (stored) are paths:
+    recorded as relative(path), relative to the data folder; or, as files
+    measured before the records were relative are, by their full paths, in
+    this data folder or in another one (the same files below it)."""
+    recorded = [relative(p) for p in paths] if relative else list(paths)
+    if stored == recorded or stored == list(paths):
+        return True
+    return len(stored) == len(recorded) and all(
+        old == new or (os.path.isabs(old) and not os.path.isabs(new)
+                       and old.endswith(os.sep + new))
+        for old, new in zip(stored, recorded))
+
+
 def is_up_to_date(path, profiles, files, relative=None):
     """The .npz file has every key asked for, with the same binning and settings,
     from the same reconstructed files ({scenario: [path]}), none of them
-    reconstructed again since. relative(path) is how the files are recorded."""
+    reconstructed again since. relative(path) is how the files are recorded.
+
+    What the .npz file records decides it: the reconstructed files needn't be
+    there (e.g. deleted since, or the .npz file fetched with the inputs rather
+    than measured here); only those that are must not be newer than it."""
     import numpy as np
     if not os.path.isfile(path):
         return False, "no %s yet" % os.path.basename(path)
@@ -845,12 +867,10 @@ def is_up_to_date(path, profiles, files, relative=None):
                         return False, "%s has no %s" % (os.path.basename(path),
                                                        SEP.join((scenario, what)))
                 stored = [str(f) for f in data[SEP.join((scenario, "files"))]]
-                recorded = [relative(p) for p in paths] if relative else list(paths)
-                # Files measured before the records were relative have full paths
-                if stored != recorded and stored != list(paths):
+                if not same_files(stored, paths, relative):
                     return False, "the reconstructed files of %s changed" % scenario
-                newest = max(os.path.getmtime(p) for p in paths)
-                if newest > os.path.getmtime(path):
+                there = [p for p in paths if os.path.isfile(p)]
+                if there and max(os.path.getmtime(p) for p in there) > os.path.getmtime(path):
                     return False, "files of %s were reconstructed again since" % scenario
     except (OSError, ValueError) as error:
         return False, "can't read %s: %s" % (path, error)

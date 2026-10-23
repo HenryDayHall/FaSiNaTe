@@ -78,6 +78,8 @@ def reco_args(extra, particle_gun):
 
 class Reconstruct(Stage):
     name = "reconstruct"
+    # Made for the measurements
+    intermediate = True
 
     def add_tasks(self, graph):
         layout = graph.layout

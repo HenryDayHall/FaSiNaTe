@@ -35,6 +35,8 @@ _COMPONENT = re.compile(r"^\s*(?:(v[0-9]+)::)?([^:]+):(.*\S)\s*$")
 class Simulate(Stage):
     # A simulation whose input isn't there, and won't be made, is an error
     blocked_is_error = True
+    # Made for the reconstructions, and those for the measurements
+    intermediate = True
 
     def simulators(self, graph):
         """The simulators this stage runs, as models.py describes them."""

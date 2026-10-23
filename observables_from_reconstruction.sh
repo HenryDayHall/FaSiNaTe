@@ -28,7 +28,9 @@
 # residuals of its shower's intrinsic angles (ddml_bench/measure.py lists the
 # keys). A simulator whose
 # .npz file already has every key the configuration asks for, with the same
-# settings and from the same reconstructed files, is skipped.
+# settings and from the same reconstructed files, is skipped, whether or not
+# those files are still there (or ever were, if the .npz file was fetched):
+# the .npz file records them, relative to paths.data_dir.
 #
 # Reading the EDM4hep files (with uproot) needs the environment from setup.sh:
 # in a shell that has sourced it, this runs right there; anywhere else it runs

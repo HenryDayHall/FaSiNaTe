@@ -27,6 +27,7 @@ The benchmark follows the paper *"A First Full Physics Benchmark for Highly Gran
   - [5. Measure the observables](#5-measure-the-observables)
   - [6. Plot](#6-plot)
 - [Where the data goes](#where-the-data-goes)
+- [Reusing published measurements](#reusing-published-measurements)
 - [Extending the benchmark](#extending-the-benchmark)
 - [Tests](#tests)
 - [Repository layout](#repository-layout)
@@ -131,6 +132,8 @@ Run `slurm_pipeline.sh` on a login node, from the repository root. Before submit
 ```
 
 Either can be run again at any time. What is done is skipped, and whatever failed or timed out is run again. A task needing one that failed isn't run (a job waiting for one that fails is cancelled), so after a failure, fix what went wrong and run the script again. A task that a job of an earlier submission is still queued or running for is waited for, not submitted again. Adding a model to `models/` and running it again runs that model's tasks and the plots.
+
+The simulations and reconstructions are only made for what is still to be made from them. One that isn't there isn't made while what it is for is done: a simulation whose reconstruction is there, or the simulations and reconstructions of a simulator whose measurements are up to date, as its `.npz` file records what it was measured from. So once a simulator is measured, its simulations and reconstructions can be deleted (to save space) without being made again, and measurements fetched along with the inputs need no simulation at all ([Reusing published measurements](#reusing-published-measurements)). The stage scripts work the same way; `--dry-run` reports such tasks as `not needed`, and `--force` (`-f`) makes them anyway.
 
 Each submission of `slurm_pipeline.sh` gets a folder, `slurm/pipeline_<time>/` in `paths.data_dir`, with the job script, the jobs submitted (`jobs.tsv`), what was done and why (`tasks.json`) and each job's slurm log in `logs/`. Every job runs one task of `tasks.json`, `scripts/ddml-bench run-task`, in the environment from `setup.sh`; the tasks write their logs next to their outputs, as the stage scripts do. The partition, constraint, time limit and other `sbatch` options of each stage's jobs are in the `slurm` section of the configuration.
 
@@ -239,7 +242,7 @@ Geant4 is slow, so on a slurm cluster use `slurm_pipeline.sh --stages geant4`, w
 
 Before simulating, it checks that the DDML libraries, the `ddml` Python package and each preset's plugin come from the configured build, and that each model's weights match their recorded md5 sum. Each model is simulated in the detector it was trained for (`fixed_at_training.detector.compact_file`).
 
-Both simulation scripts accept `-i FILE` to simulate an arbitrary input file (written under the scenario name `custom`), `--file FILE` to simulate just that one of the scenarios' inputs, and `-f/--force` to redo existing outputs. `ddsim` writes to a hidden file that is renamed only on success, so an output that exists is always complete. An input that isn't made yet is an error.
+Both simulation scripts accept `-i FILE` to simulate an arbitrary input file (written under the scenario name `custom`), `--file FILE` to simulate just that one of the scenarios' inputs, and `-f/--force` to redo existing outputs (and make those that [nothing needs](#the-whole-pipeline-at-once), e.g. for measurements that are up to date). `ddsim` writes to a hidden file that is renamed only on success, so an output that exists is always complete. An input that isn't made yet is an error, unless nothing needs its simulation.
 
 A scenario with `simulation_seeds` (`di_photon` has `[1, 2, 3]`) has each of its inputs simulated once with each seed, passed to `ddsim` as `--random.seed`, each a task of its own named `<input>_simseed<S>`, so that the plots can take the spread over the seeds. Otherwise `ddsim` chooses the seed, and writes it in its log.
 
@@ -254,7 +257,7 @@ The simulations are reconstructed with ILD's standard reconstruction under Gaudi
 ./reconstruct_simulation.sh path/to/sim.root        # one file
 ```
 
-It reconstructs the simulations of the scenarios' inputs, by Geant4 and by every model, each in the detector it was simulated in (`--compact FILE` overrides this). Each `<name>.root` becomes `<name>_REC.edm4hep.root`, alongside `<name>_AIDA.root`, `<name>_PfoAnalysis.root` and the log. With `-n N` it reconstructs the simulations of the first N events, `<input>_n<N>`, whole; simulation files can also be given directly, and `-s custom` reconstructs what was simulated with `-i`. `--noBeamCalReco` is always passed, and `--usingParticleGun` for particle-gun scenarios; further arguments for `ILDReconstruction.py` go in `reconstruction.extra_args` (e.g. `[--lcioOutput, "on"]` to also write LCIO). As with simulation, outputs appear only once complete and existing ones are skipped unless `--force` is given.
+It reconstructs the simulations of the scenarios' inputs, by Geant4 and by every model, each in the detector it was simulated in (`--compact FILE` overrides this). Each `<name>.root` becomes `<name>_REC.edm4hep.root`, alongside `<name>_AIDA.root`, `<name>_PfoAnalysis.root` and the log. With `-n N` it reconstructs the simulations of the first N events, `<input>_n<N>`, whole; simulation files can also be given directly, and `-s custom` reconstructs what was simulated with `-i`. `--noBeamCalReco` is always passed, and `--usingParticleGun` for particle-gun scenarios; further arguments for `ILDReconstruction.py` go in `reconstruction.extra_args` (e.g. `[--lcioOutput, "on"]` to also write LCIO). As with simulation, outputs appear only once complete, and existing ones, and those nothing needs, are skipped unless `--force` is given (a simulation file given is reconstructed even if nothing needs it).
 
 ### 5. Measure the observables
 
@@ -274,7 +277,7 @@ The current observables are the shower profiles, the energy response and the int
 - `intrinsic_angle`: the residuals, reconstructed − true, of the polar angle θ and the azimuth φ of each shower's axis (the paper's iTheta and iPhi). The axis is the first principal component of an energy-weighted principal component analysis (PCA) of the shower's reconstructed hits: the direction in which they spread the most about their centre, both weighted by the hits' energies, taken along the photon's direction, since an axis has no sign of its own. There is one PCA for each fraction of the hits in `hit_fractions`, the most energetic first: all of them, and the top 4% (rounded up, at least 2 hits), which leaves out the peripheral hits, e.g. from backscatter, that tilt the axis. Angles are in degrees in the global frame, θ from the beam axis and φ = atan2(y, x), with Δφ wrapped to ±180°.
 - `photon_separation`: for each event of two incident photons, their separation on the front face of the ECAL barrel, from the MC truth of the reconstructed event (`MCParticles`, its two particles of generator status 1): the distance between the points where their lines of flight cross the plane of the stave they head into, `surface_distance` (1804.7 mm in ILD_l5_o1_v02) from the beam axis, of the `barrel_symmetry` (8) staves. The guns' photons start on the face, so they cross it where they start. With it go the mean of the two photons' energies and the number of the event's reconstructed photons, the reconstructed particles in `particle_collections` (`PandoraPFOs`) of the PDG codes in `pdg` (`[22]`).
 
-For each simulator it writes `observables/<simulator>.npz`, holding every profile per input file as sums over events of each bin's energy and squared energy, plus the event count and the `ddsim` seed of each file. From these the mean per event and its statistical uncertainty follow, for all energies combined or each separately. The energy, the angles' residuals and the separation are kept per event, since the central 90% the plots take needs every event and the residuals and separations can then be binned anew ([`ddml_bench/measure.py`](ddml_bench/measure.py) documents the keys). The reconstructed files are recorded relative to `paths.data_dir`, so the files stay valid when copied elsewhere. A simulator is skipped if its file already has every requested key, computed with the same settings from the same files; adding an observable, or changing its settings, measures every simulator again (only this stage, not the reconstruction).
+For each simulator it writes `observables/<simulator>.npz`, holding every profile per input file as sums over events of each bin's energy and squared energy, plus the event count and the `ddsim` seed of each file. From these the mean per event and its statistical uncertainty follow, for all energies combined or each separately. The energy, the angles' residuals and the separation are kept per event, since the central 90% the plots take needs every event and the residuals and separations can then be binned anew ([`ddml_bench/measure.py`](ddml_bench/measure.py) documents the keys). The reconstructed files are recorded relative to `paths.data_dir`, so the files stay valid when copied elsewhere. A simulator is skipped if its file already has every requested key, computed with the same settings from the same files, by what the file records: the reconstructed files needn't still be there, though any that are mustn't be newer. Adding an observable, or changing its settings, measures every simulator again: only this stage while their reconstructions are there, but a simulator whose reconstructions are gone (or never were, as for measurements fetched elsewhere) is simulated and reconstructed again first.
 
 The cellID encoding is read from the reconstructed file, or failing that from the detector geometry; set `observables.longitudinal_profile.cell_id_encoding` to give it by hand. A warning is printed if more than 1% of a file's hits fall outside layers 0 to `max_layer`, which usually means the encoding is wrong.
 
@@ -323,6 +326,21 @@ Everything is written under `paths.data_dir`:
 ```
 
 One module, [`ddml_bench/layout.py`](ddml_bench/layout.py), names all of these. Test runs with `-n N` add `_n<N>` to every file name after the inputs, the simulations of a scenario's `simulation_seeds` add `_simseed<S>` after that, and files simulated with `-i` go under the scenario `custom` (reconstructions of files outside `sim_output` go to `rec_output/custom/files/`).
+
+## Reusing published measurements
+
+A model can be compared with simulators measured elsewhere, e.g. the Geant4 reference and CaloClouds3 from a published record, without running anything of theirs again. Put these in the same folders of a data folder of your own (`paths.data_dir`):
+
+- `input_single_particle_gun/*.slcio`, the scenarios' inputs, so that the new model simulates the same events (the `.h5` files beside them hold the generated truth for analyses; no stage reads them);
+- `observables/<simulator>.npz` of each simulator measured: everything the figures, `metrics.csv` and `fits.csv` are made from.
+
+Keep the `scenarios` and `observables` of the configuration as they were measured with, then add the model to `models/` and run `./pipeline.sh` or `./slurm_pipeline.sh` (or the stage scripts): only the new model is simulated, reconstructed and measured, and then all of them are plotted. Each `.npz` file records the reconstructions it was measured from, relative to the data folder, and is up to date by that record, so their simulations and reconstructions aren't needed; `--dry-run` shows them as `not needed`.
+
+The simulations and reconstructions are needed only to measure those simulators again: adding an observable, or changing the settings of one, simulates them again unless their reconstructions are fetched too. What the `.npz` files don't hold:
+
+- the test samples (`-n N`), whose measurements are files of their own, `<simulator>_n<N>.npz`;
+- the step timings of [`scripts/plot_step_times.py`](scripts/plot_step_times.py), which come from the logs next to the simulations and reconstructions and from the slurm logs (and compare only between runs on the same machines);
+- the software they were made with: nothing checks yet that it matches yours, so pin `key4hep.release`, `ddml.commit`, `detector_configs.ildconfig.commit`, `reconstruction.extra_args` and the detector (`geant4.compact`) to what they were measured with.
 
 ## Extending the benchmark
 

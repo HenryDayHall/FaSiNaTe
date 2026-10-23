@@ -28,7 +28,7 @@ import time
 
 from .. import process
 from ..environment import ENTRY, LAUNCHER, run_in_environment
-from ..graph import BLOCKED, TODO
+from ..graph import BLOCKED, TODO, UNNEEDED
 from ..stages import BY_NAME
 from . import ExecutorError, Report, describe, label, report_stages, say
 
@@ -205,7 +205,8 @@ def submit(directory, dry_run=False, extra=()):
         elif any(task["status"] == BLOCKED for task in tasks):
             out("ddml-bench: nothing to submit, but some tasks are blocked (see above)")
         else:
-            out("ddml-bench: everything selected is done, so there is nothing to submit")
+            out("ddml-bench: everything selected is done%s, so there is nothing to submit"
+                % (" or not needed" if any(task["status"] == UNNEEDED for task in tasks) else ""))
         return 0
 
     ids = dict(queued)

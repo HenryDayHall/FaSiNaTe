@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from ddml_bench import measure
+from ddml_bench.layout import Layout
 
 SIMULATOR = {"name": "geant4", "label": "Geant4", "color": "#9a9a9a", "linestyle": "-",
              "compact_file": None}
@@ -98,6 +99,42 @@ def test_measurements_are_made_again_when_the_energy_settings_change(reconstruct
     np.savez_compressed(out, **arrays)
     assert measure.is_up_to_date(out, measure.wanted(observables), files) == (
         False, "geant4.npz has no energy__s__reconstructed")
+
+
+def test_what_a_measurement_records_says_whether_it_is_up_to_date(reconstructed, tmp_path):
+    """Whether or not the reconstructed files are still there (or ever were, if
+    the .npz file was fetched), but not once one that is there is newer."""
+    observables = configured()
+    wanted = measure.wanted(observables)
+    relative = Layout(str(tmp_path)).relative
+    out = str(tmp_path / "observables" / "geant4.npz")
+    measure.compute_simulator(observables, SIMULATOR, {"s": [reconstructed]}, wanted, out,
+                              relative)
+    files = {"s": [reconstructed]}
+    assert measure.is_up_to_date(out, wanted, files, relative) == (True, "")
+    later = os.path.getmtime(out) + 10
+    os.utime(reconstructed, (later, later))
+    assert measure.is_up_to_date(out, wanted, files, relative) == (
+        False, "files of s were reconstructed again since")
+    os.remove(reconstructed)
+    assert measure.is_up_to_date(out, wanted, files, relative) == (True, "")
+    assert measure.is_up_to_date(out, wanted, {"s": [str(tmp_path / "other_REC.edm4hep.root")]},
+                                 relative) == (False, "the reconstructed files of s changed")
+
+
+def test_full_paths_recorded_in_another_data_folder_are_the_same_files():
+    relative = Layout("/here/data").relative
+    paths = ["/here/data/rec_output/s/geant4/%s_REC.edm4hep.root" % name for name in "ab"]
+    assert measure.same_files(["rec_output/s/geant4/%s_REC.edm4hep.root" % name
+                               for name in "ab"], paths, relative)
+    assert measure.same_files(paths, paths, relative)
+    elsewhere = ["/data/dust/user/someone/data/rec_output/s/geant4/%s_REC.edm4hep.root" % name
+                 for name in "ab"]
+    assert measure.same_files(elsewhere, paths, relative)
+    assert not measure.same_files(elsewhere[::-1], paths, relative)
+    assert not measure.same_files(elsewhere[:1], paths, relative)
+    assert not measure.same_files(["/data/old_rec_output/s/geant4/a_REC.edm4hep.root"],
+                                  paths[:1], relative)
 
 
 def test_a_missing_particle_collection_says_what_to_set(reconstructed, tmp_path):

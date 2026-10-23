@@ -150,8 +150,9 @@ def command_run(argv):
     parser.add_argument("-n", "--events", type=positive_int, metavar="N",
                         help="a test on the first N events of each input")
     parser.add_argument("-f", "--force", action="append", default=[], metavar="STAGE",
-                        help="make the outputs of STAGE again, and what is made from them "
-                             "(repeatable, or a list separated by commas)")
+                        help="make the outputs of STAGE again, even where nothing needs them, "
+                             "and what is made from them (repeatable, or a list separated by "
+                             "commas)")
     parser.add_argument("--executor", choices=("local", "slurm"), default="local",
                         help="run the tasks one after another here, or as slurm jobs")
     common_options(parser)
@@ -203,7 +204,8 @@ def stage_parser(name):
                             help="reconstruct in this detector (relative to k4geo unless "
                                  "absolute)")
     parser.add_argument("-f", "--force", action="store_true",
-                        help="make the outputs again where they exist")
+                        help="make the outputs again where they exist, and where nothing "
+                             "needs them")
     common_options(parser)
     return parser, positional
 

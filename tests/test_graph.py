@@ -3,12 +3,15 @@ in this process with the tests' configuration (no environment needed)."""
 
 import collections
 import os
+import shutil
 
 import pytest
 
-from ddml_bench import config
+from ddml_bench import config, measure, models
 from ddml_bench.config import ConfigError
-from ddml_bench.graph import BLOCKED, DONE, TODO, UNSELECTED, Graph, PlanError, make_plan
+from ddml_bench.graph import (BLOCKED, DONE, TODO, UNNEEDED, UNSELECTED, Graph, PlanError,
+                              make_plan)
+from ddml_bench.layout import Layout
 from ddml_bench.stages import BY_NAME
 
 
@@ -29,8 +32,44 @@ def outputs(graph, stage):
     return [task["output"] for task in graph.list if task["stage"] == stage]
 
 
-def status(graph, stage):
-    return collections.Counter(task["status"] for task in graph.list if task["stage"] == stage)
+def status(graph, stage, simulator=None):
+    return collections.Counter(task["status"] for task in graph.list if task["stage"] == stage
+                               and simulator in (None, task["simulator"]))
+
+
+def measure_all(graph, monkeypatch):
+    """Write each simulator's .npz file as the observables stage does, up to
+    date for its task, without reading any reconstructions (as if fetched):
+    every key it needs, with nothing measured in them."""
+    import numpy as np
+
+    def nothing(path, observables, profiles, simulator, cache):
+        sums = dict((key, [np.zeros(len(edges) - 1), np.zeros(len(edges) - 1)])
+                    for key, edges in profiles.items())
+        events = dict((name, dict((what, np.zeros(0))
+                                  for what in measure.event_items(name, settings)))
+                      for name, settings in observables.items() if name in measure.PER_EVENT)
+        return sums, events, 0, 0, float("nan")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(measure, "measure_file", nothing)
+        for task in graph.list:
+            if task["stage"] == "observables":
+                params = task["params"]
+                measure.compute_simulator(params["observables"], params["simulator"],
+                                          params["files"], measure.wanted(params["observables"]),
+                                          task["output"], Layout(params["data_dir"]).relative,
+                                          seeds=params["seeds"])
+
+
+@pytest.fixture
+def fetched(configured, monkeypatch):
+    """The data folder with only the inputs and each simulator's .npz file, as
+    fetched from where they are published."""
+    graph = Graph(make_plan())
+    touch(*outputs(graph, "generate"))
+    measure_all(graph, monkeypatch)
+    return configured
 
 
 def test_a_task_per_file_each_after_what_it_needs(configured):
@@ -105,6 +144,125 @@ def test_what_isnt_selected_isnt_run(configured):
     assert status(graph, "geant4") == {BLOCKED: 4}
     assert all("isn't selected to run" in task["why"] for task in graph.list
                if task["stage"] == "geant4")
+
+
+def test_up_to_date_measurements_need_no_simulations_or_reconstructions(fetched):
+    """The inputs and the .npz files, as fetched: nothing to simulate,
+    reconstruct or measure, only the plots."""
+    graph = Graph(make_plan()).find_status()
+    assert status(graph, "generate") == {DONE: 3}
+    assert status(graph, "geant4") == status(graph, "models") == {UNNEEDED: 4}
+    assert status(graph, "reconstruct") == {UNNEEDED: 8}
+    assert status(graph, "observables") == {DONE: 2}
+    plot, = [task for task in graph.list if task["stage"] == "plot"]
+    assert plot["status"] == TODO and plot["after"] == []
+    for task in graph.list:
+        if task["status"] == UNNEEDED:
+            assert task["why"] == "what it is for is done: the measurements of %s" \
+                % task["simulator"]
+            assert task["after"] == [] and not task["redo"]
+
+
+def test_a_model_added_runs_only_its_own_tasks(fetched, monkeypatch):
+    folder = os.path.join(fetched.tmp, "models")
+    os.makedirs(folder)
+    for name in ("caloclouds3", "newmodel"):
+        shutil.copy(os.path.join(models.MODELS_DIR, "caloclouds3.yaml"),
+                    os.path.join(folder, name + ".yaml"))
+    monkeypatch.setattr(models, "MODELS_DIR", folder)
+    graph = Graph(make_plan()).find_status()
+    assert status(graph, "geant4") == {UNNEEDED: 4}
+    assert status(graph, "models", "caloclouds3") == {UNNEEDED: 4}
+    assert status(graph, "models", "newmodel") == {TODO: 4}
+    assert status(graph, "reconstruct", "newmodel") == {TODO: 4}
+    assert status(graph, "reconstruct") == {UNNEEDED: 8, TODO: 4}
+    assert status(graph, "observables") == {DONE: 2, TODO: 1}
+    plot, = [task for task in graph.list if task["stage"] == "plot"]
+    assert plot["status"] == TODO and plot["after"] == [
+        task["key"] for task in graph.list
+        if task["stage"] == "observables" and task["simulator"] == "newmodel"]
+
+
+def test_forcing_a_stage_makes_what_isnt_there_and_what_is_made_from_it(fetched):
+    graph = Graph(make_plan(force=["geant4"])).find_status()
+    assert status(graph, "geant4") == {TODO: 4}
+    assert not any(task["redo"] for task in graph.list if task["stage"] == "geant4")
+    assert status(graph, "reconstruct", "geant4") == {TODO: 4}
+    assert all(task["why"].endswith("is made again") for task in graph.list
+               if task["stage"] == "reconstruct" and task["simulator"] == "geant4")
+    measured = dict((task["simulator"], task) for task in graph.list
+                    if task["stage"] == "observables")
+    assert measured["geant4"]["status"] == TODO and measured["geant4"]["redo"]
+    # CaloClouds3's measurements are up to date, so its tasks aren't needed
+    assert measured["caloclouds3"]["status"] == DONE
+    assert status(graph, "models") == {UNNEEDED: 4}
+    assert status(graph, "reconstruct", "caloclouds3") == {UNNEEDED: 4}
+
+
+def test_measurements_out_of_date_need_their_reconstructions(fetched, monkeypatch):
+    override = os.path.join(fetched.tmp, "photons.yaml")
+    with open(override, "w") as stream:
+        stream.write("observables:\n  energy:\n    pdg: [22]\n")
+    monkeypatch.setenv("FASINATE_CONFIG", fetched.config + ":" + override)
+    graph = Graph(make_plan()).find_status()
+    assert [task["why"] for task in graph.list if task["stage"] == "observables"] == [
+        "the settings of energy changed"] * 2
+    assert status(graph, "geant4") == status(graph, "models") == {TODO: 4}
+    assert status(graph, "reconstruct") == {TODO: 8}
+
+
+def test_whichever_stages_run_what_isnt_needed_isnt_made(fetched):
+    """The stage scripts (e.g. simulate_geant4.sh) make only what is needed
+    too, unless forced."""
+    graph = Graph(make_plan(stages=["geant4"])).find_status()
+    assert status(graph, "geant4") == {UNNEEDED: 4}
+    assert status(graph, "reconstruct") == {UNSELECTED: 8}
+    # Not blocked, though their simulations aren't there
+    graph = Graph(make_plan(stages=["reconstruct"])).find_status()
+    assert status(graph, "reconstruct") == {UNNEEDED: 8}
+    graph = Graph(make_plan(stages=["geant4"], force=["geant4"])).find_status()
+    assert status(graph, "geant4") == {TODO: 4}
+
+
+def test_the_inputs_and_a_simulation_given_are_made_whatever_needs_them(fetched):
+    """Only the simulations and reconstructions are intermediate: the inputs
+    are the benchmark's events, and a simulation given is to be reconstructed."""
+    graph = Graph(make_plan())
+    for path in outputs(graph, "generate"):
+        os.remove(path)
+    graph.find_status()
+    assert status(graph, "generate") == {TODO: 3}
+    assert status(graph, "geant4") == {UNNEEDED: 4}
+    simulation = outputs(graph, "geant4")[0]
+    touch(simulation)
+    graph = Graph(make_plan(stages=["reconstruct"], simulations=[simulation])).find_status()
+    assert [task["inputs"] for task in graph.tasks(TODO)] == [[simulation]]
+
+
+def test_with_nothing_measured_a_stage_run_on_its_own_makes_all_of_it(configured):
+    """The measurements still to be made need every simulation."""
+    graph = Graph(make_plan())
+    touch(*outputs(graph, "generate"))
+    graph = Graph(make_plan(stages=["geant4"])).find_status()
+    assert status(graph, "geant4") == {TODO: 4}
+
+
+def test_simulations_deleted_once_reconstructed_arent_made_again(configured, monkeypatch):
+    graph = Graph(make_plan())
+    touch(*[path for stage in ("generate", "geant4", "models", "reconstruct")
+            for path in outputs(graph, stage)])
+    measure_all(graph, monkeypatch)
+    for path in outputs(graph, "geant4"):
+        os.remove(path)
+    graph = Graph(make_plan()).find_status()
+    assert status(graph, "geant4") == {UNNEEDED: 4}
+    assert status(graph, "models") == {DONE: 4}
+    assert status(graph, "reconstruct") == {DONE: 8}
+    assert status(graph, "observables") == {DONE: 2}
+    for task in graph.list:
+        if task["stage"] == "geant4":
+            assert task["why"] == "what it is for is done: the reconstruction of the geant4 " \
+                "simulation of %s" % task["name"]
 
 
 def test_only_the_inputs_named(configured):

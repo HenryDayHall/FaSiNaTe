@@ -21,9 +21,9 @@
 #       --stages LIST    only these stages, separated by commas (default: all)
 #   -n, --events N       a test run on the first N events of each input, with
 #                        outputs named _n<N>
-#   -f, --force STAGE    make the outputs of STAGE again where they exist, and
-#                        everything made from them (repeatable, or a list
-#                        separated by commas)
+#   -f, --force STAGE    make the outputs of STAGE, again where they exist and
+#                        even where nothing needs them, and everything made
+#                        from them (repeatable, or a list separated by commas)
 #   -c, --config FILE    merge FILE over the configuration (repeatable), e.g.
 #                        --config configs/pipeline_test.yaml for a very light
 #                        test run
@@ -31,10 +31,15 @@
 #                        then stop
 #   -h, --help           show this help
 #
-# A task is done when its output exists; the measurements when they are up to
-# date with the reconstructions, and the plots with the measurements. A task
-# that fails stops only the tasks that need its output; run this again to
-# carry on. Logs go next to the outputs, as the stage scripts write them.
+# A task is done when its output exists; the measurements when their .npz file
+# is up to date by what it records (the settings, and the reconstructions it
+# was made from, which needn't be there any more), and the plots when they are
+# up to date with the measurements. A simulation or reconstruction is made
+# only if something still to be made needs it, so none is made for
+# measurements that are up to date, e.g. fetched with the inputs: adding a
+# model then runs only its tasks and the plots. A task that fails stops only
+# the tasks that need its output; run this again to carry on. Logs go next to
+# the outputs, as the stage scripts write them.
 #
 # In a shell that has sourced setup.sh, this runs right there. Anywhere else it
 # first builds what setup.sh needs, if needed, then runs in a clean shell that

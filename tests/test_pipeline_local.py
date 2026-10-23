@@ -5,6 +5,7 @@ tests/fakes at the ends."""
 import csv
 import json
 import os
+import shutil
 
 import h5py
 import numpy as np
@@ -166,6 +167,65 @@ def test_pipeline_runs_every_stage(bench):
     assert "(--force reconstruct)" in output
     assert "(the reconstruction of the geant4 simulation of %s is made again)" % INPUTS[0] \
         in output
+
+
+def test_a_model_added_to_fetched_measurements_runs_only_its_own_tasks(bench):
+    """With only the inputs and the .npz files of the simulators measured so far,
+    as fetched from where they are published, into a data folder of its own:
+    adding a model simulates, reconstructs and measures only that model, and
+    plots it against the others."""
+    bench.run("pipeline.sh")
+    measured = dict((name, open(bench.path("observables", name), "rb").read())
+                    for name in ("caloclouds3.npz", "geant4.npz"))
+    fetched = os.path.join(bench.tmp, "fetched")
+    for folder in ("input_single_particle_gun", "observables"):
+        os.makedirs(os.path.join(fetched, folder))
+        for name in bench.files(folder):
+            if name != "plots":
+                shutil.copy(bench.path(folder, name), os.path.join(fetched, folder, name))
+    override = os.path.join(bench.tmp, "fetched.yaml")
+    with open(override, "w") as stream:
+        stream.write("paths:\n  data_dir: %s\n" % fetched)
+    bench.env["FASINATE_CONFIG"] = bench.config + ":" + override
+    bench.data = fetched
+
+    status, output = bench.run("pipeline.sh", "--dry-run")
+    assert "would run 1 task(s)" in output and "plot         every .npz file" in output, output
+    assert "not needed, so not made, as what they are for is done: the measurements of geant4, " \
+        "the measurements of caloclouds3" in output, output
+    status, output = bench.run("simulate_geant4.sh", "--dry-run")
+    assert "everything selected is done or not needed, so there is nothing to run" in output, \
+        output
+
+    with open(os.path.join(bench.repo, "models", "caloclouds3.yaml")) as stream:
+        model = stream.read().replace("name: CaloClouds3", "name: Another model")
+    with open(os.path.join(bench.repo, "models", "another.yaml"), "w") as stream:
+        stream.write(model.replace('linestyle: "-"', 'linestyle: "--"'))
+    status, output = bench.run("pipeline.sh", "--dry-run")
+    # Its 4 simulations and reconstructions, its measurements and the plots
+    assert "would run 10 task(s)" in output, output
+    status, output = bench.run("simulate_models.sh", "--dry-run")
+    assert "would run 4 task(s)" in output and "models       caloclouds3" not in output, output
+    status, output = bench.run("slurm_pipeline.sh", "--dry-run")
+    assert "would submit 10 job(s)" in output, output
+    status, output = bench.run("pipeline.sh")
+    assert "made 10 of 10" in output, output
+
+    for scenario in ("single_photon", "di_photon"):
+        assert bench.files("sim_output", scenario) == ["another"]
+        assert bench.files("rec_output", scenario) == ["another"]
+    assert bench.files("observables") == ["another.npz", "caloclouds3.npz", "geant4.npz", "plots"]
+    for name, data in measured.items():
+        assert open(bench.path("observables", name), "rb").read() == data, name
+    rows = read_metrics(bench.path("observables", "plots", "metrics.csv"))
+    assert sorted({row["simulator"] for row in rows}) == ["another", "caloclouds3"]
+    status, output = bench.run("pipeline.sh")
+    assert "everything selected is done" in output, output
+
+    # Forcing Geant4 simulates it again, and everything made from that
+    status, output = bench.run("pipeline.sh", "--dry-run", "-f", "geant4")
+    assert "would run 10 task(s)" in output, output
+    assert "(the Geant4 simulation of %s is made again)" % INPUTS[0] in output, output
 
 
 def test_stage_scripts_keep_one_sample_through_every_stage(bench):

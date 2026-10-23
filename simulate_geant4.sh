@@ -13,7 +13,8 @@
 #       --file FILE      simulate only FILE, one of the scenarios' inputs
 #                        (repeatable)
 #   -n, --events N       a test on the first N events of each input
-#   -f, --force          simulate again even where the output exists
+#   -f, --force          simulate again even where the output exists, and also
+#                        where nothing needs it (see below)
 #   -c, --config FILE    merge FILE over the configuration (repeatable)
 #       --dry-run        show what would be simulated and what is done, then stop
 #   -h, --help           show this help
@@ -21,7 +22,10 @@
 # Each simulation writes
 #   <paths.data_dir>/sim_output/<scenario>/geant4/<input name>.edm4hep.root
 # (<input name>_n<N>.edm4hep.root with --events), with its log next to it, and
-# is skipped if that output exists. ddsim writes to a hidden file that is only
+# is skipped if that output exists, or if nothing still to be made needs it:
+# if its reconstruction is there, or the measurements made from it are up to
+# date (observables/geant4.npz records what it was made from), e.g. as that
+# was fetched with the inputs. ddsim writes to a hidden file that is only
 # renamed once ddsim succeeds, so an output is always complete. The inputs are
 # simulated one after another; for many, or long, simulations, use
 # slurm_pipeline.sh --stages geant4, which runs one input per slurm job. An

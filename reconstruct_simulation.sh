@@ -18,7 +18,8 @@
 #       --compact FILE   reconstruct in this detector, instead of the one each
 #                        simulation was simulated in (relative to k4geo unless
 #                        absolute; it names the detector model too)
-#   -f, --force          reconstruct again even where the output exists
+#   -f, --force          reconstruct again even where the output exists, and
+#                        also where nothing needs it (see below)
 #   -c, --config FILE    merge FILE over the configuration (repeatable)
 #       --dry-run        show what would be reconstructed and what is done, then
 #                        stop
@@ -35,8 +36,11 @@
 # of each input, reconstructed whole. A file given outside sim_output goes to
 # rec_output/custom/files/, and is reconstructed in geant4.compact unless
 # --compact says otherwise. A reconstruction is skipped if its _REC file
-# exists. k4run writes to hidden files, only renamed once it succeeds, so the
-# outputs are always complete.
+# exists, or if nothing still to be made needs it: if the measurements made
+# from it are up to date (observables/<simulator>.npz records what it was made
+# from), e.g. as they were fetched with the inputs; a simulation file given is
+# reconstructed all the same. k4run writes to hidden files, only renamed once
+# it succeeds, so the outputs are always complete.
 #
 # ILDConfig isn't part of Key4hep releases; setup.sh clones it to
 # detector_configs.ildconfig.source_dir if it isn't there, with

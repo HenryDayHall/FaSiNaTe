@@ -24,6 +24,17 @@ class Stage(object):
     #: all reconstructions of a simulator, the plots of all measurements), so it
     #: is out of date while any of them is still to be made
     gathers = False
+    #: a task of this stage records what it was made from (the observables'
+    #: .npz file, the reconstructions it measured), so current() tells from
+    #: that record alone whether it is up to date: what it needs that is to be
+    #: made only because it isn't there doesn't make it out of date, and isn't
+    #: made for it while it is up to date
+    records_inputs = False
+    #: the stage's outputs are there only for what is made from them (the
+    #: simulations and reconstructions, for the measurements), so a task of it
+    #: whose output isn't there is made only if something still to be made
+    #: needs it, or if nothing needs it at all (ddml_bench/graph.py)
+    intermediate = False
     #: a task of this stage uses what there is of what it needs, rather than
     #: waiting for all of it (the plots, of whatever is measured)
     takes_what_there_is = False

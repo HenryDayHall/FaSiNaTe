@@ -82,17 +82,22 @@ lists them in order. A stage:
   tasks of the stages before it (`graph.inputs`, `graph.simulations`,
   `graph.reconstructions`, `graph.measuring`);
 - says when a task is done (`current`): by default when its output exists; the
-  observables when their `.npz` is up to date, the plots when `metrics.csv` is
-  newer than every `.npz`;
+  observables when their `.npz` is up to date by what it records (the
+  settings and the reconstructed files, which needn't be there any more), the
+  plots when `metrics.csv` is newer than every `.npz`;
 - says what in the environment would stop its tasks (`check_environment`):
   the DDML build, the presets' plugins, the weights' md5 sums, the compact
   files, ILDConfig, the Python modules each needs;
 - runs one task (`run`), raising `StageError` if it fails.
 
-Three attributes shape how the graph treats a stage's tasks: `gathers` (a
+Five attributes shape how the graph treats a stage's tasks: `gathers` (a
 task out of date while anything it gathers is still to be made: the
-observables and the plots), `takes_what_there_is` (the plots, of whatever is
-measured, rather than waiting for everything) and `blocked_is_error` (an
+observables and the plots), `records_inputs` (a task that gathers, but knows
+from its own record of what it gathered whether it is up to date, so what it
+gathers that is to be made only because it isn't there doesn't count: the
+observables), `takes_what_there_is` (the plots, of whatever is measured,
+rather than waiting for everything), `intermediate` (made only for what is
+made from it: the simulations and reconstructions) and `blocked_is_error` (an
 input that isn't made, for the simulations, makes a local run fail).
 
 A task is a plain dict, so it can be written to `tasks.json` and run from
@@ -113,7 +118,8 @@ there alone:
   "params": {"base": "...", "compact": "ILD/compact/ILD_l5_o1_v02/ILD_l5_o1_v02.xml",
              "events": -1, "args": ["--noBeamCalReco", "--usingParticleGun"],
              "done_suffix": "_REC.edm4hep.root", "ildconfig_dir": "..."},
-  "status": "todo", "why": "not made yet", "redo": false, "after": ["geant4:..."]
+  "status": "todo", "why": "not made yet", "redo": false, "changes": false,
+  "after": ["geant4:..."]
 }
 ```
 
@@ -126,11 +132,28 @@ still queued for the same task rather than submitting it again.
 `Graph(plan)` asks each stage for its tasks, in order, so each task comes
 after the tasks it needs, and checks that no two tasks make the same file.
 `find_status()` gives every task a status from what is on disk: `done`,
-`todo`, `blocked` (it needs what isn't done and won't be made this time) or
-`unselected` (not chosen by `--stages`, the simulators, `--scenario` or the
-files given). A task whose output exists stays done even if something it
-needs is still to be made, unless that is being made again (`--force`): then
-it is made again too (`redo`).
+`todo`, `blocked` (it needs what isn't done and won't be made this time),
+`unneeded` (an intermediate task, a simulation or reconstruction, that isn't
+there, but that nothing still to be made needs) or `unselected` (not chosen
+by `--stages`, the simulators, `--scenario` or the files given). A task whose
+output exists stays done even if something it needs is still to be made,
+unless that is made anew (`changes`: forced with `--force`, made from
+something made anew, or there but out of date): then it is made again too
+(`redo`).
+
+Then, from the last task back, an intermediate task that is to be made only
+because it isn't there is `unneeded` if every task that needs it, selected or
+not, is done without it or isn't needed either. A task is done without what
+it needs when its output is there (it stays done when that is made), or when
+its stage `records_inputs`: the measurements, up to date by their `.npz`
+file's record, need none of their reconstructions, so neither those nor their
+simulations are made. The plots don't count, as they plot whatever is
+measured, so measurements still to be made are always needed. Whatever stages
+run, the simulations and reconstructions of a simulator whose `.npz` file is
+up to date are then left out, whether they were deleted after measuring or
+the `.npz` file was fetched with the inputs: adding a model to fetched
+references runs only its own tasks and the plots. Forcing a stage makes its
+tasks all the same, and so does giving a simulation file to reconstruct.
 
 ## Executors
 
@@ -177,4 +200,7 @@ Tests section; CI runs them on every push.
 - **A way to fetch an output**: `run_task()` is the place to fetch a published
   file with a matching hash instead of running the task (the plan's Zenodo
   step); `Stage.current()` is the place for up-to-date checks that compare
-  recorded provenance rather than what is on disk.
+  recorded provenance rather than what is on disk. The observables' check
+  already goes by what the `.npz` file records, so a fetched `.npz` file
+  counts as done, and nothing is simulated or reconstructed for it; checking
+  its record against a manifest's hashes and stack pins would go there too.

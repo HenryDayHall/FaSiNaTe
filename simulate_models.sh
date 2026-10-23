@@ -13,7 +13,8 @@
 #       --file FILE      simulate only FILE, one of the scenarios' inputs
 #                        (repeatable)
 #   -n, --events N       a test on the first N events of each input
-#   -f, --force          simulate again even where the output exists
+#   -f, --force          simulate again even where the output exists, and also
+#                        where nothing needs it (see below)
 #   -c, --config FILE    merge FILE over the configuration (repeatable)
 #       --dry-run        show what would be simulated and what is done, then stop
 #   -h, --help           show this help
@@ -21,7 +22,10 @@
 # Each simulation writes
 #   <paths.data_dir>/sim_output/<scenario>/<model>/<input name>.root
 # (<input name>_n<N>.root with --events), with its log next to it, and is
-# skipped if that output exists. ddsim writes to a hidden file that is only
+# skipped if that output exists, or if nothing still to be made needs it: if
+# its reconstruction is there, or the measurements made from it are up to date
+# (observables/<model>.npz records what it was made from), e.g. as that was
+# fetched with the inputs. ddsim writes to a hidden file that is only
 # renamed once ddsim succeeds, so an output is always complete. Each model is
 # simulated in the detector it was trained for
 # (fixed_at_training.detector.compact_file). Before simulating, the

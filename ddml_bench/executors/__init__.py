@@ -12,7 +12,7 @@ runs in each slurm job, and what a GitHub Actions shard will run.
 import os
 import sys
 
-from ..graph import BLOCKED, DONE, TODO, UNSELECTED
+from ..graph import BLOCKED, DONE, DONE_WITHOUT, TODO, UNNEEDED, UNSELECTED
 from ..stages import BY_NAME, STAGE_NAMES, StageError
 
 
@@ -52,11 +52,11 @@ def report_stages(out, tasks, queued=None):
     """A table of what each stage has done and has to do; with queued (the
     tasks that jobs of earlier submissions are queued for), as slurm sees it."""
     columns = ["done", "to submit", "queued"] if queued is not None else ["done", "to run"]
-    columns += ["blocked", "not selected"]
+    columns += ["blocked", "not needed", "not selected"]
     out("ddml-bench: what each stage has done, and has to do:")
     out("  %-12s" % "stage" + "".join(" %*s" % (max(len(c), 6), c) for c in columns))
     for stage in STAGE_NAMES:
-        counts = dict((status, 0) for status in (DONE, TODO, BLOCKED, UNSELECTED))
+        counts = dict((status, 0) for status in (DONE, TODO, BLOCKED, UNNEEDED, UNSELECTED))
         waiting = 0
         for task in tasks:
             if task["stage"] == stage:
@@ -65,9 +65,20 @@ def report_stages(out, tasks, queued=None):
         values = [counts[DONE], counts[TODO] - waiting]
         if queued is not None:
             values.append(waiting)
-        values += [counts[BLOCKED], counts[UNSELECTED]]
+        values += [counts[BLOCKED], counts[UNNEEDED], counts[UNSELECTED]]
         out("  %-12s" % stage + "".join(" %*d" % (max(len(c), 6), v)
                                         for c, v in zip(columns, values)))
+    # What the tasks not needed are for, which is done without them: e.g. the
+    # measurements of simulators whose .npz files are up to date, fetched or
+    # made before their reconstructions were deleted
+    done_with = []
+    for task in tasks:
+        if task["status"] == UNNEEDED and task["why"][len(DONE_WITHOUT):] not in done_with:
+            done_with.append(task["why"][len(DONE_WITHOUT):])
+    if done_with:
+        out("ddml-bench: not needed, so not made, as what they are for is done: %s%s "
+            "(--force makes them anyway)"
+            % (", ".join(done_with[:3]), ", ..." if len(done_with) > 3 else ""))
     blocked = [task for task in tasks if task["status"] == BLOCKED]
     if blocked:
         out("ddml-bench: blocked, so not run:")
