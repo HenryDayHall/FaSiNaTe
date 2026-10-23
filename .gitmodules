@@ -1,3 +1,0 @@
-[submodule "ddml_diphoton_analysis"]
-	path = di_photon_old/ddml_diphoton_analysis_submodule
-	url = git@gitlab.desy.de:ftx-sft/peter_code/ddml_diphoton_analysis.git
