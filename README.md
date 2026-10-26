@@ -342,6 +342,17 @@ The simulations and reconstructions are needed only to measure those simulators 
 - the step timings of [`scripts/plot_step_times.py`](scripts/plot_step_times.py), which come from the logs next to the simulations and reconstructions and from the slurm logs (and compare only between runs on the same machines);
 - the software they were made with: nothing checks yet that it matches yours, so pin `key4hep.release`, `ddml.commit`, `detector_configs.ildconfig.commit`, `reconstruction.extra_args` and the detector (`geant4.compact`) to what they were measured with.
 
+### Publishing a data folder
+
+`ddml-bench manifest` prepares a data folder for publishing as three records: `inputs` (the `.slcio` inputs, required, and the `.h5` truth, optional), `measurements` (the full samples' `.npz` files, required) and `bulk` (everything else, never fetched automatically: one tar archive per `sim_output/<scenario>/<simulator>` and `rec_output/<scenario>/<simulator>`, and one each for the rest of `observables/` and `slurm/`, members named by their paths in the data folder, times kept).
+
+```bash
+python3 scripts/ddml-bench manifest --dry-run                 # what goes into which record
+python3 scripts/ddml-bench manifest --out /path/to/zenodo --stage
+```
+
+Each record gets a folder with its `manifest.json`, and with `--stage` the files to upload under the flat names the manifest gives them (links to the inputs and measurements, `--copy` to copy them, and the bulk archives). For every file the manifest has its path in the data folder, sha256, size and role (`required`, `optional` or `archive`). For an input it adds the scenarios and gun options that made it. For a measurement it adds the simulator, scenarios and observable settings, the reconstructions it was measured from with their seeds and events, the inputs behind them with their sha256, the software from the logs of their simulations and reconstructions (Key4hep release, DDML and ILDConfig commits, patches, detector, presets, reconstruction arguments), and whether it is up to date with this configuration. Every manifest also has the configuration's scenarios, observables and stack pins. Warnings point out inputs missing from the configuration, measurements out of date, logs that aren't there, mixed software versions, and records over Zenodo's default limits (100 files, 50 GB). It needs numpy (and PyYAML for the configuration), so it runs on a login node.
+
 ## Extending the benchmark
 
 ### Adding a model

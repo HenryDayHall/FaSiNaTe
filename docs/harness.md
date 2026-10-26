@@ -22,6 +22,7 @@ ddml_bench/
 ├── graph.py            the plan, the task graph and each task's status
 ├── executors/          local (one task after another) and slurm (a job each)
 ├── environment.py      getting into the environment from setup.sh
+├── manifest.py         the manifests of a data folder's records, for publishing it
 ├── process.py          running ddsim, k4run and the gun, with logs and clean-up
 └── cli.py              scripts/ddml-bench, which the shell scripts run
 ```

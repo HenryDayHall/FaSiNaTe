@@ -15,6 +15,11 @@
       Plot measurements (plot_observables.sh); needs only numpy and
       matplotlib.
 
+  ddml-bench manifest --out OUT [--stage] [options]
+      Write the manifests of the data folder's records for publishing it
+      (inputs, measurements, bulk), and with --stage the files to upload;
+      needs only numpy (ddml_bench/manifest.py).
+
 Outside the environment from setup.sh, run and stage work out the plan where
 they are, then carry on in that environment (scripts/run_in_environment.sh)
 with these steps, which they run themselves:
@@ -249,6 +254,11 @@ def command_plot(argv):
     return main(argv)
 
 
+def command_manifest(argv):
+    from .manifest import main
+    return main(argv)
+
+
 def command_local(argv):
     parser = argparse.ArgumentParser(prog="ddml-bench local")
     parser.add_argument("plan")
@@ -285,6 +295,7 @@ COMMANDS = {
     "run": command_run,
     "stage": command_stage,
     "plot": command_plot,
+    "manifest": command_manifest,
     "local": command_local,
     "tasks": command_tasks,
     "run-task": command_run_task,
