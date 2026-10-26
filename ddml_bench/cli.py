@@ -40,6 +40,7 @@ from . import process
 from .config import ConfigError
 from .environment import in_environment, run_in_environment
 from .executors import ExecutorError
+from .fetch import FetchError
 from .graph import PlanError, make_plan
 from .layout import LayoutError
 from .measure import ObservableError
@@ -47,7 +48,7 @@ from .models import ModelError, model_names
 from .stages import STAGE_NAMES, StageError
 
 ERRORS = (ConfigError, PlanError, StageError, ExecutorError, ModelError, LayoutError,
-          ObservableError)
+          ObservableError, FetchError)
 
 
 class UsageError(Exception):
@@ -92,6 +93,9 @@ def common_options(parser):
                              "(repeatable)")
     parser.add_argument("--dry-run", action="store_true",
                         help="show what is done and what would be run, then stop")
+    parser.add_argument("--no-fetch", action="store_true",
+                        help="make everything here, fetching nothing that is published "
+                             "(published in the configuration)")
 
 
 def use_config_files(files):
@@ -117,6 +121,16 @@ def folders_of(paths):
             if folder not in found:
                 found.append(folder)
     return found
+
+
+def fetch_published(plan, args):
+    """Fetch the published files that the plan's tasks would make, before
+    anything works out what is done (ddml_bench/fetch.py); with --dry-run,
+    note them in the plan instead."""
+    from .fetch import prepare
+    if args.no_fetch:
+        plan["published"]["enabled"] = False
+    prepare(plan, args.dry_run)
 
 
 def run_locally(plan, dry_run=False, binds=()):
@@ -167,6 +181,7 @@ def command_run(argv):
     use_config_files(args.config)
     plan = make_plan(simulators=args.simulators, scenarios=args.scenario, stages=args.stages,
                      events=args.events, force=args.force, slurm=args.executor == "slurm")
+    fetch_published(plan, args)
     if args.executor == "slurm":
         from .executors import slurm
         return slurm.run(plan, args.dry_run, sbatch_args)
@@ -244,6 +259,7 @@ def command_stage(argv):
     plan = make_plan(simulators=simulators, scenarios=scenarios, stages=[name],
                      events=getattr(args, "events", None), force=[name] if args.force else [],
                      inputs=inputs, files=files, simulations=simulations, compact=compact)
+    fetch_published(plan, args)
     binds = folders_of(list(inputs) + list(files) + simulations
                        + ([compact] if compact and os.path.isabs(compact) else []))
     return run_locally(plan, args.dry_run, binds)

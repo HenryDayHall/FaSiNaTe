@@ -23,6 +23,7 @@
 #   -c, --config FILE    merge FILE over the configuration (repeatable)
 #       --dry-run        show what would be reconstructed and what is done, then
 #                        stop
+#       --no-fetch       make everything here, fetching nothing published
 #   -h, --help           show this help
 #
 # It reconstructs the simulations of the scenarios' inputs, by the models in

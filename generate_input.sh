@@ -10,6 +10,7 @@
 #   -f, --force        make the inputs again even where they exist
 #   -c, --config FILE  merge FILE over the configuration (repeatable)
 #       --dry-run      show what would be made and what is there, then stop
+#       --no-fetch     make everything here, fetching nothing published
 #   -h, --help         show this help
 #
 # Each scenario's input.type says how its inputs are made (ddml_bench/scenarios.py);

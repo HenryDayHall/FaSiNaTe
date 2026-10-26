@@ -51,18 +51,22 @@ def describe(task):
 def report_stages(out, tasks, queued=None):
     """A table of what each stage has done and has to do; with queued (the
     tasks that jobs of earlier submissions are queued for), as slurm sees it."""
-    columns = ["done", "to submit", "queued"] if queued is not None else ["done", "to run"]
+    fetching = any(task.get("fetch") and task["status"] == TODO for task in tasks)
+    columns = ["done"] + (["to fetch"] if fetching else [])
+    columns += ["to submit", "queued"] if queued is not None else ["to run"]
     columns += ["blocked", "not needed", "not selected"]
     out("ddml-bench: what each stage has done, and has to do:")
     out("  %-12s" % "stage" + "".join(" %*s" % (max(len(c), 6), c) for c in columns))
     for stage in STAGE_NAMES:
         counts = dict((status, 0) for status in (DONE, TODO, BLOCKED, UNNEEDED, UNSELECTED))
-        waiting = 0
+        waiting = fetched = 0
         for task in tasks:
             if task["stage"] == stage:
                 counts[task["status"]] += 1
                 waiting += queued is not None and task["key"] in queued
-        values = [counts[DONE], counts[TODO] - waiting]
+                fetched += bool(task.get("fetch")) and task["status"] == TODO
+        values = [counts[DONE]] + ([fetched] if fetching else [])
+        values += [counts[TODO] - waiting - fetched]
         if queued is not None:
             values.append(waiting)
         values += [counts[BLOCKED], counts[UNNEEDED], counts[UNSELECTED]]
@@ -91,6 +95,9 @@ def run_task(task, check=False):
     a task whose output is there by now is left alone. With check, the stage's
     environment checks run first, for this task. Raises StageError."""
     stage = BY_NAME[task["stage"]]
+    if task.get("fetch"):
+        raise StageError("%s is published, and fetched before a run, not by it"
+                         % describe(task))
     if not task.get("redo"):
         done, _ = stage.current(task)
         if done:

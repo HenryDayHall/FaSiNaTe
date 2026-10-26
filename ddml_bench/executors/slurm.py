@@ -191,7 +191,11 @@ def submit(directory, dry_run=False, extra=()):
             queued[task["key"]] = job
 
     report_stages(out, tasks, queued)
-    to_submit = [task for task in tasks if task["status"] == TODO and task["key"] not in queued]
+    # Published files to fetch, on this node before submitting, are only left
+    # to do in a dry run (ddml_bench/fetch.py); no job waits for them
+    fetching = [task for task in tasks if task["status"] == TODO and task.get("fetch")]
+    to_submit = [task for task in tasks if task["status"] == TODO and not task.get("fetch")
+                 and task["key"] not in queued]
     if found["problems"]:
         for problem in found["problems"]:
             say(problem)
@@ -199,7 +203,10 @@ def submit(directory, dry_run=False, extra=()):
             raise ExecutorError("the environment can't run the jobs (see above), so nothing was "
                                 "submitted")
     if not to_submit:
-        if queued:
+        if fetching:
+            out("ddml-bench: nothing to submit once the %d published file(s) are fetched"
+                % len(fetching))
+        elif queued:
             out("ddml-bench: nothing new to submit; %d job(s) of earlier submissions are still "
                 "queued or running" % len(queued))
         elif any(task["status"] == BLOCKED for task in tasks):
@@ -216,7 +223,7 @@ def submit(directory, dry_run=False, extra=()):
         % ("would submit" if dry_run else "submitting", len(to_submit)))
     try:
         for number, task in enumerate(to_submit, 1):
-            after = [ids[key] for key in task["after"]]
+            after = [ids[key] for key in task["after"] if not by_key[key].get("fetch")]
             log = os.path.join(directory, "logs", log_name(number, task))
             command = sbatch_command(plan, task, after, log, job_script, extra)
             if example is None or (after and "--kill-on-invalid-dep=yes" not in example):

@@ -68,6 +68,8 @@ scenarios:
 observables:
   longitudinal_profile:
     cell_id_encoding: "{encoding}"
+published:
+  enabled: false
 """
 
 ENV_FILE = """\

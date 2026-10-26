@@ -40,7 +40,9 @@ that made it. A measurement says which simulator and scenarios it holds, the
 settings of each observable in it, the reconstructions it was measured from,
 with their ddsim seeds and events, the inputs those were simulated from, with
 their sha256 (derived_from), the software they were made with, from the logs
-of those simulations and reconstructions (stack), and whether it is up to date
+of those simulations and reconstructions (stack), a model's description from
+models/ (model: its presets, detector and weights with their md5 sum), and
+whether it is up to date
 with this configuration, as the observables stage decides; the essential
 record's stack is what all of them should share (Key4hep, DDML, ILDConfig,
 the patches, the reconstruction's arguments and the detector), with a
@@ -450,6 +452,22 @@ def _plan_in(data_dir):
             os.environ["FASINATE_CONFIG"] = old
 
 
+def described_models():
+    """{model: what of models/<model>.yaml decides its showers}, for the
+    measurements of the models: the presets, the detector and the weights
+    (with their md5 sum), which fetching published measurements checks."""
+    try:
+        from .models import load_models
+        models = load_models()
+    except Exception as error:  # no PyYAML, or a model's description is wrong
+        say("warning: can't read the models' descriptions (%s), so the manifest won't have "
+            "them" % error)
+        return {}
+    return dict((m["name"], {"config": m["config"], "presets": list(m["presets"]),
+                             "compact_file": m["compact_file"], "weights": m["weights"],
+                             "weights_md5": m["weights_md5"]}) for m in models)
+
+
 def repository_commit():
     """The commit of this repository, and whether it has changes not committed."""
     def git(*args):
@@ -587,6 +605,7 @@ def build(data_dir, out, only=(), stage=False, copy=False, config=None, check=Tr
         if "%s/%s" % (INPUT_DIR, name) not in inputs:
             warnings.append("the configuration's input %s isn't in the data folder" % name)
     status = measurement_status(data_dir) if config and check and ESSENTIAL in chosen else {}
+    models = described_models() if ESSENTIAL in chosen else {}
 
     manifests = {}
     # The essential record last, as its catalogue says what the others hold
@@ -596,6 +615,8 @@ def build(data_dir, out, only=(), stage=False, copy=False, config=None, check=Tr
             if record == ESSENTIAL and entry["path"].startswith(OBSERVABLES_DIR + "/"):
                 files[i] = _measurement(data_dir, entry["path"], entry["role"], entry["name"],
                                         inputs, status, warnings, logs)
+                if files[i]["simulator"] in models:
+                    files[i]["model"] = models[files[i]["simulator"]]
             elif "members" in entry:
                 _archive(entry, data_dir, os.path.join(out, record), stage)
             elif "sha256" not in entry:

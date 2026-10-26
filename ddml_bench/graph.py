@@ -227,6 +227,8 @@ def make_plan(simulators=(), scenarios=(), stages=(), events=None, force=(), inp
         raise PlanError("the observables are measured on the EDM4hep reconstructions, but "
                         "reconstruction.extra_args has --lcioOutput only")
 
+    published = published_settings(config)
+
     settings = config.get("slurm") or {}
     if slurm:
         for stage in STAGE_NAMES:
@@ -252,10 +254,44 @@ def make_plan(simulators=(), scenarios=(), stages=(), events=None, force=(), inp
         "compact": dict((sim["name"], sim["compact_file"]) for sim in [geant4] + models),
         "reconstruction": reconstruction,
         "observables": {"observables": observables, "scenarios": measured},
+        "published": published,
         "slurm": settings,
     }
     Graph(plan)  # names every file, and checks that no two tasks make the same one
     return plan
+
+
+def published_settings(config):
+    """The published records the pipeline fetches from (ddml_bench/fetch.py),
+    checked, with the pins of the software, to compare with theirs."""
+    settings = dict(config.get("published") or {})
+    records = settings.get("records") or []
+    if not isinstance(records, list) or not all(
+            isinstance(r, dict) and str(r.get("zenodo", "")).isdigit() for r in records):
+        raise PlanError("published.records should be a list of Zenodo records, each "
+                        "'zenodo: <the id of a version of a record>' (and its manifest_md5)")
+    for record in records:
+        for key in record:
+            if key not in ("zenodo", "manifest_md5", "manifest_sha256", "title"):
+                raise PlanError("published.records: a record has zenodo, manifest_md5, "
+                                "manifest_sha256 and title, not %s" % key)
+        for key, length in (("manifest_md5", 32), ("manifest_sha256", 64)):
+            value = record.get(key)
+            if value is not None and not (isinstance(value, str) and len(value) == length
+                                          and all(c in "0123456789abcdef" for c in value)):
+                raise PlanError("published.records: the %s of Zenodo record %s should be %d "
+                                "hex digits, in quotes (YAML reads some as numbers), not %r"
+                                % (key, record["zenodo"], length, value))
+    url = settings.get("url") or ""
+    if "{record}" not in url or "{name}" not in url:
+        raise PlanError("published.url should be the address of a file of a record, with "
+                        "{record} and {name} in it")
+    ildconfig = config["detector_configs"]["ildconfig"]
+    return {"enabled": bool(settings.get("enabled")), "records": records, "url": url,
+            "cache_dir": settings.get("cache_dir"),
+            "pins": {"key4hep": config["key4hep"].get("release"),
+                     "ddml": config["ddml"].get("commit"),
+                     "ildconfig": ildconfig.get("commit")}}
 
 
 class Graph(object):
@@ -332,6 +368,8 @@ class Graph(object):
         again (redo). A task that isn't done changes what is made from it
         (changes) unless it is to be made only because it isn't there."""
         forced = set(self.plan["force"])
+        # The outputs a dry run would fetch, rather than make (ddml_bench/fetch.py)
+        fetching = self.plan.get("to_fetch") or {}
         for task in self.list:
             stage = BY_NAME[task["stage"]]
             needs = [self.by_key[key] for key in task["needs"]]
@@ -350,10 +388,15 @@ class Graph(object):
                 # whether it is up to date without what isn't there)
                 done, why = False, "%s is still to be made" % self.describe(waiting[0])
 
-            task.update(status=DONE, why="", redo=False, changes=False, after=[])
+            task.update(status=DONE, why="", redo=False, changes=False, fetch=False, after=[])
             if done:
                 continue
             exists = os.path.exists(task["output"])
+            if task["output"] in fetching and not exists and task["stage"] not in forced:
+                # Fetched rather than made, which needs nothing (ddml_bench/fetch.py)
+                task.update(status=TODO, fetch=True,
+                            why="to fetch from %s" % fetching[task["output"]])
+                continue
             task["changes"] = exists or bool(changing) or task["stage"] in forced
             if not self.selected(task):
                 task.update(status=UNSELECTED, why=why)
@@ -393,7 +436,8 @@ class Graph(object):
                 stage = BY_NAME[user["stage"]]
                 if user["key"] in done_with:
                     found.append(done_with[user["key"]])
-                elif user["status"] == DONE and (stage.records_inputs or not stage.gathers):
+                elif (user["status"] == DONE or user.get("fetch")) \
+                        and (stage.records_inputs or not stage.gathers):
                     found.append(user)
                 else:
                     break
@@ -412,7 +456,9 @@ class Graph(object):
         stage's checks."""
         problems = []
         for stage in STAGES:
-            tasks = [t for t in self.tasks(TODO) if t["stage"] == stage.name]
+            # (Fetching needs nothing of the stage's)
+            tasks = [t for t in self.tasks(TODO)
+                     if t["stage"] == stage.name and not t.get("fetch")]
             if tasks:
                 problems += stage.check_environment(tasks)
         return problems

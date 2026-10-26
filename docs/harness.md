@@ -23,6 +23,7 @@ ddml_bench/
 ├── executors/          local (one task after another) and slurm (a job each)
 ├── environment.py      getting into the environment from setup.sh
 ├── manifest.py         the manifests of a data folder's records, for publishing it
+├── fetch.py            fetching published files instead of making them
 ├── process.py          running ddsim, k4run and the gun, with logs and clean-up
 └── cli.py              scripts/ddml-bench, which the shell scripts run
 ```
@@ -198,10 +199,13 @@ Tests section; CI runs them on every push.
 - **An executor**: anything that runs the graph's tasks to do (status `todo`)
   in an order where each comes after its `after`, by `run_task()` or
   `ddml-bench run-task`.
-- **A way to fetch an output**: `run_task()` is the place to fetch a published
-  file with a matching hash instead of running the task (the plan's Zenodo
-  step); `Stage.current()` is the place for up-to-date checks that compare
-  recorded provenance rather than what is on disk. The observables' check
-  already goes by what the `.npz` file records, so a fetched `.npz` file
-  counts as done, and nothing is simulated or reconstructed for it; checking
-  its record against a manifest's hashes and stack pins would go there too.
+- **A published output**: `fetch.prepare()` fetches, before anything works out
+  what is done, the files of the records in `published` that tasks of the run
+  would make (the inputs, and the measurements by what their manifest says
+  they hold), checked by sha256, so the tasks are then done; with `--dry-run`
+  it puts them in the plan (`to_fetch`), and `find_status()` gives those tasks
+  `fetch`: to do, needing nothing, and done without what they need when the
+  graph leaves out what isn't needed. It runs where the plan is made, so on
+  slurm the login node fetches and the jobs need no internet. Fetching another
+  kind of output is a check in `fetch.choose()` of whether the published file
+  is what the task would make.

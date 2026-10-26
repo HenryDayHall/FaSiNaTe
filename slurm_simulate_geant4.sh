@@ -14,6 +14,7 @@
 #                         also where nothing needs it
 #   -c, --config FILE     merge FILE over the configuration (repeatable)
 #       --dry-run         show what would be submitted, then stop
+#       --no-fetch        make everything here, fetching nothing published
 #   -h, --help            show this help
 #
 # Options after -- go to sbatch, e.g. -- --time 3-00:00:00; the jobs' defaults
@@ -40,7 +41,7 @@ while (($#)); do
             shift 2
             ;;
         -f | --force) args+=(--force geant4); shift ;;
-        --dry-run) args+=(--dry-run); shift ;;
+        --dry-run | --no-fetch) args+=("$1"); shift ;;
         -i | --input | -m | --max-running)
             die "$1 is gone: see --help"
             ;;

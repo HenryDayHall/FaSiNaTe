@@ -299,6 +299,32 @@ observables:
     # over the seeds with their spread as its uncertainty.
     metric: jensen_shannon
 
+# Published data that the pipeline fetches instead of making it: before a run
+# works out what is to do, each published input that this configuration would
+# make the same way, and each simulator's published measurements that are what
+# the observables stage would make (the same observables, settings,
+# reconstructions and model), are downloaded into paths.data_dir where they
+# aren't there yet. Nothing there is replaced; published measurements need no
+# simulation or reconstruction, so adding a model to a fresh data folder runs
+# only its own tasks and the plots. A run says what it fetches, and why any
+# published file isn't used. See ddml_bench/fetch.py; --no-fetch makes a run
+# make everything itself.
+published:
+  enabled: true
+  # The Zenodo records, by the id of a version (so that what is fetched only
+  # changes when this does), each with a manifest.json (ddml-bench manifest),
+  # checked against the md5 sum Zenodo gives it.
+  records:
+    # FaSiNaTe essential data 0.1.0, doi:10.5281/zenodo.23670827: the inputs
+    # of single_photon and di_photon, and the measurements of Geant4 and
+    # CaloClouds3
+    - zenodo: 23670827
+      manifest_md5: "88e6b911f7fa2d7a7b642a00364477c5"
+  # Where a file of a record is downloaded from
+  url: "https://zenodo.org/records/{record}/files/{name}?download=1"
+  # Where the records' manifests are kept once fetched
+  cache_dir: ${paths.data_dir}/.ddml-bench/published
+
 # The slurm jobs of ./slurm_pipeline.sh, which runs every stage of the pipeline
 # as jobs of one file each (one input, one simulation, one reconstruction),
 # each waiting for the jobs that make what it reads. The defaults are for

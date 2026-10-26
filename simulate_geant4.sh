@@ -17,6 +17,7 @@
 #                        where nothing needs it (see below)
 #   -c, --config FILE    merge FILE over the configuration (repeatable)
 #       --dry-run        show what would be simulated and what is done, then stop
+#       --no-fetch       make everything here, fetching nothing published
 #   -h, --help           show this help
 #
 # Each simulation writes

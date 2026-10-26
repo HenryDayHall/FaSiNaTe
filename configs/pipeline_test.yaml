@@ -52,6 +52,11 @@ scenarios:
       n_events: 10
     simulation_seeds: [1, 2]
 
+published:
+  # Its inputs and measurements aren't the published ones (it has fewer
+  # events), so there is nothing to fetch
+  enabled: false
+
 slurm:
   stages:
     generate:

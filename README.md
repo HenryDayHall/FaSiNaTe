@@ -146,6 +146,7 @@ Shared settings live in [`configs/default.yaml`](configs/default.yaml):
 - `geant4`, `reconstruction`: settings for the reference simulation and the reconstruction;
 - `scenarios`: the sets of events every simulator simulates;
 - `observables`: what is measured on them, and how it is compared with Geant4;
+- `published`: the published data (Zenodo records) a run fetches instead of making it ([Reusing published measurements](#reusing-published-measurements));
 - `slurm`: the jobs of [`slurm_pipeline.sh`](#the-whole-pipeline-on-slurm), stage by stage.
 
 Don't edit `default.yaml` for your own setup. Put the settings you change in `configs/local.yaml`, which git ignores and every script reads automatically. An override file only needs the keys it changes, e.g. a smaller single-photon sample for testing:
@@ -329,18 +330,28 @@ One module, [`ddml_bench/layout.py`](ddml_bench/layout.py), names all of these. 
 
 ## Reusing published measurements
 
-A model can be compared with simulators measured elsewhere, e.g. the Geant4 reference and CaloClouds3 from a published record, without running anything of theirs again. Put these in the same folders of a data folder of your own (`paths.data_dir`):
+The benchmark's inputs and the measurements of Geant4 and CaloClouds3 are published on Zenodo: [FaSiNaTe essential data](https://doi.org/10.5281/zenodo.23670827), version 0.1.0, with its manifest. Every run fetches from it what it would otherwise make, so a model can be compared with them without running anything of theirs again. In a fresh data folder:
 
-- `input_single_particle_gun/*.slcio`, the scenarios' inputs, so that the new model simulates the same events (the `.h5` files beside them hold the generated truth for analyses; no stage reads them);
-- `observables/<simulator>.npz` of each simulator measured: everything the figures, `metrics.csv` and `fits.csv` are made from.
+```bash
+./pipeline.sh --dry-run    # would fetch the 12 inputs and 2 measurements, and make the plots
+./pipeline.sh              # fetches them, then plots
+# add your model to models/, then
+./slurm_pipeline.sh        # simulates, reconstructs and measures only your model, and plots
+```
 
-Keep the `scenarios` and `observables` of the configuration as they were measured with, then add the model to `models/` and run `./pipeline.sh` or `./slurm_pipeline.sh` (or the stage scripts): only the new model is simulated, reconstructed and measured, and then all of them are plotted. Each `.npz` file records the reconstructions it was measured from, relative to the data folder, and is up to date by that record, so their simulations and reconstructions aren't needed; `--dry-run` shows them as `not needed`.
+Before working out what is to do, a run reads the manifests of the records in the configuration's `published` section and fetches into the data folder each published file that isn't there yet and is what the run would make:
 
-The simulations and reconstructions are needed only to measure those simulators again: adding an observable, or changing the settings of one, simulates them again unless their reconstructions are fetched too. What the `.npz` files don't hold:
+- an input, when its gun options are this configuration's (the inputs' names don't say everything, e.g. the number of events), so the new model simulates the same events as the references;
+- a simulator's measurements, `observables/<simulator>.npz`, when they are what the observables stage would make: the same observables with the same settings, measured on the same scenarios' reconstructions, by a simulator of this configuration (a model with the same presets and detector, and weights where the manifest records them), from inputs that are the published ones (fetched, or here already and the same by sha256).
 
-- the test samples (`-n N`), whose measurements are files of their own, `<simulator>_n<N>.npz`;
-- the step timings of [`scripts/plot_step_times.py`](scripts/plot_step_times.py), which come from the logs next to the simulations and reconstructions and from the slurm logs (and compare only between runs on the same machines);
-- the software they were made with: nothing checks yet that it matches yours, so pin `key4hep.release`, `ddml.commit`, `detector_configs.ildconfig.commit`, `reconstruction.extra_args` and the detector (`geant4.compact`) to what they were measured with.
+Each file is checked against the sha256 and size in the manifest before it is put in place, and the manifest against the md5 sum Zenodo gives it, pinned in the configuration. Nothing that is there is replaced, a forced stage (`--force`) fetches nothing, and a run says why a published file isn't used, e.g. after changing an observable's settings. Measurements that are up to date need no simulation or reconstruction, so those of the references aren't made (`not needed` in the report). `slurm_pipeline.sh` fetches on the login node, before submitting, so the jobs need no internet. `--no-fetch` (or `published.enabled: false`) makes a run make everything itself, and a record that can't be read stops the run, rather than quietly making everything (hundreds of GB for the references).
+
+The configuration should be the one the published data was made with: its `scenarios` and `observables`, and to compare like with like the software, `key4hep.release`, `ddml.commit` and `detector_configs.ildconfig.commit`; a run that fetches measurements says which of these differ from what made them. A new version of a record is used once its id (and its manifest's md5) replaces the old one in `published.records`.
+
+The simulations and reconstructions are needed only to measure those simulators again: adding an observable, or changing the settings of one, simulates them again. What the published measurements don't cover:
+
+- the test samples (`-n N`), whose measurements are files of their own, `<simulator>_n<N>.npz` (their inputs are fetched all the same);
+- the step timings of [`scripts/plot_step_times.py`](scripts/plot_step_times.py), which come from the logs next to the simulations and reconstructions and from the slurm logs (and compare only between runs on the same machines).
 
 ### Publishing a data folder
 

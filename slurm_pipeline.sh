@@ -30,11 +30,17 @@
 #                        configs/pipeline_test.yaml for a very light test run
 #       --dry-run        show what each stage has done and what would be
 #                        submitted, then stop
+#       --no-fetch       make everything here, fetching nothing published
 #   -h, --help           show this help
 #
 # Options after -- go to every sbatch call, e.g. -- --account=myproject; the
 # rest come from the slurm section of the configuration (partition,
 # constraint and time limit of each stage's jobs).
+#
+# First, the published inputs and measurements (published in the
+# configuration: a Zenodo record) that this run would make the same way, and
+# that aren't here yet, are fetched instead (--dry-run says which). Nothing
+# here is replaced, and a run says why a published file isn't used.
 #
 # A task is done when its output exists; the measurements when their .npz file
 # is up to date by what it records (the settings, and the reconstructions it

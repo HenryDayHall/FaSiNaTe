@@ -15,6 +15,7 @@
 #   -f, --force        measure again even where the .npz file is up to date
 #   -c, --config FILE  merge FILE over the configuration (repeatable)
 #       --dry-run      show what would be measured and what is done, then stop
+#       --no-fetch     make everything here, fetching nothing published
 #   -h, --help         show this help
 #
 # A simulator's reconstruction is finished when every input of every scenario
