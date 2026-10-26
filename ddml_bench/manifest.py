@@ -3,26 +3,34 @@ that can be fetched back into a data folder of the same layout.
 
   ddml-bench manifest [--data-dir DIR] --out OUT [--stage] [--records LIST]
 
-The files of the data folder (paths.data_dir) go into three records, by how
-often they change and whether the pipeline fetches them:
+The files of the data folder (paths.data_dir) go into records:
 
-  inputs        input_single_particle_gun/: the scenarios' inputs (.slcio,
-                required: every simulator simulates these events) and the
-                guns' truth beside them (.h5, optional: no stage reads it)
-  measurements  observables/<simulator>.npz of the full samples (required:
-                everything the figures and metrics are made from)
-  bulk          everything else, never fetched by the pipeline, packed into
-                one tar archive per folder: sim_output/<scenario>/<simulator>
-                and rec_output/<scenario>/<simulator> each (the simulations,
-                reconstructions and their logs), and the rest of each top
-                folder (observables: the plots and the test samples' .npz
-                files; slurm: the submissions and their slurm logs)
+  essential                       what the pipeline needs to add a model without
+                                  running anything of the others: the scenarios'
+                                  inputs (input_single_particle_gun/*.slcio) and
+                                  the measurements of the full samples
+                                  (observables/<simulator>.npz), all required
+  input_truth__<scenario>         the guns' truth beside each scenario's inputs
+                                  (.h5, optional: no stage reads it)
+  sim_output__<scenario>__<simulator>
+  rec_output__<scenario>__<simulator>
+                                  the simulations and reconstructions of each
+                                  scenario by each simulator, with their logs,
+                                  file by file (archive: never fetched
+                                  automatically); in parts, __part1, __part2,
+                                  ..., where they are more than a record takes
+                                  (--max-record-gb, and 99 files), each
+                                  simulation or reconstruction's files together
+  other                           the rest, small, as a tar archive per top
+                                  folder (observables.tar: the plots and the test
+                                  samples' .npz files; slurm.tar: the
+                                  submissions and their slurm logs), members
+                                  named by their paths in the data folder
 
 Each record gets OUT/<record>/manifest.json; with --stage, OUT/<record>/ also
-gets the files to upload under the flat names the manifest gives them (links
-to the inputs and measurements, or copies with --copy, and the bulk record's
-tar archives, whose members are named by their paths in the data folder, so
-that unpacking one in a data folder puts them in place).
+gets the files to upload under the flat names the manifest gives them: links
+to the data folder's files (copies with --copy), so nothing big is copied,
+and the other record's tar archives.
 
 A manifest says, for each file: its name in the record, its path in the data
 folder, its sha256 and size, and its role: required (fetched by the
@@ -33,16 +41,19 @@ settings of each observable in it, the reconstructions it was measured from,
 with their ddsim seeds and events, the inputs those were simulated from, with
 their sha256 (derived_from), the software they were made with, from the logs
 of those simulations and reconstructions (stack), and whether it is up to date
-with this configuration, as the observables stage decides; the record's stack
-is what all of them should share (Key4hep, DDML, ILDConfig, the patches, the
-reconstruction's arguments and the detector), with a warning where they
-don't. A bulk archive lists its members, each with its sha256 and size.
+with this configuration, as the observables stage decides; the essential
+record's stack is what all of them should share (Key4hep, DDML, ILDConfig,
+the patches, the reconstruction's arguments and the detector), with a
+warning where they don't. A tar archive lists its members, each with its
+sha256 and size.
 
-Every manifest also has the configuration's scenarios and observables, the
-settings of the simulation and reconstruction and the pins of the software
-stack (configuration), and the commit of this repository (fasinate): the
-commit writing the manifest, not necessarily the one that made the data,
-which the .npz files don't record.
+Every manifest also has a suggested title, the configuration's scenarios and
+observables, the settings of the simulation and reconstruction and the pins
+of the software stack (configuration), and the commit of this repository
+(fasinate): the commit writing the manifest, not necessarily the one that made
+the data, which the .npz files don't record. The essential record's manifest
+also lists every record (catalogue): its title, files and size, so that the
+essential record says where everything else is.
 
 It needs numpy, to read the .npz files, and the configuration (PyYAML) for
 the scenarios, the observables and the check of the measurements, without
@@ -51,6 +62,7 @@ which it says so and goes on.
 
 import argparse
 import datetime
+import fnmatch
 import hashlib
 import json
 import os
@@ -66,16 +78,20 @@ from .config import REPO_DIR
 from .layout import (INPUT_DIR, OBSERVABLES_DIR, REC_DIR, REC_SUFFIX, SEED_TAG, SEP, SIM_DIR,
                      input_stem)
 
-FORMAT = "fasinate-manifest/1"
-RECORDS = ("inputs", "measurements", "bulk")
+FORMAT = "fasinate-manifest/2"
+ESSENTIAL, TRUTH, OTHER = "essential", "input_truth", "other"
 REQUIRED, OPTIONAL, ARCHIVE = "required", "optional", "archive"
-# What Zenodo takes in one record, by default
+# What Zenodo takes in one record, by default (it can raise a record's quota
+# on request); the manifest is one of the files
 MAX_FILES = 100
-MAX_BYTES = 50 * 10 ** 9
+MAX_GB = 50
 BLOCK = 1 << 22
 
 _TEST_SAMPLE = re.compile(r"_n\d+$")
 _SEED = re.compile(re.escape(SEED_TAG) + r"\d+$")
+# The endings of a simulation's or reconstruction's files, after its name
+_SAMPLE_FILE = re.compile(r"(_REC\.edm4hep\.root|_REC\.slcio|_AIDA\.root|_PfoAnalysis\.root"
+                          r"|\.edm4hep\.root|\.root|\.slcio|\.log)$")
 # A line of the header that the simulation and reconstruction stages write at
 # the top of their logs (and the scripts before them did), e.g.
 # "# Key4hep   2026-04-08"
@@ -85,6 +101,8 @@ _COMPACT = re.compile(r"([^/]+/compact/.+)$")
 _MANAGED = ("--inputFiles", "--outputFileBase", "--compactFile", "--num-events")
 # What the simulations and reconstructions of every simulator should share
 SHARED = ("key4hep", "ddml", "ildconfig", "patches", "reconstruction_args", "compact")
+STAGE_WORDS = {SIM_DIR: "simulations", REC_DIR: "reconstructions"}
+TITLE = "FaSiNaTe benchmark data"
 
 
 class ManifestError(Exception):
@@ -99,25 +117,73 @@ def say(message):
 # The files of the data folder, and the record each goes into
 
 
-def classify(relative):
-    """(record, role, name in the record) of a file, by its path relative to
-    the data folder; the name of a bulk file is its archive's."""
+def classify(relative, truth_scenarios=None):
+    """(record, role, name in the record, packed) of a file, by its path
+    relative to the data folder: packed is the name of the tar archive it goes
+    into, or None for a file of its own. truth_scenarios: {input file name:
+    scenario}, which names the record of its truth."""
     parts = relative.split("/")
     name = parts[-1]
     if len(parts) == 2 and parts[0] == INPUT_DIR and name.endswith(".slcio"):
-        return "inputs", REQUIRED, name
-    if len(parts) == 2 and parts[0] == INPUT_DIR and name.endswith(".h5"):
-        return "inputs", OPTIONAL, name
+        return ESSENTIAL, REQUIRED, name, None
     if len(parts) == 2 and parts[0] == OBSERVABLES_DIR and name.endswith(".npz") \
             and not _TEST_SAMPLE.search(name[:-len(".npz")]):
-        return "measurements", REQUIRED, name
+        return ESSENTIAL, REQUIRED, name, None
+    if len(parts) == 2 and parts[0] == INPUT_DIR and name.endswith(".h5"):
+        scenario = (truth_scenarios or {}).get(input_stem(name) + ".slcio")
+        return (TRUTH + SEP + scenario if scenario else TRUTH), OPTIONAL, name, None
     if parts[0] in (SIM_DIR, REC_DIR) and len(parts) >= 4:
-        group = SEP.join(parts[:3])
-    elif len(parts) > 1:
-        group = parts[0]
+        return SEP.join(parts[:3]), ARCHIVE, SEP.join(parts[3:]), None
+    group = parts[0] if len(parts) > 1 else "loose"  # loose: files at the top
+    return OTHER, ARCHIVE, group + ".tar", group + ".tar"
+
+
+def sample_of(name):
+    """The simulation or reconstruction a file is of (its files go together)."""
+    return _SAMPLE_FILE.sub("", name)
+
+
+def title(record):
+    """A title for a record, e.g. for Zenodo."""
+    base, _, part = record.partition(SEP + "part")
+    words = base.split(SEP)
+    if base == ESSENTIAL:
+        text = "inputs and measurements, all the pipeline needs"
+    elif words[0] == TRUTH:
+        text = "the inputs' generated truth" + (", %s" % words[1] if len(words) > 1 else "")
+    elif words[0] in STAGE_WORDS and len(words) == 3:
+        text = "%s %s, %s" % ("Geant4" if words[2] == "geant4" else words[2],
+                              STAGE_WORDS[words[0]], words[1])
     else:
-        group = "loose"  # files at the top of the data folder
-    return "bulk", ARCHIVE, group + ".tar"
+        text = "plots, test samples and job logs"
+    return "%s: %s%s" % (TITLE, text, " (part %s)" % part if part else "")
+
+
+def split(record, files, max_bytes, warnings):
+    """[(record name, files)]: the files of a record in parts no bigger than a
+    record takes, each simulation's or reconstruction's files together."""
+    if record in (ESSENTIAL, OTHER) or record.startswith(TRUTH):
+        return [(record, files)]
+    groups = {}
+    for entry in files:
+        groups.setdefault(sample_of(entry["name"]), []).append(entry)
+    parts, size = [[]], 0
+    for sample in sorted(groups):
+        group = groups[sample]
+        bytes_ = sum(e["size"] for e in group)
+        if parts[-1] and (size + bytes_ > max_bytes
+                          or len(parts[-1]) + len(group) > MAX_FILES - 1):
+            parts.append([])
+            size = 0
+        if bytes_ > max_bytes:
+            warnings.append("%s: the files of %s are %.1f GB, more than a record takes "
+                            "(--max-record-gb), so they make a record of their own that is too "
+                            "big" % (record, sample, bytes_ / 1e9))
+        parts[-1].extend(group)
+        size += bytes_
+    if len(parts) == 1:
+        return [(record, parts[0])]
+    return [("%s%spart%d" % (record, SEP, i), part) for i, part in enumerate(parts, 1)]
 
 
 def scan(data_dir, leave_out=()):
@@ -445,65 +511,96 @@ def pack(archive, members, data_dir):
     return out.hexdigest(), os.path.getsize(archive), hashes
 
 
-def build(data_dir, out, records=RECORDS, stage=False, copy=False, config=None, check=True):
-    """Write OUT/<record>/manifest.json for each record (and, with stage, the
-    files to upload beside it); returns {record: manifest}."""
+def plan_records(data_dir, leave_out=(), truth_scenarios=None, max_bytes=MAX_GB * 10 ** 9,
+                 warnings=None):
+    """{record: [file entries]} of the data folder, without hashing: each
+    entry its name, path (or members, for a tar archive), size and role."""
+    warnings = [] if warnings is None else warnings
+    by_record = {}
+    for relative in scan(data_dir, leave_out):
+        record, role, name, packed = classify(relative, truth_scenarios)
+        size = os.path.getsize(os.path.join(data_dir, relative))
+        files = by_record.setdefault(record, [])
+        if packed:
+            entry = next((e for e in files if e["name"] == packed), None)
+            if entry is None:
+                entry = {"name": packed, "role": role, "kind": "archive", "size": 0,
+                         "members": []}
+                files.append(entry)
+            entry["members"].append({"path": relative, "size": size})
+            entry["size"] += size
+        else:
+            files.append({"name": name, "path": relative, "size": size, "role": role})
+    records = {}
+    for record in sorted(by_record):
+        for name, files in split(record, by_record[record], max_bytes, warnings):
+            records[name] = files
+    return records
+
+
+def catalogue(records):
+    """What every record holds, for the essential record's manifest."""
+    return dict((name, {"title": title(name), "files": len(files),
+                        "size": sum(e["size"] for e in files),
+                        "paths": [e["path"] for e in files if "path" in e]
+                        + [m["path"] for e in files for m in e.get("members", [])]})
+                for name, files in records.items())
+
+
+def build(data_dir, out, only=(), stage=False, copy=False, config=None, check=True,
+          max_gb=MAX_GB):
+    """Write OUT/<record>/manifest.json for each record, or those matching the
+    patterns in only (and, with stage, the files to upload beside it);
+    returns {record: manifest}."""
     data_dir = os.path.abspath(data_dir)
     if not os.path.isdir(data_dir):
         raise ManifestError("no data folder %s" % data_dir)
-    paths = scan(data_dir, leave_out=[out])
-    by_record = dict((record, []) for record in RECORDS)
-    for relative in paths:
-        record, role, name = classify(relative)
-        by_record[record].append((relative, role, name))
-
+    warnings = []
+    commands = input_commands(config, data_dir) if config else {}
+    truth = dict((name, item["scenarios"][0]) for name, item in commands.items())
+    records = plan_records(data_dir, [out], truth, max_gb * 10 ** 9, warnings)
+    chosen = [r for r in records if not only or any(fnmatch.fnmatch(r, p) for p in only)]
+    if only and not chosen:
+        raise ManifestError("no record matches %s; the records are: %s"
+                            % (", ".join(only), ", ".join(records)))
+    say("%d files in %s, in %d records" % (sum(len(f) for f in records.values()), data_dir,
+                                          len(records)))
     common = {"format": FORMAT,
               "created": datetime.datetime.now(datetime.timezone.utc).strftime(
                   "%Y-%m-%dT%H:%M:%SZ"),
               "fasinate": repository_commit(),
               "configuration": configuration_snapshot(config) if config else None}
-    warnings = []
-    say("%d files in %s" % (len(paths), data_dir))
 
     # The inputs are hashed whichever records are made, for the measurements'
     # derived_from
     inputs = {}
-    commands = input_commands(config, data_dir) if config else {}
-    for relative, role, name in by_record["inputs"]:
-        path = os.path.join(data_dir, relative)
-        entry = {"name": name, "path": relative, "sha256": sha256(path),
-                 "size": os.path.getsize(path), "role": role,
-                 "kind": "input" if role == REQUIRED else "truth"}
-        source = commands.get(name if role == REQUIRED else input_stem(name) + ".slcio")
-        if source:
-            entry.update(source)
-        elif config and role == REQUIRED:
-            warnings.append("%s isn't an input of any scenario in the configuration" % relative)
-        inputs[relative] = entry
+    for entry in records[ESSENTIAL] if ESSENTIAL in records else []:
+        if entry["path"].startswith(INPUT_DIR + "/"):
+            inputs[entry["path"]] = entry
+            entry.update(sha256=sha256(os.path.join(data_dir, entry["path"])), kind="input")
+            if entry["name"] in commands:
+                entry.update(commands[entry["name"]])
+            elif config:
+                warnings.append("%s isn't an input of any scenario in the configuration"
+                                % entry["path"])
     for name in commands:
         if "%s/%s" % (INPUT_DIR, name) not in inputs:
             warnings.append("the configuration's input %s isn't in the data folder" % name)
+    status = measurement_status(data_dir) if config and check and ESSENTIAL in chosen else {}
 
     manifests = {}
-    status = measurement_status(data_dir) if config and check \
-        and "measurements" in records else {}
-    for record in records:
-        files, logs = [], []
-        if record == "inputs":
-            files = list(inputs.values())
-        elif record == "measurements":
-            for relative, role, name in by_record["measurements"]:
-                files.append(_measurement(data_dir, relative, role, name, inputs, status,
-                                          warnings, logs))
-        else:
-            groups = {}
-            for relative, role, name in by_record["bulk"]:
-                groups.setdefault(name, []).append(relative)
-            for name in sorted(groups):
-                files.append({"name": name, "role": ARCHIVE, "kind": "archive",
-                              "sha256": None, "size": None,
-                              "members": [{"path": p} for p in groups[name]]})
-
+    # The essential record last, as its catalogue says what the others hold
+    for record in sorted(chosen, key=lambda r: r == ESSENTIAL):
+        files, logs = records[record], []
+        for i, entry in enumerate(files):
+            if record == ESSENTIAL and entry["path"].startswith(OBSERVABLES_DIR + "/"):
+                files[i] = _measurement(data_dir, entry["path"], entry["role"], entry["name"],
+                                        inputs, status, warnings, logs)
+            elif "members" in entry:
+                _archive(entry, data_dir, os.path.join(out, record), stage)
+            elif "sha256" not in entry:
+                entry["sha256"] = sha256(os.path.join(data_dir, entry["path"]))
+                entry.setdefault("kind", "truth" if entry["role"] == OPTIONAL else "file")
         folder = os.path.join(out, record)
         os.makedirs(folder, exist_ok=True)
         names = [entry["name"] for entry in files]
@@ -511,14 +608,14 @@ def build(data_dir, out, records=RECORDS, stage=False, copy=False, config=None, 
         if doubled:
             raise ManifestError("the %s record would have two files named %s; Zenodo's records "
                                 "are flat, so rename one" % (record, ", ".join(doubled)))
-        for entry in files:
-            if record == "bulk":
-                _archive(entry, data_dir, folder, stage)
-            elif stage:
-                _place(os.path.join(data_dir, entry["path"]), os.path.join(folder, entry["name"]),
-                       copy)
-        manifest = dict(common, record=record, files=files)
-        if record == "measurements":
+        if stage:
+            for entry in files:
+                if "path" in entry:
+                    _place(os.path.join(data_dir, entry["path"]),
+                           os.path.join(folder, entry["name"]), copy)
+        manifest = dict(common, record=record, title=title(record), files=files)
+        if record == ESSENTIAL:
+            manifest["catalogue"] = catalogue(records)
             # What every simulator should share (not the steering or presets)
             manifest["stack"] = dict((field, value) for field, value in summarise(logs).items()
                                      if field in SHARED)
@@ -527,18 +624,16 @@ def build(data_dir, out, records=RECORDS, stage=False, copy=False, config=None, 
                     warnings.append("the measurements were made with different %s: %s" % (
                         field, ", ".join("%s (%d logs)" % item for item in value.items())))
         total = sum(entry["size"] or 0 for entry in files)
-        if len(files) + 1 > MAX_FILES or total > MAX_BYTES:
-            warnings.append("the %s record has %d files (with the manifest) and %.1f GB; a "
-                            "Zenodo record takes %d files and %d GB unless you ask for more"
-                            % (record, len(files) + 1, total / 1e9, MAX_FILES, MAX_BYTES // 10**9))
+        if len(files) + 1 > MAX_FILES or total > max_gb * 10 ** 9:
+            warnings.append("the %s record has %d files (with the manifest) and %.1f GB, more "
+                            "than %d files or %g GB" % (record, len(files) + 1, total / 1e9,
+                                                       MAX_FILES, max_gb))
         with open(os.path.join(folder, "manifest.json"), "w") as stream:
             json.dump(manifest, stream, indent=1, sort_keys=True)
             stream.write("\n")
         manifests[record] = manifest
-        say("%s: %d files, %.3g GB%s -> %s" % (
-            record, len(files), total / 1e9,
-            "" if stage or record != "bulk" else " (members; archives not made without --stage)",
-            os.path.join(folder, "manifest.json")))
+        say("%s: %d files, %.3g GB -> %s" % (record, len(files), total / 1e9,
+                                             os.path.join(folder, "manifest.json")))
     for warning in warnings:
         say("warning: " + warning)
     return manifests
@@ -607,47 +702,53 @@ def _place(source, target, copy):
 def _archive(entry, data_dir, folder, stage):
     members = [member["path"] for member in entry["members"]]
     if stage:
+        os.makedirs(folder, exist_ok=True)
         digest, size, hashes = pack(os.path.join(folder, entry["name"]), members, data_dir)
         entry.update(sha256=digest, size=size)
     else:
         hashes = dict((p, (sha256(os.path.join(data_dir, p)),
                            os.path.getsize(os.path.join(data_dir, p)))) for p in members)
+        entry.update(sha256=None, size=None)
     for member in entry["members"]:
         member["sha256"], member["size"] = hashes[member["path"]]
 
 
-def dry_run(data_dir, leave_out=()):
+def dry_run(data_dir, leave_out=(), truth_scenarios=None, max_gb=MAX_GB):
     """What would go where, without hashing or writing anything."""
-    totals = {}
-    for relative in scan(data_dir, leave_out):
-        record, role, name = classify(relative)
-        files = totals.setdefault(record, {}).setdefault((name, role), [0, 0])
-        files[0] += 1
-        files[1] += os.path.getsize(os.path.join(data_dir, relative))
-    for record in RECORDS:
-        files = totals.get(record, {})
-        print("%s: %d files, %.3g GB" % (record, len(files),
-                                         sum(v[1] for v in files.values()) / 1e9))
-        for (name, role), (count, size) in sorted(files.items()):
-            print("  %-9s %-60s %10.3g MB%s" % (role, name, size / 1e6,
-                                                "  (%d files)" % count if count > 1 else ""))
+    warnings = []
+    records = plan_records(data_dir, leave_out, truth_scenarios, max_gb * 10 ** 9, warnings)
+    for record, files in records.items():
+        print("%s: %d files, %.3g GB  (%s)" % (record, len(files),
+                                              sum(e["size"] for e in files) / 1e9,
+                                              title(record)))
+        for entry in files:
+            print("  %-9s %-64s %10.4g MB%s" % (
+                entry["role"], entry["name"], entry["size"] / 1e6,
+                "  (%d files)" % len(entry["members"]) if "members" in entry else ""))
+    for warning in warnings:
+        say("warning: " + warning)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="ddml-bench manifest",
-        description="Write the manifests of a data folder's records for publishing it "
-                    "(inputs, measurements, bulk); see ddml_bench/manifest.py.")
+        description="Write the manifests of a data folder's records for publishing it: the "
+                    "essential record (inputs and measurements), and the rest by stage, "
+                    "scenario and simulator; see ddml_bench/manifest.py.")
     parser.add_argument("--data-dir", help="the data folder (default: paths.data_dir)")
     parser.add_argument("--out", help="where the records go, a folder each with its "
                                       "manifest.json (required unless --dry-run)")
-    parser.add_argument("--records", default=",".join(RECORDS),
-                        help="only these records, separated by commas (default: all)")
+    parser.add_argument("--records", default="",
+                        help="only the records matching these patterns, separated by commas, "
+                             "e.g. 'essential,*__di_photon__*' (default: all)")
+    parser.add_argument("--max-record-gb", type=float, default=MAX_GB, metavar="GB",
+                        help="split the simulations and reconstructions into records of at most "
+                             "this much (default: %g, Zenodo's quota without asking)" % MAX_GB)
     parser.add_argument("--stage", action="store_true",
                         help="also put the files to upload in each record's folder: links to "
-                             "the inputs and measurements, and the bulk record's tar archives")
+                             "the data folder's files, and the other record's tar archives")
     parser.add_argument("--copy", action="store_true",
-                        help="with --stage, copy the inputs and measurements instead of linking")
+                        help="with --stage, copy the files instead of linking to them")
     parser.add_argument("--no-check", action="store_true",
                         help="don't check the measurements against the configuration")
     parser.add_argument("-c", "--config", action="append", default=[], metavar="FILE",
@@ -657,23 +758,23 @@ def main(argv=None):
     args = parser.parse_args(argv)
     from .cli import use_config_files
     use_config_files(args.config)
-    records = [r.strip() for r in args.records.split(",") if r.strip()]
-    for record in records:
-        if record not in RECORDS:
-            parser.error("there's no record '%s'; the records are %s" % (record,
-                                                                        ", ".join(RECORDS)))
+    if not args.max_record_gb > 0:
+        parser.error("--max-record-gb needs a size above 0")
+    only = [r.strip() for r in args.records.split(",") if r.strip()]
     config = configuration()
     data_dir = args.data_dir or (config or {}).get("paths", {}).get("data_dir")
     if not data_dir:
         parser.error("give --data-dir, as the configuration can't be read")
-    if args.dry_run:
-        dry_run(data_dir, [args.out] if args.out else [])
-        return 0
-    if not args.out:
-        parser.error("give --out, the folder the records go to")
     try:
-        build(data_dir, os.path.abspath(args.out), records, args.stage, args.copy, config,
-              check=not args.no_check)
+        if args.dry_run:
+            truth = dict((name, item["scenarios"][0]) for name, item in
+                         (input_commands(config, data_dir) if config else {}).items())
+            dry_run(data_dir, [args.out] if args.out else [], truth, args.max_record_gb)
+            return 0
+        if not args.out:
+            parser.error("give --out, the folder the records go to")
+        build(data_dir, os.path.abspath(args.out), only, args.stage, args.copy, config,
+              check=not args.no_check, max_gb=args.max_record_gb)
     except ManifestError as error:
         say(str(error))
         return 1

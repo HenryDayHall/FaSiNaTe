@@ -344,14 +344,20 @@ The simulations and reconstructions are needed only to measure those simulators 
 
 ### Publishing a data folder
 
-`ddml-bench manifest` prepares a data folder for publishing as three records: `inputs` (the `.slcio` inputs, required, and the `.h5` truth, optional), `measurements` (the full samples' `.npz` files, required) and `bulk` (everything else, never fetched automatically: one tar archive per `sim_output/<scenario>/<simulator>` and `rec_output/<scenario>/<simulator>`, and one each for the rest of `observables/` and `slurm/`, members named by their paths in the data folder, times kept).
+`ddml-bench manifest` prepares a data folder for publishing as several records:
+
+- `essential`: everything the pipeline needs to add a model, the `.slcio` inputs and the full samples' `.npz` measurements, all `required`;
+- `input_truth__<scenario>`: the guns' `.h5` truth of each scenario's inputs, `optional` (no stage reads it);
+- `sim_output__<scenario>__<simulator>` and `rec_output__<scenario>__<simulator>`: the simulations and reconstructions, with their logs, file by file, never fetched automatically (`archive`). Where they are more than a record takes (`--max-record-gb`, 50 by default, Zenodo's quota without asking, and 99 files) they are split into `__part1`, `__part2`, ..., each simulation's or reconstruction's files together;
+- `other`: the rest, small, as a tar archive per folder (`observables.tar`: the plots and test samples' `.npz` files; `slurm.tar`: the submissions and their slurm logs), members named by their paths in the data folder.
 
 ```bash
-python3 scripts/ddml-bench manifest --dry-run                 # what goes into which record
+python3 scripts/ddml-bench manifest --dry-run                     # the records, and what goes in each
 python3 scripts/ddml-bench manifest --out /path/to/zenodo --stage
+python3 scripts/ddml-bench manifest --out /path/to/zenodo --stage --records 'essential,input_truth__*'
 ```
 
-Each record gets a folder with its `manifest.json`, and with `--stage` the files to upload under the flat names the manifest gives them (links to the inputs and measurements, `--copy` to copy them, and the bulk archives). For every file the manifest has its path in the data folder, sha256, size and role (`required`, `optional` or `archive`). For an input it adds the scenarios and gun options that made it. For a measurement it adds the simulator, scenarios and observable settings, the reconstructions it was measured from with their seeds and events, the inputs behind them with their sha256, the software from the logs of their simulations and reconstructions (Key4hep release, DDML and ILDConfig commits, patches, detector, presets, reconstruction arguments), and whether it is up to date with this configuration. Every manifest also has the configuration's scenarios, observables and stack pins. Warnings point out inputs missing from the configuration, measurements out of date, logs that aren't there, mixed software versions, and records over Zenodo's default limits (100 files, 50 GB). It needs numpy (and PyYAML for the configuration), so it runs on a login node.
+Each record gets a folder with its `manifest.json` and a suggested title, and with `--stage` the files to upload under the flat names the manifest gives them: links to the data folder's files (`--copy` to copy them), so nothing big is copied, and the `other` record's archives. For every file the manifest has its path in the data folder, sha256, size and role. For an input it adds the scenarios and gun options that made it. For a measurement it adds the simulator, scenarios and observable settings, the reconstructions it was measured from with their seeds and events, the inputs behind them with their sha256, the software from the logs of their simulations and reconstructions (Key4hep release, DDML and ILDConfig commits, patches, detector, presets, reconstruction arguments), and whether it is up to date with this configuration. Every manifest also has the configuration's scenarios, observables and stack pins, and the essential record's lists every record (`catalogue`), so that it says where everything else is. Warnings point out inputs missing from the configuration, measurements out of date, logs that aren't there, mixed software versions, and records over the limits. Hashing reads every file once, which takes a while for the simulations; `--records` makes some records at a time. It needs numpy (and PyYAML for the configuration), so it runs on a login node.
 
 ## Extending the benchmark
 

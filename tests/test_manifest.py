@@ -27,94 +27,126 @@ def test_the_records_of_a_data_folder(bench):
     shutil.copy(bench.path("observables", "geant4.npz"), bench.path("observables", "geant4_n2.npz"))
     out = os.path.join(bench.tmp, "zenodo")
     status, output = bench.run("scripts/ddml-bench", "manifest", "--dry-run")
-    assert "inputs: 6 files" in output and "measurements: 2 files" in output, output
+    assert "essential: 5 files" in output and "input_truth__di_photon: 1 files" in output, output
 
     status, output = bench.run("scripts/ddml-bench", "manifest", "--out", out, "--stage")
     assert "warning" not in output, output
+    simulations = ["%s__%s__%s" % (stage, scenario, simulator)
+                   for stage in ("sim_output", "rec_output")
+                   for scenario in ("single_photon", "di_photon")
+                   for simulator in ("geant4", "caloclouds3")]
+    assert sorted(os.listdir(out)) == sorted(
+        ["essential", "input_truth__single_photon", "input_truth__di_photon", "other"]
+        + simulations)
 
-    # The inputs: the .slcio files required, the guns' truth optional, with
-    # the scenarios and options that made them
-    inputs = load(out, "inputs")
-    assert inputs["format"] == "fasinate-manifest/1" and inputs["record"] == "inputs"
-    by_name = dict((entry["name"], entry) for entry in inputs["files"])
-    assert sorted(by_name) == sorted(name + ending for name in INPUTS + [DI_PHOTON_INPUT]
-                                     for ending in (".h5", ".slcio"))
+    # The essential record: the inputs and the full samples' measurements,
+    # all required, with the scenarios and options that made the inputs
+    essential = load(out, "essential")
+    assert essential["format"] == "fasinate-manifest/2" and essential["record"] == "essential"
+    assert essential["title"] == "FaSiNaTe benchmark data: inputs and measurements, all the " \
+        "pipeline needs"
+    by_name = dict((entry["name"], entry) for entry in essential["files"])
+    assert sorted(by_name) == sorted([name + ".slcio" for name in INPUTS + [DI_PHOTON_INPUT]]
+                                     + ["caloclouds3.npz", "geant4.npz"])
     for name, entry in by_name.items():
         source = bench.path(entry["path"])
-        assert entry["path"] == "input_single_particle_gun/" + name
         assert entry["sha256"] == digest(source) and entry["size"] == os.path.getsize(source)
-        assert entry["role"] == ("required" if name.endswith(".slcio") else "optional")
+        assert entry["role"] == "required"
         # staged as links, under the same flat names
-        assert os.path.realpath(os.path.join(out, "inputs", name)) == os.path.realpath(source)
+        assert os.path.realpath(os.path.join(out, "essential", name)) == os.path.realpath(source)
     gun = by_name[INPUTS[0] + ".slcio"]
+    assert gun["path"] == "input_single_particle_gun/" + INPUTS[0] + ".slcio"
     assert gun["scenarios"] == ["single_photon"] and gun["generator"] == "ILD_Particle_Gun.py"
     assert "--save_dir" not in gun["options"] and "--energy" in gun["options"]
-    assert by_name[DI_PHOTON_INPUT + ".h5"]["scenarios"] == ["di_photon"]
-    assert inputs["configuration"]["scenarios"]["di_photon"]["simulation_seeds"] == [1, 2]
-    assert inputs["configuration"]["pins"]["key4hep.release"] == "2026-04-08"
+    assert essential["configuration"]["scenarios"]["di_photon"]["simulation_seeds"] == [1, 2]
+    assert essential["configuration"]["pins"]["key4hep.release"] == "2026-04-08"
 
-    # The measurements of the full samples, what they hold, and what made them
-    measurements = load(out, "measurements")
-    by_name = dict((entry["name"], entry) for entry in measurements["files"])
-    assert sorted(by_name) == ["caloclouds3.npz", "geant4.npz"]
+    # The measurements, what they hold, and what made them
     geant4 = by_name["geant4.npz"]
-    assert geant4["role"] == "required" and geant4["up_to_date"] is True
+    assert geant4["path"] == "observables/geant4.npz" and geant4["up_to_date"] is True
     assert geant4["simulator"] == "geant4" and geant4["scenarios"] == ["di_photon",
                                                                        "single_photon"]
-    assert geant4["sha256"] == digest(bench.path("observables", "geant4.npz"))
     assert geant4["observables"]["radial_profile"]["profiles"] == ["r100", "r30"]
     assert geant4["observables"]["photon_separation"]["scenarios"] == ["di_photon"]
     assert geant4["observables"]["energy"]["settings"]["particle_collections"] == ["PandoraPFOs"]
     assert [(r["path"], r["seed"], r["events"]) for r in geant4["reconstructions"]["di_photon"]] \
         == [("rec_output/di_photon/geant4/%s_REC.edm4hep.root" % name, seed, 30)
             for seed, name in zip((1, 2), DI_PHOTON_SIMULATIONS)]
-    hashes = dict((entry["path"], entry["sha256"]) for entry in inputs["files"])
     assert sorted(d["path"] for d in geant4["derived_from"]) == sorted(
         "input_single_particle_gun/%s.slcio" % name for name in INPUTS + [DI_PHOTON_INPUT])
-    assert all(d["sha256"] == hashes[d["path"]] for d in geant4["derived_from"])
+    assert all(d["sha256"] == by_name[d["path"].split("/")[-1]]["sha256"]
+               for d in geant4["derived_from"])
     assert geant4["stack"] == {
         "compact": "ILD/compact/ILD_l5_o1_v02/ILD_l5_o1_v02.xml",
         "ddml": "0123456789abcdef0123456789abcdef01234567",
         "ildconfig": geant4["stack"]["ildconfig"], "key4hep": "2026-04-08", "patches": "none",
-        "reconstruction_args": geant4["stack"]["reconstruction_args"],
+        "reconstruction_args": "--noBeamCalReco --usingParticleGun",
         "steering": "ddsim_steer_geant4.py"}
     assert len(geant4["stack"]["ildconfig"]) == 40
-    assert geant4["stack"]["reconstruction_args"] == "--noBeamCalReco --usingParticleGun"
-    assert measurements["stack"] == dict((k, v) for k, v in geant4["stack"].items()
-                                         if k != "steering")
+    assert essential["stack"] == dict((k, v) for k, v in geant4["stack"].items()
+                                      if k != "steering")
     assert by_name["caloclouds3.npz"]["stack"]["presets"] == "CC3_BARREL_PY_INTERFACE"
 
-    # Everything else in archives of the folders, never fetched
-    bulk = load(out, "bulk")
-    by_name = dict((entry["name"], entry) for entry in bulk["files"])
-    assert sorted(by_name) == sorted(
-        ["%s__%s__%s.tar" % (top, scenario, simulator) for top in ("sim_output", "rec_output")
-         for scenario in ("single_photon", "di_photon") for simulator in ("geant4", "caloclouds3")]
-        + ["observables.tar"])
-    assert all(entry["role"] == "archive" for entry in bulk["files"])
-    archive = by_name["rec_output__di_photon__geant4.tar"]
-    assert archive["sha256"] == digest(os.path.join(out, "bulk", archive["name"]))
-    assert [m["path"] for m in archive["members"]] == sorted(
-        "rec_output/di_photon/geant4/%s%s" % (name, ending) for name in DI_PHOTON_SIMULATIONS
-        for ending in (".log", "_AIDA.root", "_PfoAnalysis.root", "_REC.edm4hep.root"))
-    # The test sample's measurements and the plots go with the bulk
-    names = [m["path"] for m in by_name["observables.tar"]["members"]]
-    assert "observables/geant4_n2.npz" in names and "observables/plots/metrics.csv" in names
+    # The catalogue says what every record holds
+    catalogue = essential["catalogue"]
+    assert sorted(catalogue) == sorted(os.listdir(out))
+    assert catalogue["rec_output__di_photon__geant4"]["title"] == \
+        "FaSiNaTe benchmark data: Geant4 reconstructions, di_photon"
+    assert catalogue["input_truth__di_photon"]["paths"] == [
+        "input_single_particle_gun/%s.h5" % DI_PHOTON_INPUT]
 
-    # Unpacked in another data folder, the archives put their members in place
+    # The simulations and reconstructions, file by file, by stage, scenario
+    # and simulator, never fetched
+    record = load(out, "rec_output__di_photon__caloclouds3")
+    assert record["title"] == "FaSiNaTe benchmark data: caloclouds3 reconstructions, di_photon"
+    assert sorted(entry["name"] for entry in record["files"]) == sorted(
+        name + ending for name in DI_PHOTON_SIMULATIONS
+        for ending in (".log", "_AIDA.root", "_PfoAnalysis.root", "_REC.edm4hep.root"))
+    for entry in record["files"]:
+        assert entry["role"] == "archive"
+        assert entry["path"] == "rec_output/di_photon/caloclouds3/" + entry["name"]
+        assert entry["sha256"] == digest(bench.path(entry["path"]))
+        assert os.path.islink(os.path.join(out, record["record"], entry["name"]))
+    truth = load(out, "input_truth__single_photon")
+    assert sorted(entry["name"] for entry in truth["files"]) == sorted(
+        name + ".h5" for name in INPUTS)
+    assert all(entry["role"] == "optional" for entry in truth["files"])
+
+    # The rest in tar archives of their folders: the plots, the test sample's
+    # measurements, which unpacked in another data folder go in place
+    other = load(out, "other")
+    archive, = other["files"]
+    assert archive["name"] == "observables.tar" and archive["role"] == "archive"
+    assert archive["sha256"] == digest(os.path.join(out, "other", "observables.tar"))
+    names = [m["path"] for m in archive["members"]]
+    assert "observables/geant4_n2.npz" in names and "observables/plots/metrics.csv" in names
     elsewhere = os.path.join(bench.tmp, "elsewhere")
-    for entry in bulk["files"]:
-        with tarfile.open(os.path.join(out, "bulk", entry["name"])) as tar:
-            if hasattr(tarfile, "data_filter"):
-                tar.extractall(elsewhere, filter="data")
-            else:
-                tar.extractall(elsewhere)
-        for member in entry["members"]:
-            unpacked = os.path.join(elsewhere, member["path"])
-            assert digest(unpacked) == member["sha256"] == digest(bench.path(member["path"]))
-            # with their times, so that reconstructions stay older than measurements
-            assert abs(os.path.getmtime(unpacked)
-                       - os.path.getmtime(bench.path(member["path"]))) < 1e-3
+    with tarfile.open(os.path.join(out, "other", "observables.tar")) as tar:
+        if hasattr(tarfile, "data_filter"):
+            tar.extractall(elsewhere, filter="data")
+        else:
+            tar.extractall(elsewhere)
+    for member in archive["members"]:
+        unpacked = os.path.join(elsewhere, member["path"])
+        assert digest(unpacked) == member["sha256"] == digest(bench.path(member["path"]))
+        assert abs(os.path.getmtime(unpacked)
+                   - os.path.getmtime(bench.path(member["path"]))) < 1e-3
+
+    # Records bigger than --max-record-gb are split into parts, each
+    # reconstruction's files together
+    status, output = bench.run("scripts/ddml-bench", "manifest", "--dry-run",
+                               "--max-record-gb", "0.0003")
+    assert "rec_output__di_photon__geant4__part1: 4 files" in output, output
+    assert "rec_output__di_photon__geant4__part2: 4 files" in output, output
+    assert "(FaSiNaTe benchmark data: Geant4 reconstructions, di_photon (part 2))" in output
+    assert "sim_output__di_photon__geant4: 4 files" in output, output
+
+    # Only some records
+    again = os.path.join(bench.tmp, "again")
+    bench.run("scripts/ddml-bench", "manifest", "--out", again, "--records", "*__di_photon__*")
+    assert sorted(os.listdir(again)) == sorted(r for r in simulations if "di_photon" in r)
+    assert not os.path.islink(os.path.join(again, "sim_output__di_photon__geant4",
+                                           DI_PHOTON_SIMULATIONS[0] + ".edm4hep.root"))
 
 
 def test_measurements_from_a_data_folder_without_logs_say_so(bench):
@@ -123,11 +155,31 @@ def test_measurements_from_a_data_folder_without_logs_say_so(bench):
         shutil.rmtree(bench.path(folder))
     out = os.path.join(bench.tmp, "zenodo")
     status, output = bench.run("scripts/ddml-bench", "manifest", "--out", out,
-                               "--records", "measurements")
+                               "--records", "essential")
     assert "logs of its simulations and reconstructions aren't there" in output, output
-    entry = load(out, "measurements")["files"][0]
+    entry = next(e for e in load(out, "essential")["files"] if e["name"] == "geant4.npz")
     assert entry["stack"] == {} and entry["up_to_date"] is True
-    assert sorted(os.listdir(out)) == ["measurements"]
+    assert sorted(os.listdir(out)) == ["essential"]
+
+
+def test_records_are_split_with_each_samples_files_together():
+    files = [{"name": "%s%s" % (sample, ending), "size": size}
+             for sample, size in (("a", 30), ("b", 30), ("c", 10))
+             for ending in ("_REC.edm4hep.root", ".log")]
+    warnings = []
+    parts = manifest.split("rec_output__s__geant4", files, 85, warnings)
+    assert [(name, [e["name"] for e in part]) for name, part in parts] == [
+        ("rec_output__s__geant4__part1", ["a_REC.edm4hep.root", "a.log"]),
+        ("rec_output__s__geant4__part2", ["b_REC.edm4hep.root", "b.log", "c_REC.edm4hep.root",
+                                          "c.log"])]
+    assert warnings == []
+    assert manifest.split("rec_output__s__geant4", files, 200, warnings) == [
+        ("rec_output__s__geant4", files)]
+    # A sample bigger than a record makes one of its own, and says so
+    parts = manifest.split("sim_output__s__geant4", files, 50, warnings)
+    assert len(parts) == 3 and "the files of a are 0.0 GB" in warnings[0]
+    # The essential record isn't split
+    assert manifest.split("essential", files, 1, []) == [("essential", files)]
 
 
 def test_the_headers_of_the_logs(tmp_path):
@@ -163,15 +215,18 @@ def test_the_headers_of_the_logs(tmp_path):
 
 
 def test_which_record_each_file_goes_into():
-    assert manifest.classify("input_single_particle_gun/a.slcio") == ("inputs", "required",
-                                                                       "a.slcio")
-    assert manifest.classify("input_single_particle_gun/a.h5") == ("inputs", "optional", "a.h5")
-    assert manifest.classify("observables/geant4.npz") == ("measurements", "required",
-                                                            "geant4.npz")
-    assert manifest.classify("observables/geant4_n10.npz") == ("bulk", "archive",
+    assert manifest.classify("input_single_particle_gun/a.slcio") == (
+        "essential", "required", "a.slcio", None)
+    assert manifest.classify("observables/geant4.npz") == ("essential", "required",
+                                                            "geant4.npz", None)
+    assert manifest.classify("input_single_particle_gun/a.h5", {"a.slcio": "s"}) == (
+        "input_truth__s", "optional", "a.h5", None)
+    assert manifest.classify("input_single_particle_gun/a.h5")[0] == "input_truth"
+    assert manifest.classify("observables/geant4_n10.npz") == ("other", "archive",
+                                                                "observables.tar",
                                                                 "observables.tar")
     assert manifest.classify("sim_output/custom/geant4/x.log") == (
-        "bulk", "archive", "sim_output__custom__geant4.tar")
+        "sim_output__custom__geant4", "archive", "x.log", None)
     assert manifest.classify("slurm/pipeline_1/logs/001-plot.out")[2] == "slurm.tar"
     # Full paths recorded before the records were relative, from any data folder
     assert manifest.recorded_path("/data/dust/x/data/rec_output/s/geant4/a_REC.edm4hep.root") \
