@@ -1,0 +1,86 @@
+# ConvL2LFlows: the convolutional layer-to-layer normalising flow of photon
+# showers in the ILD Si-W ECal barrel of the benchmark paper, on a regular grid
+# three times finer than the cells, conditioned on the energy and direction,
+# through DDML's LibTorch backend (weights: DDML's models/L2LFlowsx9.pt, which
+# FaSiNaTe's DDML build fetches itself, ddml.extra_models in
+# configs/default.yaml, as DDML's own build doesn't). DDML has no preset for it,
+# so its DDML model configuration is written out below.
+#
+# simulate_models.sh simulates the benchmark scenarios with every model in this
+# folder; the file name (l2lflows) names the model and its output folders.
+#
+# The training details are from the benchmark paper, "A First Full Physics
+# Benchmark for Highly Granular Calorimeter Surrogates" (its training dataset,
+# shared with CaloClouds3, and its section on ConvL2LFlows), and the
+# ConvL2LFlows paper, arXiv:2405.20407.
+
+name: ConvL2LFlows
+
+# The energy of each cell of a fixed grid, 30 layers of 90 x 90 cells of a
+# third of the ECal's cells (about 1.7 x 1.7 mm^2, the paper's R x9), in a
+# 150 mm box whose layers are shifted to follow the shower's core. DDML places
+# it where the photon enters and deposits cell by cell in the real detector.
+representation: regular_grid
+
+# Factors fixed when the model was trained. The model has no input for them, so
+# it is only valid where they hold.
+fixed_at_training:
+  detector:
+    name: ILD_l5_o1_v02
+    calorimeter: EcalBarrel
+    # The training showers were simulated in a regularised copy of this ECal
+    # barrel, at one point of its front face. simulate_models.sh simulates in
+    # this detector: the path is relative to k4geo ($k4geo_DIR) unless absolute.
+    compact_file: ILD/compact/ILD_l5_o1_v02/ILD_l5_o1_v02.xml
+  particle:
+    name: gamma  # Geant4's name, which DDML uses
+    pdg: 22
+
+# Factors given to the model as context for each shower.
+context:
+  energy:
+    unit: GeV
+    training_range: [1, 126]
+  direction:
+    # DDML passes the unit vector of the incident direction in the local frame
+    # of the stave (z' the normal to the layers). The training photons came
+    # within 60 degrees of the normal, from every azimuth.
+    unit: deg
+    training_range:
+      frame: local
+      theta: [0, 60]
+      phi: [0, 360]
+
+# How simulate_models.sh runs the model with the DDML build from
+# scripts/build_ddml.sh (DDML's python-inference branch).
+ddml:
+  # A DDML model configuration written out (ddml_bench/ddml_configs.py), as
+  # DDML's earlier steering file set L2LFlows up: its plugin compiled against
+  # LibTorch, with its own grid (L2LFlowsModel), loading ../models/L2LFlowsx9.pt
+  # (relative to DDML's scripts/ folder, where ddsim runs), for photons above
+  # 10 GeV entering the ECal barrel, as DDML's presets of the other models (the
+  # benchmark paper's trigger was 5 GeV), except near the ends of the barrel
+  # and the joins between its staves (the trigger CaloClouds3's plugin has
+  # too). DDML places each layer where the photon's line of flight crosses it
+  # (correct_angles), as the model's box follows the shower's core.
+  model_configs:
+    - plugin: L2LFlowsModelPolyhedraBarrelTorchModel/BarrelModelTorch
+      geometry: ILD_BARREL
+      plugin_properties:
+        ModelPath: ../models/L2LFlowsx9.pt
+        OptimizeFlag: 1
+        IntraOpNumThreads: 1
+      applicable_particles: [gamma]
+      triggers: {gamma: 10}
+      correct_angles: true
+  # The weights, relative to the DDML clone, and their md5 sum (DDML's
+  # models/L2LFlowsx9.pt.md5), which simulate_models.sh checks, as it checks
+  # that ModelPath is this file.
+  weights: models/L2LFlowsx9.pt
+  weights_md5: "adf03fc372d99a224aafa74267bdcac2"
+
+# How plot_observables.sh draws this model: a colour and a line style
+# (matplotlib's: here a dash pattern, offset and lengths) of its own.
+plot:
+  color: "#c51b7d"
+  linestyle: [0, [10, 3, 2, 3]]

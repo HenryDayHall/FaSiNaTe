@@ -14,8 +14,10 @@
 #
 # Steps: clone or update DDML in ddml.source_dir, pull the container image if
 # it is missing, build and install DDML in a clean shell (inside the container
-# unless container.enabled is false or this already runs in one), then write
-# ddml.env_file and check that it loads this DDML.
+# unless container.enabled is false or this already runs in one), fetch the
+# models of ddml.extra_models that DDML's build doesn't download
+# (scripts/fetch_ddml_models.py), then write ddml.env_file and check that it
+# loads this DDML.
 #
 # setup.sh and the run_*.sh scripts call this with --if-needed. Run it yourself
 # to update DDML to the head of its branch, or to rebuild from scratch (--clean).
@@ -59,6 +61,12 @@ install=$FASINATE_DDML_INSTALL_DIR
 env_file=$FASINATE_DDML_ENV_FILE
 setup=$FASINATE_KEY4HEP_SETUP_SCRIPT
 release=$FASINATE_KEY4HEP_RELEASE
+
+# The models of DDML's to fetch besides those its build downloads
+extra_models=()
+if [[ $FASINATE_DDML_DOWNLOAD_MODELS == true ]]; then
+    extra_models=("${FASINATE_DDML_EXTRA_MODELS[@]}")
+fi
 
 # Print a command, and run it unless this is a dry run.
 run() {
@@ -391,6 +399,9 @@ fi
 if $dry_run; then
     say "would set up Key4hep to find the release${release_args[*]:+ $release} and its platform"
     say "would write $env_file, then build, install and check DDML"
+    if ((${#extra_models[@]})); then
+        say "would fetch ${extra_models[*]} into $src/models"
+    fi
     exit 0
 fi
 say "setting up Key4hep to find the release and its platform"
@@ -411,6 +422,15 @@ say "building DDML"
 if ! run_clean ddml_build "${FASINATE_DDML_CMAKE_ARGS[@]}"; then
     rm -f "$new_env"
     die "the build failed (see above); $env_file is unchanged"
+fi
+if ((${#extra_models[@]})); then
+    say "fetching DDML's models that its build doesn't download"
+    if ! "${FASINATE_PYTHON:-python3}" "$here/fetch_ddml_models.py" --url "$FASINATE_DDML_MODELS_URL" \
+        --models-dir "$src/models" "${extra_models[@]}"; then
+        rm -f "$new_env"
+        die "fetching ${extra_models[*]} failed (see above); $env_file is unchanged, so the" \
+            "next run tries again (or leave them out of ddml.extra_models)"
+    fi
 fi
 mv "$new_env" "$env_file"
 FASINATE_DDML_ENV_FILE=$env_file

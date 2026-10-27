@@ -260,7 +260,7 @@ def test_every_model_of_the_repository_runs_in_ddsim(bench):
         bench.add_model(name)
     bench.run("generate_input.sh", "single_photon")
     status, output = bench.run("simulate_models.sh", "-n", "2", "-s", "single_photon")
-    assert "made 16 of 16" in output, output
+    assert "made %d of %d" % (2 * len(REPO_MODELS), 2 * len(REPO_MODELS)) in output, output
     for model in REPO_MODELS:
         with open(os.path.join(bench.repo, "models", model + ".yaml")) as stream:
             described = yaml.safe_load(stream)
@@ -395,3 +395,53 @@ def test_a_compiled_model_is_its_python_twins_closure_test(bench):
                                os.path.join(bench.tmp, "elsewhere"))
     assert not os.path.exists(os.path.join(bench.tmp, "elsewhere", "closure.csv"))
     assert "closure test" not in output
+
+
+def test_models_ddmls_build_leaves_out_are_fetched_by_their_md5_sums(tmp_path):
+    """scripts/fetch_ddml_models.py, which build_ddml.sh runs for
+    ddml.extra_models: as DDML's build fetches its own, by the md5 sum in
+    DDML's models/<file>.md5, checked, and only when they aren't there."""
+    import hashlib
+    sys.path.insert(0, os.path.join(REPO, "scripts"))
+    try:
+        import fetch_ddml_models
+    finally:
+        sys.path.pop(0)
+    server, models_dir = tmp_path / "eos", tmp_path / "DDML" / "models"
+    server.mkdir()
+    models_dir.mkdir(parents=True)
+    weights = b"the weights of a flow\n"
+    md5 = hashlib.md5(weights).hexdigest()
+    (server / md5).write_bytes(weights)
+    (models_dir / "L2LFlowsx9.pt.md5").write_text(md5 + "\n")
+    url = "file://%s/{md5}" % server
+
+    assert fetch_ddml_models.main(["--url", url, "--models-dir", str(models_dir), "--dry-run",
+                                   "L2LFlowsx9.pt"]) == 0
+    assert not (models_dir / "L2LFlowsx9.pt").exists()
+    assert fetch_ddml_models.fetch(["L2LFlowsx9.pt"], str(models_dir), url) == []
+    assert (models_dir / "L2LFlowsx9.pt").read_bytes() == weights
+    # There already, so not fetched again
+    (server / md5).unlink()
+    assert fetch_ddml_models.fetch(["L2LFlowsx9.pt"], str(models_dir), url) == []
+
+    # A file that isn't what its md5 sum says isn't put in place
+    (models_dir / "L2LFlowsx9.pt").write_bytes(b"something else\n")
+    (server / md5).write_bytes(b"not the weights\n")
+    problem, = fetch_ddml_models.fetch(["L2LFlowsx9.pt"], str(models_dir), url)
+    assert "isn't the published file: its md5 is" in problem
+    assert (models_dir / "L2LFlowsx9.pt").read_bytes() == b"something else\n"
+    # and a model DDML has no md5 sum for is an error
+    problem, = fetch_ddml_models.fetch(["Nothing.pt"], str(models_dir), url)
+    assert "DDML has no model Nothing.pt to fetch" in problem
+    with pytest.raises(SystemExit):
+        fetch_ddml_models.main(["--url", "file:///x", "--models-dir", str(models_dir)])
+
+
+def test_the_default_configuration_fetches_l2lflows():
+    from ddml_bench.config import load_config
+    ddml = load_config()["ddml"]
+    assert "L2LFlowsx9.pt" in ddml["extra_models"] and "{md5}" in ddml["models_url"]
+    with open(os.path.join(REPO, "models", "l2lflows.yaml")) as stream:
+        described = yaml.safe_load(stream)["ddml"]
+    assert described["weights"] == "models/L2LFlowsx9.pt"

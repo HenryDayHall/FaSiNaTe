@@ -433,7 +433,9 @@ def check_models(models):
             md5 = _md5(weights) if model["weights_md5"] and os.path.isfile(weights) else None
             if not os.path.isfile(weights):
                 problems.append("%s: weights not found: %s (building DDML downloads them when "
-                                "ddml.download_models is true)" % (name, weights))
+                                "ddml.download_models is true, those DDML's build doesn't when "
+                                "they are in ddml.extra_models; scripts/build_ddml.sh --clean "
+                                "builds again)" % (name, weights))
             elif md5 and md5 != model["weights_md5"]:
                 problems.append("%s: the md5 sum of %s is %s, not %s as in %s; if these weights "
                                 "are intended, update weights_md5 there" % (

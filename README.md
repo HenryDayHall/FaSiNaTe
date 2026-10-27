@@ -3,7 +3,7 @@
 FaSiNaTe benchmarks generative fast-simulation models of calorimeter showers in a full detector chain.
 Each model runs inside ILD's `ddsim` simulation through [DDML](https://github.com/key4hep/DDML), its events go through ILD's standard reconstruction, and observables measured on the reconstructed events are compared with full Geant4 simulation of the same inputs.
 
-The benchmark follows the paper *"A First Full Physics Benchmark for Highly Granular Calorimeter Surrogates"*, starting with its single-photon shower profiles, energy linearity and resolution, and intrinsic shower angles, and its di-photon separation. The models are those DDML runs: CaloClouds3, both through DDML's embedded Python and compiled against LibTorch, two BIB-AEs, a GAN (with LibTorch and with ONNX Runtime) and the Par04 example's VAE ([The models](#the-models)). Where a model runs through two of DDML's backends, the two are compared with each other as well, a [closure test](#closure-tests).
+The benchmark follows the paper *"A First Full Physics Benchmark for Highly Granular Calorimeter Surrogates"*, starting with its single-photon shower profiles, energy linearity and resolution, and intrinsic shower angles, and its di-photon separation. The models are those DDML runs: CaloClouds3, both through DDML's embedded Python and compiled against LibTorch, ConvL2LFlows, two BIB-AEs, a GAN (with LibTorch and with ONNX Runtime) and the Par04 example's VAE ([The models](#the-models)). Where a model runs through two of DDML's backends, the two are compared with each other as well, a [closure test](#closure-tests).
 
 <p align="center">
   <img src="docs/images/longitudinal_profile_layers__single_photon.png" alt="Longitudinal shower profile, CaloClouds3 against Geant4" width="48%">
@@ -115,7 +115,7 @@ Every script takes `--help`, and stages 1–5 also take `--dry-run`, showing wha
 | observables | simulator whose measurements aren't up to date | the tasks reconstructing its simulations |
 | plot | (one task) | the measurement tasks |
 
-Try it first with [`configs/pipeline_test.yaml`](configs/pipeline_test.yaml), a very light test of every stage: two inputs of 10 photons each and one of 10 photon pairs, simulated with two seeds, in a data folder of its own, with short time limits. With the eight models in `models/`, that is 85 tasks (22 with CaloClouds3 alone).
+Try it first with [`configs/pipeline_test.yaml`](configs/pipeline_test.yaml), a very light test of every stage: two inputs of 10 photons each and one of 10 photon pairs, simulated with two seeds, in a data folder of its own, with short time limits. With the nine models in `models/`, that is 94 tasks (22 with CaloClouds3 alone).
 
 ```bash
 ./slurm_pipeline.sh --config configs/pipeline_test.yaml --dry-run  # what is done, and what would be submitted
@@ -187,7 +187,7 @@ Source it only once per shell, as the Key4hep setup can only run once. In a shel
 
 What it sets up, and the scripts that do it:
 
-- **DDML** — `scripts/build_ddml.sh` clones DDML into `ddml.source_dir` (at `ddml.commit` if set, otherwise the head of `ddml.branch`), pulls the container image if needed, builds DDML inside it against `key4hep.release`, and writes `ddml.env_file`. Building also downloads DDML's reference models into `paths.model_dir`. It rebuilds only when the DDML commit or branch, the build options, the Key4hep release or the image change. Run it by hand to move to the head of the branch (`--dry-run`, `--clean`, `--config FILE` and `--set section.key=value` are available); it prints the commit and release used, ready to pin in `configs/local.yaml`.
+- **DDML** — `scripts/build_ddml.sh` clones DDML into `ddml.source_dir` (at `ddml.commit` if set, otherwise the head of `ddml.branch`), pulls the container image if needed, builds DDML inside it against `key4hep.release`, and writes `ddml.env_file`. Building also downloads DDML's reference models into DDML's `models/` folder, and then those of `ddml.extra_models`, which DDML's build leaves out ([`scripts/fetch_ddml_models.py`](scripts/fetch_ddml_models.py)). It rebuilds only when the DDML commit or branch, the build options, the Key4hep release or the image change. Run it by hand to move to the head of the branch (`--dry-run`, `--clean`, `--config FILE` and `--set section.key=value` are available); it prints the commit and release used, ready to pin in `configs/local.yaml`.
 - **ILDConfig** — Key4hep releases don't include it, so `scripts/fetch_detector_configs.sh` clones it to `detector_configs.ildconfig.source_dir`. Pin `detector_configs.ildconfig.commit` for benchmark runs.
 - **Patches** — fixes that are upstream but not yet in a Key4hep release, built by `scripts/build_patches.sh` (see [Patches to the Key4hep release](#patches-to-the-key4hep-release)).
 
@@ -376,13 +376,14 @@ Each record gets a folder with its `manifest.json` and a suggested title, and wi
 
 ## The models
 
-Each model in [`models/`](models/) runs through DDML in the ECal barrel, as DDML's presets do: photons above 10 GeV entering the barrel go to the model, and Geant4 simulates everything else. They are DDML's generative models that its build here can run, each with DDML's own weights:
+Each model in [`models/`](models/) runs through DDML in the ECal barrel, as DDML's presets do: photons above 10 GeV entering the barrel go to the model, and Geant4 simulates everything else. They are DDML's generative models, each with DDML's own weights, which building DDML downloads (and `L2LFlowsx9.pt`, which DDML's build leaves out, `scripts/build_ddml.sh` fetches as DDML would, by its md5 sum: `ddml.extra_models`):
 
 | Model | What it is | How DDML runs it | Backend | Weights |
 |---|---|---|---|---|
 | `caloclouds3` | CaloClouds3, a point-cloud model | preset `CC3_BARREL_PY_INTERFACE` | embedded Python | `CC3_SF_2A.pt` |
 | `caloclouds3_libtorch` | the same, compiled: `caloclouds3`'s closure test | preset `CC3_BARREL`, with `caloclouds3`'s weights | LibTorch | `CC3_SF_2A.pt` |
 | `caloclouds3_paper` | CaloClouds3, the checkpoint of the CaloClouds3 paper | preset `CC3_BARREL` | LibTorch | `CC3_paper_checkpoint.pt` |
+| `l2lflows` | ConvL2LFlows, a layer-to-layer normalising flow on a grid three times finer than the cells | its configuration | LibTorch | `L2LFlowsx9.pt` |
 | `bibae_two_angle` | a BIB-AE on a regular grid, conditioned on the energy and both angles | preset `BIBAE_BARREL` | LibTorch | `BIBAE_Two_Angle_Full_PP_cut.pt` |
 | `bibae_one_angle` | a BIB-AE on a regular grid, conditioned on the energy and the polar angle | its configuration | LibTorch | `BIBAE_Full_PP_cut.pt` |
 | `gan_libtorch` | a GAN on a regular grid, at normal incidence, conditioned on the energy | its configuration | LibTorch | `francisca_gan_jit.pt` |
@@ -392,9 +393,9 @@ Each model in [`models/`](models/) runs through DDML in the ECal barrel, as DDML
 Each file says what the model was trained on and where that comes from. A few things to bear in mind when comparing them:
 
 - Only the barrel: the endcap presets (`CC3_ENDCAP`, `BIBAE_ENDCAP`, ...) would add the endcaps, which no scenario reaches yet.
-- The plugins of CaloClouds3 and the two-angle BIB-AE have a trigger of their own that leaves the ends of the barrel and the joins between its staves to Geant4; those of the GAN, the one-angle BIB-AE and the Par04 VAE don't.
+- The plugins of CaloClouds3, ConvL2LFlows and the two-angle BIB-AE have a trigger of their own that leaves the ends of the barrel and the joins between its staves to Geant4; those of the GAN, the one-angle BIB-AE and the Par04 VAE don't.
 - The Par04 VAE tests DDML's ONNX path through the whole chain; it isn't a surrogate for ILD. It was trained on electrons in Par04's own cylindrical calorimeter, and DDML conditions it on the angle from the normal to the layers, where the example trained it on the angle from the cylinder's axis.
-- Left out: DDML's L2LFlows plugin (ConvL2LFlows), as building DDML doesn't download its weights (`L2LFlowsx9.pt` is commented out in DDML's `models/CMakeLists.txt`); with the weights in DDML's `models/`, a description like `gan_libtorch.yaml`'s with the plugin `L2LFlowsModelPolyhedraBarrelTorchModel` and `correct_angles: true` would run it. The `LoadHDF5` plugins replay showers from a file rather than generating them, and PionClouds is of hadron showers.
+- Left out: the `LoadHDF5` plugins replay showers from a file rather than generating them, and PionClouds is of hadron showers.
 
 ### Closure tests
 
