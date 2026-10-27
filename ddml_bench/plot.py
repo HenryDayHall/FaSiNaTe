@@ -46,8 +46,17 @@ its band the spread over the seeds (separation_points()). The metric compares
 the number of reconstructed photons in each bin, seed by seed, and gives the
 mean over the seeds with their spread as its uncertainty (seed_metric()).
 
+A model that is the closure test of another (closure in models/<model>.yaml:
+the same model, e.g. the same weights through another of DDML's inference
+backends) is also drawn against that one alone, as the reference, in
+<out>/closure/<model>/, with their metrics there; and closure.csv says, for
+each scenario, whether all the two measured is the same, number for number,
+as it should be where both simulated the same events with the same seeds and
+closure.identical says so (closures()).
+
   python3 -m ddml_bench.plot [--dir DIR] [--out DIR] [--events N]
-                             [--format pdf,png] [--reference NAME] [SIMULATOR ...]
+                             [--format pdf,png] [--reference NAME]
+                             [--no-closure] [SIMULATOR ...]
 
 (plot_observables.sh runs it.) The figures go to <dir>/plots (or --out), one per
 observable, profile and scenario, named <observable>_<profile>__<scenario>.<format>
@@ -1103,45 +1112,26 @@ def uncertainty_text(row, form="%.6g"):
     return form % error if error is not None and math.isfinite(error) else ""
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(
-        description="Plot the observables measured by observables_from_reconstruction.sh.")
-    parser.add_argument("simulators", nargs="*", metavar="SIMULATOR",
-                        help="only these simulators (default: every .npz file found)")
-    parser.add_argument("--dir", help="the folder with the .npz files "
-                                      "(default: observables in paths.data_dir)")
-    parser.add_argument("--out", help="where the figures go (default: <dir>/plots)")
-    parser.add_argument("--events", type=int, metavar="N",
-                        help="plot the measurements of the first N events (<simulator>_n<N>.npz)")
-    parser.add_argument("--format", default="pdf,png",
-                        help="figure formats, separated by commas (default: pdf,png)")
-    parser.add_argument("--reference", default=REFERENCE,
-                        help="the simulator the others are compared to (default: geant4)")
-    args = parser.parse_args(argv)
-
-    folder, observables = load_settings() if not args.dir else (args.dir, load_settings()[1])
-    if not folder:
-        return 1
-    suffix = "" if args.events is None else "_n%d" % args.events
+def draw(folder, out, suffix, formats, observables, wanted=(), reference_name=REFERENCE):
+    """Draw every figure of the measurements in folder (<simulator><suffix>.npz;
+    of the simulators wanted, and the reference, or of all of them) into out,
+    with metrics<suffix>.csv and fits<suffix>.csv there, comparing each to the
+    reference. Returns the simulators drawn ([] if there are no measurements)."""
     paths = [path for name, path in measurement_files(folder, suffix)
-             if not args.simulators or name in args.simulators or name == args.reference]
+             if not wanted or name in wanted or name == reference_name]
     if not paths:
-        say("no measurements (*%s.npz) in %s; make them with "
-            "./observables_from_reconstruction.sh" % (suffix, folder))
-        return 1
+        return []
     simulators = [Simulator(p) for p in paths]
-    reference = next((s for s in simulators if s.name == args.reference), None)
+    reference = next((s for s in simulators if s.name == reference_name), None)
     if reference is None:
         say("there's no %s measurement, so there's nothing to compare to; plotting "
-            "without deviations" % args.reference)
+            "without deviations" % reference_name)
     # The reference first, then the models in the order of their files
     if reference is not None:
         simulators.remove(reference)
         simulators.insert(0, reference)
 
-    out = args.out or os.path.join(folder, PLOTS_DIR)
     os.makedirs(out, exist_ok=True)
-    formats = [f.strip() for f in args.format.split(",") if f.strip()]
     groups, event_groups = [], []
     for simulator in simulators:
         for key in simulator.profiles():
@@ -1221,6 +1211,149 @@ def main(argv=None):
         print("%-22s %-14s %-10s %-14s %-9s %.4g +- %.2g" % (
             observable, scenario, profile, name, parameter, value, error))
     say("figures, metrics%s.csv and fits%s.csv in %s" % (suffix, suffix, out))
+    return simulators
+
+
+# ---------------------------------------------------------------------------
+# Closure tests: a model that is another's (the same weights through another
+# inference backend, say), measured on the same events, compared with it
+
+
+CLOSURE_DIR = "closure"
+# How a model's and its twin's measurements of a scenario were seeded
+SAME_SEEDS, DDSIM_SEEDS, OTHER_SEEDS = "same", "ddsim's own", "different"
+
+
+def closure_pairs():
+    """{model: (the model it is a closure test of, whether their events should
+    be identical with the same seeds)}, from models/ (ddml_bench/models.py);
+    {} if the models' descriptions can't be read."""
+    try:
+        from .models import load_models
+        models = load_models()
+    except Exception as error:  # no PyYAML, or a description that is wrong
+        say("can't read the models' descriptions (%s), so no closure tests are plotted" % error)
+        return {}
+    return dict((m["name"], (m["closure"]["of"], m["closure"]["identical"]))
+                for m in models if m.get("closure"))
+
+
+def compare_scenario(first, second, scenario):
+    """(seeds, identical) of two simulators' measurements of a scenario: how
+    they were seeded (SAME_SEEDS: every file with the same ddsim seed, given;
+    DDSIM_SEEDS: any chosen by ddsim; OTHER_SEEDS), and whether everything
+    measured on it is the same, number for number (but the reconstructed
+    files' names, which name the simulator)."""
+    import numpy as np
+
+    def keys(simulator):
+        found = set()
+        for key in simulator.data:
+            parts = key.split(SEP)
+            if (parts[0] == scenario or (len(parts) > 2 and parts[1] == scenario)) \
+                    and key != SEP.join((scenario, "files")):
+                found.add(key)
+        return found
+
+    seed_key = SEP.join((scenario, "seeds"))
+    seeds = [s.data.get(seed_key) for s in (first, second)]
+    if any(s is None or (np.asarray(s) < 0).any() for s in seeds):
+        how = DDSIM_SEEDS
+    elif np.array_equal(seeds[0], seeds[1]):
+        how = SAME_SEEDS
+    else:
+        how = OTHER_SEEDS
+    if keys(first) != keys(second):
+        return how, False
+    for key in keys(first):
+        a, b = np.asarray(first.data[key]), np.asarray(second.data[key])
+        nan = a.dtype.kind == "f" and b.dtype.kind == "f"
+        if a.shape != b.shape or not np.array_equal(a, b, equal_nan=nan):
+            return how, False
+    return how, True
+
+
+def closures(folder, out, suffix, formats, observables, wanted=(), pairs=None):
+    """For each model that is a closure test of another (closure in
+    models/<model>.yaml, or pairs, as closure_pairs() gives them), with both
+    measured (and the model among those wanted, if any are): every figure of
+    the two, the other as the reference, in <out>/closure/<model>/ with their
+    metrics, and a row for each scenario of whether their measurements are the
+    same, in <out>/closure<suffix>.csv. Their events should be the same where
+    they are simulated with the same seeds, if closure.identical says so.
+    Returns the rows."""
+    measured = dict(measurement_files(folder, suffix))
+    rows = []
+    for model, (twin, identical) in sorted((closure_pairs() if pairs is None
+                                            else pairs).items()):
+        if (wanted and model not in wanted) or model not in measured or twin not in measured:
+            continue
+        say("closure test: %s against %s" % (model, twin))
+        drawn = dict((s.name, s) for s in draw(folder, os.path.join(out, CLOSURE_DIR, model),
+                                                suffix, formats, observables, [model], twin))
+        if model not in drawn or twin not in drawn:
+            say("the measurements of %s or %s name another simulator, so there's no closure "
+                "test of them" % (model, twin))
+            continue
+        first, second = drawn[model], drawn[twin]
+        scenarios = sorted({key.split(SEP)[0] for s in (first, second) for key in s.data
+                            if key.endswith(SEP + "n_events")})
+        for scenario in scenarios:
+            seeds, same = compare_scenario(first, second, scenario)
+            expected = identical and seeds == SAME_SEEDS
+            rows.append((model, twin, scenario, seeds, "yes" if same else "no",
+                         "identical" if expected else "statistical",
+                         ("yes" if same else "no") if expected else ""))
+            if expected and not same:
+                say("closure test FAILED: %s and %s were simulated with the same seeds on %s, "
+                    "but their measurements differ" % (model, twin, scenario))
+            else:
+                say("closure test: %s on %s: %s%s" % (
+                    model, scenario, "the same as %s, number for number" % twin if same
+                    else "not the same as %s, number for number" % twin,
+                    "" if expected else " (seeds: %s; compare the figures in %s)" % (
+                        seeds, os.path.join(out, CLOSURE_DIR, model))))
+    if rows:
+        path = os.path.join(out, "closure%s.csv" % suffix)
+        with open(path, "w", newline="") as stream:
+            writer = csv.writer(stream)
+            writer.writerow(["model", "reference", "scenario", "seeds", "identical", "expected",
+                             "passed"])
+            writer.writerows(rows)
+        say("closure tests in %s and %s" % (path, os.path.join(out, CLOSURE_DIR)))
+    return rows
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Plot the observables measured by observables_from_reconstruction.sh.")
+    parser.add_argument("simulators", nargs="*", metavar="SIMULATOR",
+                        help="only these simulators (default: every .npz file found)")
+    parser.add_argument("--dir", help="the folder with the .npz files "
+                                      "(default: observables in paths.data_dir)")
+    parser.add_argument("--out", help="where the figures go (default: <dir>/plots)")
+    parser.add_argument("--events", type=int, metavar="N",
+                        help="plot the measurements of the first N events (<simulator>_n<N>.npz)")
+    parser.add_argument("--format", default="pdf,png",
+                        help="figure formats, separated by commas (default: pdf,png)")
+    parser.add_argument("--reference", default=REFERENCE,
+                        help="the simulator the others are compared to (default: geant4)")
+    parser.add_argument("--no-closure", action="store_true",
+                        help="leave out the closure tests (closure in models/*.yaml)")
+    args = parser.parse_args(argv)
+
+    folder, observables = load_settings() if not args.dir else (args.dir, load_settings()[1])
+    if not folder:
+        return 1
+    suffix = "" if args.events is None else "_n%d" % args.events
+    out = args.out or os.path.join(folder, PLOTS_DIR)
+    formats = [f.strip() for f in args.format.split(",") if f.strip()]
+    if not draw(folder, out, suffix, formats, observables, args.simulators, args.reference):
+        say("no measurements (*%s.npz) in %s; make them with "
+            "./observables_from_reconstruction.sh" % (suffix, folder))
+        return 1
+    if not args.no_closure:
+        closures(folder, out, suffix, formats, observables, args.simulators)
     return 0
 
 

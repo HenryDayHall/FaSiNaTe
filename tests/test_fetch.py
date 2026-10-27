@@ -11,6 +11,7 @@ import shutil
 import pytest
 
 from conftest import Bench
+from ddml_bench import ddml_configs
 from test_pipeline_local import DI_PHOTON_INPUT, INPUTS, read_metrics
 
 RECORD = "123"
@@ -187,6 +188,24 @@ def test_the_manifest_describes_the_models():
         False, "they were simulated in E, not D")
     assert fetch.gun_options(["--energy", "20", "--save_dir", "/x", "--pid", "22"]) == \
         fetch.gun_options(["--pid", "22", "--energy", "20"])
+
+    # A model with DDML model configurations written out: by those it ran with
+    configs = [{"preset": "P", "plugin_properties": {"ModelPath": "../models/b.pt"}}]
+    plan["models"][0].update(presets=[], model_configs=configs, config="models/cc3.yaml")
+    ran = dict(published, stack={"model_configs": ddml_configs.canonical(configs),
+                                 "compact": "D"})
+    assert fetch.measurements_match(task, ran, plan) == (True, "")
+    other = [dict(configs[0], plugin_properties={"ModelPath": "../models/c.pt"})]
+    assert fetch.measurements_match(
+        task, dict(ran, stack={"model_configs": ddml_configs.canonical(other)}), plan) == (
+        False, "the model ran with other DDML model configurations than models/cc3.yaml's")
+    assert fetch.measurements_match(
+        task, dict(ran, model={"model_configs": other}), plan) == (
+        False, "the model's DDML model configurations differ from models/cc3.yaml's")
+    # and not by the presets of what it was before
+    assert fetch.measurements_match(task, published, plan) == (
+        False, "the model ran with the presets P, not the DDML model configurations of "
+        "models/cc3.yaml")
 
 
 def test_a_manifest_sum_read_as_a_number_is_caught(bench, published):

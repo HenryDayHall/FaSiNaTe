@@ -13,9 +13,10 @@ isn't there yet and the published one is what the task would make:
   (the observables stage)        would make: the same observables with the same
                                  settings, measured on the same scenarios'
                                  reconstructions, of a simulator of this
-                                 configuration (a model with the same presets,
-                                 detector and, where the manifest has them,
-                                 weights), and every input they were measured
+                                 configuration (a model with the same presets
+                                 or DDML model configurations, detector and,
+                                 where the manifest has them, weights), and
+                                 every input they were measured
                                  from is the published one: fetched now, or
                                  here already and the same by sha256
 
@@ -44,6 +45,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from .ddml_configs import canonical
 from .layout import Layout
 
 USER_AGENT = "FaSiNaTe-ddml-bench (+https://github.com/HenryDayHall/FaSiNaTe)"
@@ -242,11 +244,20 @@ def measurements_match(task, published, plan):
     if isinstance(compact, str) and compact != simulator["compact_file"]:
         return False, "they were simulated in %s, not %s" % (compact, simulator["compact_file"])
     if model is not None:
+        # What DDML ran, by the logs: its presets, or its model configurations
+        configs = canonical(model.get("model_configs") or [])
+        source = model.get("config") or "models/%s.yaml" % model["name"]
         presets = stack.get("presets")
         if isinstance(presets, str) and presets.split() != list(model["presets"]):
             return False, "the model ran with the presets %s, not %s" % (
-                presets, " ".join(model["presets"]))
+                presets, " ".join(model["presets"]) or "the DDML model configurations of "
+                + source)
+        ran = stack.get("model_configs")
+        if isinstance(ran, str) and ran != configs:
+            return False, "the model ran with other DDML model configurations than %s's" % source
         described = published.get("model") or {}
+        if "model_configs" in described and canonical(described["model_configs"]) != configs:
+            return False, "the model's DDML model configurations differ from %s's" % source
         if described.get("weights_md5") and model.get("weights_md5") \
                 and described["weights_md5"] != model["weights_md5"]:
             return False, "the model's weights differ (md5 %s, not %s)" % (

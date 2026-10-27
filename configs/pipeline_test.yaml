@@ -10,9 +10,9 @@
 # each simulated by Geant4 and by each model (di_photon's twice each), each
 # simulation reconstructed, then the measurements of each simulator and the
 # plots: at least one job of each kind, and each kind of dependency between
-# them (22 jobs with CaloClouds3 alone). Its data goes to a folder of its own,
-# so it never mixes with the full samples, and its jobs ask for short time
-# limits, so that they start sooner.
+# them (85 jobs with the eight models of models/, 22 with CaloClouds3 alone).
+# Its data goes to a folder of its own, so it never mixes with the full
+# samples, and its jobs ask for short time limits, so that they start sooner.
 # The software (DDML, ILDConfig, the container) is the one the full run uses.
 #
 # Like configs/local.yaml, this only changes the settings it names, and it is

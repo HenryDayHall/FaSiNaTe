@@ -1,0 +1,72 @@
+# CaloClouds3 (CC3), the checkpoint published with the CaloClouds3 paper
+# (DDML's models/CC3_paper_checkpoint.pt), through DDML's LibTorch backend:
+# DDML's preset CC3_BARREL as it is. models/caloclouds3.yaml runs other weights
+# of the same model, CC3_SF_2A.pt, with DDML's embedded Python.
+#
+# simulate_models.sh simulates the benchmark scenarios with every model in this
+# folder; the file name (caloclouds3_paper) names the model and its output
+# folders.
+#
+# The training details are from the CaloClouds3 paper, arXiv:2511.01460, and
+# the benchmark paper, "A First Full Physics Benchmark for Highly Granular
+# Calorimeter Surrogates".
+
+name: CaloClouds3 (paper)
+
+# Each shower is a set of points (x, y, layer, energy), as many as the shower
+# needs, rather than energies on a fixed grid of cells. DDML deposits each
+# point in the cell of the real detector it falls in.
+representation: point_cloud
+
+# Factors fixed when the model was trained. The model has no input for them, so
+# it is only valid where they hold.
+fixed_at_training:
+  detector:
+    name: ILD_l5_o1_v02
+    calorimeter: EcalBarrel
+    # The training showers were simulated in a regularised copy of this ECal
+    # barrel. simulate_models.sh simulates in this detector: the path is
+    # relative to k4geo ($k4geo_DIR) unless absolute.
+    compact_file: ILD/compact/ILD_l5_o1_v02/ILD_l5_o1_v02.xml
+  particle:
+    name: gamma  # Geant4's name, which DDML uses
+    pdg: 22
+
+# Factors given to the model as context for each shower.
+context:
+  energy:
+    unit: GeV
+    training_range: [1, 127]
+  direction:
+    # DDML passes the polar and azimuthal angles of the incident direction at
+    # the calorimeter face, in the local frame (theta' measured from z', the
+    # normal to the layers).
+    unit: deg
+    training_range:
+      # In the global ILD frame, photons from the interaction point into the
+      # top stave of the barrel.
+      frame: global
+      theta: [30, 150]
+      phi: [80, 110]
+
+# How simulate_models.sh runs the model with the DDML build from
+# scripts/build_ddml.sh (DDML's python-inference branch).
+ddml:
+  # Presets from DDML's python/ddml/configs.py, each passed to ddsim with
+  # --ml-model. CC3_BARREL is the CaloClouds3 plugin compiled against LibTorch
+  # (CaloCloudsTwoAngleModelPolyhedraBarrelTorchModel), loading
+  # ../models/CC3_paper_checkpoint.pt from DDML's scripts/ folder, for photons
+  # above 10 GeV entering the ECal barrel, except near the ends of the barrel
+  # and the joins between its staves. Only the barrel, as for the other models:
+  # CC3_ENDCAP would add the endcaps, which the scenarios don't reach.
+  presets: [CC3_BARREL]
+  # The weights the preset loads, relative to the DDML clone (building DDML
+  # downloads them), and their md5 sum, which simulate_models.sh checks.
+  weights: models/CC3_paper_checkpoint.pt
+  weights_md5: "efa35d840d739be8047109813d80c474"
+
+# How plot_observables.sh draws this model: a colour and a line style
+# (matplotlib's) of its own.
+plot:
+  color: "#1f6fb4"
+  linestyle: "-."

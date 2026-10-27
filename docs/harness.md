@@ -12,6 +12,7 @@ ddml_bench/
 ├── layout.py           every path: the one module that names files
 ├── scenarios.py        the scenarios' inputs: their commands and file names
 ├── models.py           the simulators: Geant4 and models/*.yaml
+├── ddml_configs.py     DDML model configurations written out in models/*.yaml
 ├── stages/             the stage registry, in pipeline order
 │   ├── base.py         what a stage declares
 │   ├── generate.py     stage 1
@@ -88,7 +89,8 @@ lists them in order. A stage:
   settings and the reconstructed files, which needn't be there any more), the
   plots when `metrics.csv` is newer than every `.npz`;
 - says what in the environment would stop its tasks (`check_environment`):
-  the DDML build, the presets' plugins, the weights' md5 sums, the compact
+  the DDML build, the plugins of the presets and model configurations, the
+  weights' md5 sums (and that the plugins load those weights), the compact
   files, ILDConfig, the Python modules each needs;
 - runs one task (`run`), raising `StageError` if it fails.
 
@@ -128,6 +130,33 @@ there alone:
 The key is `<stage>:<output>`, as only one task makes each file; slurm
 submissions record it in `jobs.tsv`, so a later submission waits for a job
 still queued for the same task rather than submitting it again.
+
+## How a model runs
+
+A model's description says how DDML runs it (`ddml_bench/models.py`): with
+DDML's presets, passed to ddsim with `--ml-model` and DDML's steering file,
+as DDML's README runs them; or with DDML model configurations written out
+(`ddml.model_configs`), each a preset to start from and the fields of DDML's
+`ModelConfig` to set, for a model DDML has no preset for. Those run with
+`scripts/ddsim_steer_models.py`, each configuration an option
+`--ml-config '<JSON>'` (`ddml_configs.option()`, so a simulation's log has
+everything it ran with): the steering file runs DDML's steering file with
+DDML's own Python package, swapping only DDML's `get_fastsim_configuration()`
+for one that makes the configurations of those options with
+`ddml_configs.build()`. The models stage's environment check makes them with
+the same function, so what it checks is what ddsim runs. Geant4 runs
+`scripts/ddsim_steer_geant4.py` in the same way, with no fast simulation, so
+every simulator shares every other setting of DDML's steering file. The
+manifest records the presets or configurations of each model's simulations,
+from their logs, and fetching published measurements of a model needs them to
+be the model's.
+
+A model can be the closure test of another (`closure`): the same model
+through another backend. The plots (`ddml_bench/plot.py`, `closures()`) then
+draw it against that one alone, as the reference, and say for each scenario
+whether everything the two measured is the same, number for number, as it
+should be where both simulated the same events with the same seeds and the
+description says so.
 
 ## The task graph
 

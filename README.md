@@ -3,7 +3,7 @@
 FaSiNaTe benchmarks generative fast-simulation models of calorimeter showers in a full detector chain.
 Each model runs inside ILD's `ddsim` simulation through [DDML](https://github.com/key4hep/DDML), its events go through ILD's standard reconstruction, and observables measured on the reconstructed events are compared with full Geant4 simulation of the same inputs.
 
-The benchmark follows the paper *"A First Full Physics Benchmark for Highly Granular Calorimeter Surrogates"*, starting with its single-photon shower profiles, energy linearity and resolution, and intrinsic shower angles, and its di-photon separation. The first model included is CaloClouds3.
+The benchmark follows the paper *"A First Full Physics Benchmark for Highly Granular Calorimeter Surrogates"*, starting with its single-photon shower profiles, energy linearity and resolution, and intrinsic shower angles, and its di-photon separation. The models are those DDML runs: CaloClouds3, both through DDML's embedded Python and compiled against LibTorch, two BIB-AEs, a GAN (with LibTorch and with ONNX Runtime) and the Par04 example's VAE ([The models](#the-models)). Where a model runs through two of DDML's backends, the two are compared with each other as well, a [closure test](#closure-tests).
 
 <p align="center">
   <img src="docs/images/longitudinal_profile_layers__single_photon.png" alt="Longitudinal shower profile, CaloClouds3 against Geant4" width="48%">
@@ -28,6 +28,8 @@ The benchmark follows the paper *"A First Full Physics Benchmark for Highly Gran
   - [6. Plot](#6-plot)
 - [Where the data goes](#where-the-data-goes)
 - [Reusing published measurements](#reusing-published-measurements)
+- [The models](#the-models)
+  - [Closure tests](#closure-tests)
 - [Extending the benchmark](#extending-the-benchmark)
 - [Tests](#tests)
 - [Repository layout](#repository-layout)
@@ -113,7 +115,7 @@ Every script takes `--help`, and stages 1–5 also take `--dry-run`, showing wha
 | observables | simulator whose measurements aren't up to date | the tasks reconstructing its simulations |
 | plot | (one task) | the measurement tasks |
 
-Try it first with [`configs/pipeline_test.yaml`](configs/pipeline_test.yaml), a very light test of every stage: two inputs of 10 photons each, in a data folder of its own, with short time limits. With CaloClouds3 alone, that is 13 tasks.
+Try it first with [`configs/pipeline_test.yaml`](configs/pipeline_test.yaml), a very light test of every stage: two inputs of 10 photons each and one of 10 photon pairs, simulated with two seeds, in a data folder of its own, with short time limits. With the eight models in `models/`, that is 85 tasks (22 with CaloClouds3 alone).
 
 ```bash
 ./slurm_pipeline.sh --config configs/pipeline_test.yaml --dry-run  # what is done, and what would be submitted
@@ -233,7 +235,7 @@ Geant4 is slow, so on a slurm cluster use `slurm_pipeline.sh --stages geant4`, w
 
 ### 3. Simulate with the models
 
-`simulate_models.sh` simulates every scenario's inputs with every model in `models/` (or those named), running `ddsim` with each model's DDML presets as in DDML's README.
+`simulate_models.sh` simulates every scenario's inputs with every model in `models/` (or those named), running `ddsim` as in DDML's README, with DDML's steering file. A model with DDML presets (`ddml.presets`) runs with them (`--ml-model`). One that DDML has no preset for has its DDML model configurations written out in its description (`ddml.model_configs`, see [Adding a model](#adding-a-model)), and runs [`scripts/ddsim_steer_models.py`](scripts/ddsim_steer_models.py) instead, with each configuration as an option `--ml-config '<JSON>'`: it runs DDML's steering file with DDML's own Python package, but with the configurations made from those options in place of presets, so every other setting is the same as for a preset, and it prints the configurations it made into the log.
 
 ```bash
 ./simulate_models.sh --dry-run
@@ -241,7 +243,7 @@ Geant4 is slow, so on a slurm cluster use `slurm_pipeline.sh --stages geant4`, w
 ./simulate_models.sh -s single_photon caloclouds3 # one scenario, one model
 ```
 
-Before simulating, it checks that the DDML libraries, the `ddml` Python package and each preset's plugin come from the configured build, and that each model's weights match their recorded md5 sum. Each model is simulated in the detector it was trained for (`fixed_at_training.detector.compact_file`).
+Before simulating, it checks that the DDML libraries, the `ddml` Python package and the plugin of each preset or configuration come from the configured build, that each gives DDML the particles the model is for, that each model's weights match their recorded md5 sum, and that the weights each plugin loads (its `ModelPath`) are those weights. Each model is simulated in the detector it was trained for (`fixed_at_training.detector.compact_file`).
 
 Both simulation scripts accept `-i FILE` to simulate an arbitrary input file (written under the scenario name `custom`), `--file FILE` to simulate just that one of the scenarios' inputs, and `-f/--force` to redo existing outputs (and make those that [nothing needs](#the-whole-pipeline-at-once), e.g. for measurements that are up to date). `ddsim` writes to a hidden file that is renamed only on success, so an output that exists is always complete. An input that isn't made yet is an error, unless nothing needs its simulation.
 
@@ -303,6 +305,8 @@ Each simulator is a set of points with its fit (weighted least squares), Geant4 
 The `intrinsic_angle` gives a figure for each angle and each PCA, `intrinsic_angle_<angle>_<hits>__<scenario>` with `<hits>` `all` or `top4` (e.g. `intrinsic_angle_theta_top4__single_photon`), as in the paper's two angle figures: the distribution of the residuals as the fraction of the showers per degree, drawn like the profiles, with Geant4 filled, the models as lines and the relative deviations below. The metric is the Jensen–Shannon divergence of the fractions in the bins, as in the paper's summary table. The bins go from −`max_residual` to `max_residual` degrees, `n_bins` of them (5° and 100 by default; each is one number for every PCA, or a list with one for each fraction in `hit_fractions`, in the same order, e.g. `max_residual: [10, 3]` for ±10° with all the hits and ±3° with the top 4%). They only affect the figures, so after changing them only `plot_observables.sh` needs to run again, not the measurements. Showers outside the bins still count towards the total, and the share of them is noted on the figure. Showers whose PCA has no axis (fewer than two hits) are left out.
 
 The `photon_separation` gives a figure for each energy of the photons, `photon_separation_<E>GeV__<scenario>` (e.g. `photon_separation_20GeV__di_photon`), as in the paper's di-photon figure: the mean number of reconstructed photons per event in bins of the separation, drawn like the profiles, with a red line at two photons. Each simulator's curve is the mean over the seeds of each seed's mean, and its band the spread over the seeds, their sample standard deviation (with one seed, the statistical uncertainty instead). The metric, by default the Jensen–Shannon divergence, compares the number of reconstructed photons in each bin, seed by seed, Geant4's seeds and the model's paired in order; the legend and `metrics.csv` give the mean over the seeds, with their standard deviation as its uncertainty. The bins go from 0 to `max_separation` mm, `n_bins` of them (90 mm and 18 by default); like the residuals' bins, they only affect the figures. Events without two incident photons heading into the face are left out.
+
+A model that is the [closure test](#closure-tests) of another is also drawn against that one alone, as the reference, in `closure/<model>/`, with the metrics between the two there, and `closure.csv` says for each scenario whether the two measured the same. `--no-closure` leaves these out, and `--reference NAME` compares everything with another simulator than Geant4.
 
 Plotting only needs numpy and matplotlib: it uses your own `python3` if it has them, and the `setup.sh` environment otherwise, so the `.npz` files can be copied elsewhere and plotted there.
 
@@ -370,6 +374,38 @@ python3 scripts/ddml-bench manifest --out /path/to/zenodo --stage --records 'ess
 
 Each record gets a folder with its `manifest.json` and a suggested title, and with `--stage` the files to upload under the flat names the manifest gives them: links to the data folder's files (`--copy` to copy them), so nothing big is copied, and the `other` record's archives. For every file the manifest has its path in the data folder, sha256, size and role. For an input it adds the scenarios and gun options that made it. For a measurement it adds the simulator, scenarios and observable settings, the reconstructions it was measured from with their seeds and events, the inputs behind them with their sha256, the software from the logs of their simulations and reconstructions (Key4hep release, DDML and ILDConfig commits, patches, detector, presets, reconstruction arguments), and whether it is up to date with this configuration. Every manifest also has the configuration's scenarios, observables and stack pins, and the essential record's lists every record (`catalogue`), so that it says where everything else is. Warnings point out inputs missing from the configuration, measurements out of date, logs that aren't there, mixed software versions, and records over the limits. Hashing reads every file once, which takes a while for the simulations; `--records` makes some records at a time. It needs numpy (and PyYAML for the configuration), so it runs on a login node.
 
+## The models
+
+Each model in [`models/`](models/) runs through DDML in the ECal barrel, as DDML's presets do: photons above 10 GeV entering the barrel go to the model, and Geant4 simulates everything else. They are DDML's generative models that its build here can run, each with DDML's own weights:
+
+| Model | What it is | How DDML runs it | Backend | Weights |
+|---|---|---|---|---|
+| `caloclouds3` | CaloClouds3, a point-cloud model | preset `CC3_BARREL_PY_INTERFACE` | embedded Python | `CC3_SF_2A.pt` |
+| `caloclouds3_libtorch` | the same, compiled: `caloclouds3`'s closure test | preset `CC3_BARREL`, with `caloclouds3`'s weights | LibTorch | `CC3_SF_2A.pt` |
+| `caloclouds3_paper` | CaloClouds3, the checkpoint of the CaloClouds3 paper | preset `CC3_BARREL` | LibTorch | `CC3_paper_checkpoint.pt` |
+| `bibae_two_angle` | a BIB-AE on a regular grid, conditioned on the energy and both angles | preset `BIBAE_BARREL` | LibTorch | `BIBAE_Two_Angle_Full_PP_cut.pt` |
+| `bibae_one_angle` | a BIB-AE on a regular grid, conditioned on the energy and the polar angle | its configuration | LibTorch | `BIBAE_Full_PP_cut.pt` |
+| `gan_libtorch` | a GAN on a regular grid, at normal incidence, conditioned on the energy | its configuration | LibTorch | `francisca_gan_jit.pt` |
+| `gan_onnx` | the same network: `gan_libtorch`'s closure test | its configuration | ONNX Runtime | `francisca_gan.onnx` |
+| `par04_vae_onnx` | the VAE of Geant4's example Par04 | its configuration | ONNX Runtime | `Generator.onnx` |
+
+Each file says what the model was trained on and where that comes from. A few things to bear in mind when comparing them:
+
+- Only the barrel: the endcap presets (`CC3_ENDCAP`, `BIBAE_ENDCAP`, ...) would add the endcaps, which no scenario reaches yet.
+- The plugins of CaloClouds3 and the two-angle BIB-AE have a trigger of their own that leaves the ends of the barrel and the joins between its staves to Geant4; those of the GAN, the one-angle BIB-AE and the Par04 VAE don't.
+- The Par04 VAE tests DDML's ONNX path through the whole chain; it isn't a surrogate for ILD. It was trained on electrons in Par04's own cylindrical calorimeter, and DDML conditions it on the angle from the normal to the layers, where the example trained it on the angle from the cylinder's axis.
+- Left out: DDML's L2LFlows plugin (ConvL2LFlows), as building DDML doesn't download its weights (`L2LFlowsx9.pt` is commented out in DDML's `models/CMakeLists.txt`); with the weights in DDML's `models/`, a description like `gan_libtorch.yaml`'s with the plugin `L2LFlowsModelPolyhedraBarrelTorchModel` and `correct_angles: true` would run it. The `LoadHDF5` plugins replay showers from a file rather than generating them, and PionClouds is of hadron showers.
+
+### Closure tests
+
+A model can be the closure test of another: the same model, through another of DDML's inference backends. `caloclouds3_libtorch` is `caloclouds3`'s, its weights through DDML's plugin compiled against LibTorch instead of DDML's embedded Python, and `gan_onnx` is `gan_libtorch`'s, the same network exported to ONNX (its weights are those of `francisca_gan_jit.pt`, number for number). Its description names the other (`closure`), and `plot_observables.sh` (so `pipeline.sh` too) then draws the two against each other alone, the other as the reference, in `plots/closure/<model>/`, with the metrics between them, and writes `plots/closure.csv`, a row for each scenario:
+
+- `seeds`: `same` where each of the two simulated each input with the same ddsim seed (the scenario's `simulation_seeds`), `ddsim's own` where ddsim chose them, `different` otherwise;
+- `identical`: whether everything the two measured on the scenario is the same, number for number;
+- `expected`: `identical` where the description says the events should be (`identical: true`) and the seeds are the same, and `statistical` otherwise; `passed`, for those expected identical, whether they are. A failure is printed too.
+
+Both CaloClouds3 backends run the same TorchScript model on the same LibTorch library, but the model draws its random numbers from LibTorch's own generator, which PyTorch seeds anew in every process, not from ddsim's seed. So two runs give other showers even for the same events and seeds, and the closure test of the embedded Python is statistical: the figures and metrics of `closure/caloclouds3_libtorch/` show whether the distributions agree, in every scenario. The two GANs draw their latent vectors from Geant4's random numbers, so with the same seeds (`di_photon`) they are given the same inputs, but ONNX Runtime and LibTorch round their arithmetic differently, so they too need only agree statistically. `identical: true` is for a pair that should give the same events, number for number, with the same seeds; `passed` then says whether they do. Both of a pair should be simulated with the same software (`key4hep.release`, `ddml.commit`); a run that fetches the published measurements of `caloclouds3` says where its software differs from theirs.
+
 ## Extending the benchmark
 
 ### Adding a model
@@ -379,10 +415,15 @@ Add a YAML file to `models/`; its file name becomes the model's name in commands
 - `representation`: how the model describes a shower, e.g. `point_cloud`;
 - `fixed_at_training`: what the model has no input for, so where it is valid: the detector (and the compact file to simulate it in) and the particle;
 - `context`: what the model is conditioned on for each shower, e.g. energy and direction, with units and training ranges;
-- `ddml`: how to run it — the DDML presets (from `python/ddml/configs.py` in DDML) passed to `ddsim --ml-model`, and the weights file with its md5 sum;
+- `ddml`: how DDML runs it, one of
+  - `presets`: DDML's presets (from `python/ddml/configs.py` in DDML), passed to `ddsim --ml-model`;
+  - `model_configs`: for a model DDML has no preset for, or a preset with something changed, DDML's model configurations written out ([`ddml_bench/ddml_configs.py`](ddml_bench/ddml_configs.py)). Each is a preset's name, or the preset it starts from (`preset`), if any, and the fields of DDML's `ModelConfig` it sets: `plugin` (`<factory>/<instance name>`, the factories declared in DDML's `src/MLModelActions.cc`), `geometry` (`ILD_BARREL` or `ILD_ENDCAP` from DDML's `configs.py`, or `{ecal: {detector, region, symmetry}}`), `plugin_properties` (e.g. `ModelPath`, relative to DDML's `scripts/` folder as in DDML's presets; set over a preset's one by one), `applicable_particles`, `triggers` (`{particle: GeV}`), `correct_angles` and `is_hadron`. Without a preset, `plugin`, `geometry`, `applicable_particles` and `triggers` are needed. [`models/caloclouds3_libtorch.yaml`](models/caloclouds3_libtorch.yaml) changes a preset's weights, and [`models/gan_libtorch.yaml`](models/gan_libtorch.yaml) writes a configuration out whole;
+
+  then the weights file, relative to the DDML clone, with its md5 sum (the check of the environment makes sure that the plugins load that file), and `particles`, the particles DDML gives the model, if they aren't just the one it was trained on;
+- `closure` (optional): the model this one is the [closure test](#closure-tests) of, `of`, and whether their events should be the same where both are simulated with the same seeds, `identical`;
 - `plot`: its colour and line style in the figures (each model needs a distinct line style as well as a colour, so curves can be told apart without colour).
 
-Put the weights in `paths.model_dir` (by default DDML's `models/` folder, mounted as `/model_dir` for the steering file), or point `paths.model_dir` elsewhere. The model then takes part in stages 3–6 automatically.
+The weights are found in the DDML clone, where building DDML downloads DDML's own into its `models/` folder, so put new weights there too. The model then takes part in stages 3–6 automatically.
 
 ### Adding a scenario
 
@@ -403,7 +444,7 @@ python3 -m pip install pyyaml numpy awkward uproot matplotlib h5py particle pyte
 python3 -m pytest tests
 ```
 
-The tests run the scripts end to end, `pipeline.sh` and `slurm_pipeline.sh` included, through the same launcher and `setup.sh` as on the cluster, with only the programs at the ends faked ([`tests/fakes/`](tests/fakes/)): `ddsim`, `k4run` (which writes real EDM4hep-style ROOT files, so the observables and plots run for real), pyLCIO, DDML's Python package, and slurm's `sbatch` and `squeue`. They need no Key4hep, CVMFS or slurm, and run in CI on every push ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)), with shellcheck on the scripts.
+The tests run the scripts end to end, `pipeline.sh` and `slurm_pipeline.sh` included, through the same launcher and `setup.sh` as on the cluster, with only the programs at the ends faked ([`tests/fakes/`](tests/fakes/)): `ddsim` (which runs the steering files as `ddsim` does, with stand-ins for DD4hep's `DDSim` and `g4units`), `k4run` (which writes real EDM4hep-style ROOT files, so the observables and plots run for real), pyLCIO, DDML's Python package (with DDML's presets), and slurm's `sbatch` and `squeue`. They need no Key4hep, CVMFS or slurm, and run in CI on every push ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)), with shellcheck on the scripts.
 
 ## Repository layout
 
@@ -424,7 +465,7 @@ The tests run the scripts end to end, `pipeline.sh` and `slurm_pipeline.sh` incl
 ├── configs/pipeline_test.yaml          # a very light test run of the whole pipeline
 ├── models/                             # one YAML file per model
 ├── ddml_bench/                         # the harness: layout, stages, task graph, executors
-├── scripts/                            # building, the environment launcher, the ddml-bench command
+├── scripts/                            # building, the environment launcher, the steering files, ddml-bench
 ├── tests/                              # the tests, with the fakes they run the pipeline on
 ├── docs/                               # harness.md, and figures for this README
 └── di_photon_old/                      # the earlier di-photon separation analysis (legacy)
