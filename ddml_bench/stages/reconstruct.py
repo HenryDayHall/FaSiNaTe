@@ -13,7 +13,8 @@ ILDConfig isn't part of Key4hep releases; setup.sh clones it to
 detector_configs.ildconfig.source_dir with scripts/fetch_detector_configs.sh.
 Arguments for ILDReconstruction.py go in reconstruction.extra_args;
 --noBeamCalReco is always added, and --usingParticleGun for the scenarios of
-a particle gun (the particle_gun and di_photon_gun inputs).
+a particle gun (the particle_gun and di_photon_gun inputs, not the physics
+samples made elsewhere).
 """
 
 import glob

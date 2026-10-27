@@ -13,7 +13,7 @@ def run(graph, dry_run=False, out=None):
     1 if a task failed, or if a stage whose blocked tasks are errors has some."""
     out = out or Report()
     tasks = graph.list
-    report_stages(out, tasks)
+    report_stages(out, tasks, left_out=graph.left_out_reasons())
     todo = graph.tasks(TODO)
     blocked = [t for t in graph.tasks(BLOCKED) if BY_NAME[t["stage"]].blocked_is_error]
     problems = graph.environment_problems() if todo else []

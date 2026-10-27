@@ -137,16 +137,20 @@ reconstruction:
 # simulates and that are then reconstructed; each observable is measured on the
 # reconstructed events and compared to Geant4. The first ones follow the paper
 # "A First Full Physics Benchmark for Highly Granular Calorimeter Surrogates".
+# A scenario with enabled: false is left out of every run: nothing of it is
+# made, fetched or measured.
 scenarios:
   # Single photons from the IP into one stave of the ECAL barrel, at fixed
   # energies (the paper's single particle dataset).
   single_photon:
+    enabled: true
     # How ./generate_input.sh makes the input events. A particle_gun input runs
     # ILD_Particle_Gun.py for each energy, which writes an .slcio file (and an
-    # .h5 file of the true momenta) to input_single_particle_gun in
-    # paths.data_dir; the other keys are the gun's options.
+    # .h5 file of the true momenta) to the folder `folder` of paths.data_dir;
+    # the other keys are the gun's options.
     input:
       type: particle_gun
+      folder: input_single_particle_gun
       pid: 22
       # GeV, a file each.
       energies: [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
@@ -165,17 +169,19 @@ scenarios:
     # seeds here (e.g. [1, 2, 3]) to simulate each input once with each
     # instead, as di_photon does.
     simulation_seeds: null
-    data_subdir: input_single_particle_gun
-    
+
   # Pairs of photons of the same energy from the IP into the top stave of the
   # ECAL barrel, with their separation on its front face uniform from 0 to
   # 90 mm (the paper's di-photon dataset). The paper's 5 GeV set waits for a
   # model trigger below 10 GeV: CaloClouds3's preset leaves photons below
   # 10 GeV to Geant4.
   di_photon:
+    enabled: true
     input:
       # ILD_Di_Photon_Gun.py, run once per energy, the other keys its options
       type: di_photon_gun
+      # Beside single_photon's (and so in the published record)
+      folder: input_single_particle_gun
       # GeV, each photon of a pair; a file each.
       energies: [20, 100]
       # Per energy.
@@ -195,23 +201,37 @@ scenarios:
     # Each input is simulated once with each of these ddsim seeds, so that the
     # figures can show the spread over them, and the metric its uncertainty.
     simulation_seeds: [1, 2, 3]
-    data_subdir: input_single_particle_gun
-  # A e+e- > tau+tau- dataset generated for the ILC by H. Ono and A. Miyamoto,
-  # ("Status of ILD new 250 GeV common MC sample production",  arXiv:2105.06040)
-  # Full physics generator sample, complete with bremsstrahlung and ISR and.
-  # All parts of the detector may be reached. A realistic beam energy spectrum 
-  # for the ILC at 250 GeV is used, plus crossing angle.
-  tautau_samples:
+
+  # e+e- -> tau+tau- at 250 GeV (the paper's tau physics dataset): events of
+  # ILD's MC-2020 production (WHIZARD 2.8.5, with TAUOLA for the tau decays;
+  # H. Ono and A. Miyamoto, "Status of ILD new 250 GeV common MC sample
+  # production", arXiv:2105.06040), with the ILC's beam energy spectrum and
+  # crossing angle, bremsstrahlung and ISR, and 100% e-_L e+_R. Only events with
+  # a pi0 from a tau decay whose two photons are above 5 GeV, in the models'
+  # trigger region, were kept: 6791 of them in each file. All of the detector
+  # is reached, so Geant4 simulates whatever the models don't, and the events
+  # are a generator's, so the reconstruction isn't told they are a particle
+  # gun's.
+  tau_pairs:
+    enabled: true
     input:
-      # we cannot generate this in the repository, either it's found on disk,
-      # possible to download, or it does not run.
-      type: downloaded
-      energies: [250]
-      n_events: 6791
-    # seeds named at the end of the file name, chosen randomly
+      # Inputs made outside this repository: the files, in the folder of
+      # paths.data_dir, are used as they are. One that isn't there is fetched
+      # from a record in `published` that has it; otherwise the scenario is
+      # left out of the run (and its observables with it), saying which files
+      # to put there, while everything else runs.
+      type: external
+      folder: input_physics_samples
+      files:
+        - gen_tau_pi0_250-SetA_2f_leptonic_eL_pR_42.slcio
+        - gen_tau_pi0_250-SetA_2f_leptonic_eL_pR_1764.slcio
+        - gen_tau_pi0_250-SetA_2f_leptonic_eL_pR_74088.slcio
+    # The ddsim seeds the files are named after, and with one_seed_per_input
+    # each file is simulated once, with the seed in the same place in this
+    # list (rather than once with every seed, as di_photon's inputs are): three
+    # simulations, whose spread the figures show, as in the paper.
     simulation_seeds: [42, 1764, 74088]
-    # this is a full physics event, not a particle gun
-    data_subdir: input_physics_samples
+    one_seed_per_input: true
 
 # Measured on the reconstructed events of each simulator by
 # ./observables_from_reconstruction.sh, which writes the numbers each plot
@@ -317,11 +337,52 @@ observables:
     # numbers of reconstructed photons in the bins, seed by seed, as the mean
     # over the seeds with their spread as its uncertainty.
     metric: jensen_shannon
-  pi_zero_invarient_mass:
-    scenarios: [tautau_samples]
-    particle_collections: [PandoraPFOs]
-    pdg: [111]
-    n_bins: 18
+  # The neutral pions of the tau decays, as ILD's reconstruction finds them:
+  # its pi0 candidates, pairs of PandoraPFA's photons fitted with the pi0's
+  # mass as a constraint (GammaGammaCandidateFinder). Each candidate is matched
+  # to the MC truth through its two photons: a photon is correct when its
+  # reconstructed particle and a photon of an MC pi0 are each other's best
+  # match (the highest weight of the links each way), and a candidate is good
+  # when both its photons are correct and those of the same MC pi0 (the
+  # paper's nGood), confused when only one is, and fake otherwise. The figures
+  # take the good ones, as the paper's figure 11 does: the invariant mass of
+  # the two photons, M = sqrt(2 E1 E2 (1 - cos(angle between them))), and the
+  # reconstructed energy less the MC pi0's, each simulator's mean over the
+  # seeds with their spread as the band. Every candidate is kept, with its
+  # match, angles and the MC pi0 it is matched to, so the paper's other pi0
+  # figures need no measuring again.
+  pi0:
+    scenarios: [tau_pairs]
+    # The pi0 candidates, and the reconstructed particles their two photons
+    # are.
+    candidate_collection: GammaGammaCandidatePi0s
+    particle_collection: PandoraPFOs
+    # The links between the reconstructed and the MC particles: weighted by the
+    # share of each MC particle in a reconstructed particle's energy
+    # (link_collection), and by the share of an MC particle's energy in each
+    # reconstructed particle (reverse_link_collection; null to match by the
+    # first alone).
+    link_collection: RecoMCTruthLink
+    reverse_link_collection: MCTruthRecoLink
+    # The MC pi0s matched to: those from the generator that decay into two
+    # photons, with an ancestor of one of these PDG codes, either sign (the
+    # taus; null for any).
+    ancestor_pdg: [15]
+    # How the figures draw them (only drawing, so changing these needs no
+    # measuring again): the reconstructed energy of a candidate, fitted (its
+    # own, from the mass-constrained fit) or photons (the sum of its two
+    # photons'); and the bins, from the first to the last of each range (GeV)
+    # in so many bins.
+    reconstructed_energy: fitted
+    mass_range: [0.09, 0.18]
+    mass_bins: 18
+    energy_range: [-6, 6]
+    energy_bins: 48
+    # How it is compared to Geant4: the Jensen-Shannon divergence of the
+    # numbers of good pi0s in the bins, seed by seed, as the mean over the
+    # seeds with their spread as its uncertainty (the paper's JS of M_pi0 and
+    # of E_pi0).
+    metric: jensen_shannon
 
 # Published data that the pipeline fetches instead of making it: before a run
 # works out what is to do, each published input that this configuration would

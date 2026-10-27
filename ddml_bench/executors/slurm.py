@@ -190,7 +190,7 @@ def submit(directory, dry_run=False, extra=()):
         if task["status"] == TODO and job in active:
             queued[task["key"]] = job
 
-    report_stages(out, tasks, queued)
+    report_stages(out, tasks, queued, found.get("left_out"))
     # Published files to fetch, on this node before submitting, are only left
     # to do in a dry run (ddml_bench/fetch.py); no job waits for them
     fetching = [task for task in tasks if task["status"] == TODO and task.get("fetch")]
@@ -338,7 +338,8 @@ def write_tasks(plan_path, tasks_path):
     from ..graph import Graph
     graph = Graph(_read_json(plan_path)).find_status()
     _write_json(tasks_path, {"events": graph.plan["events"], "tasks": graph.list,
-                             "problems": graph.environment_problems()})
+                             "problems": graph.environment_problems(),
+                             "left_out": graph.left_out_reasons()})
 
 
 def run_one(directory, key):

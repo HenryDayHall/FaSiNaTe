@@ -1,4 +1,11 @@
-"""Stage 1: make the scenarios' inputs, one task per input file."""
+"""Stage 1: make the scenarios' inputs, one task per input file.
+
+The inputs made elsewhere (input type external) are tasks too, done when they
+are there, so that the inputs of every scenario go through the same graph and
+can be fetched (ddml_bench/fetch.py); but nothing makes them here, so forcing
+the stage leaves them alone, and a scenario without all of them is left out
+of a run (ddml_bench/graph.py).
+"""
 
 import os
 import shutil
@@ -15,11 +22,16 @@ def say(message):
     print("generate: " + message, file=sys.stderr)
 
 
+def made_here(task):
+    """Whether this stage makes the task's input (or it is made elsewhere)."""
+    return task["params"]["command"] is not None
+
+
 class Generate(Stage):
     name = "generate"
 
     def add_tasks(self, graph):
-        for group in graph.plan["scenarios"]:
+        for group in graph.groups:
             for entry in group["inputs"]:
                 path = entry["file"]
                 task = graph.by_key.get("%s:%s" % (self.name, path))
@@ -29,21 +41,36 @@ class Generate(Stage):
                                      params={"type": group["type"], "command": entry["command"]})
                     task["scenarios"] = []
                 elif task["params"]["command"] != entry["command"]:
+                    if None in (task["params"]["command"], entry["command"]):
+                        raise StageError("scenarios %s and %s both have %s, but one makes it and "
+                                         "the other takes it as made elsewhere"
+                                         % (task["scenario"], group["scenario"], path))
                     raise StageError("scenarios %s and %s both make %s, but in different ways; "
                                      "the gun's file names don't include every option (e.g. "
                                      "n_events), so give them different seeds"
                                      % (task["scenario"], group["scenario"], path))
                 task["scenarios"].append(group["scenario"])
-                graph.inputs.append((group["scenario"], path, task))
-        # Inputs given directly are there already, and are simulated as "custom"
+                graph.inputs.append((group["scenario"], path, task, entry["seeds"]))
+        # Inputs given directly are there already, and are simulated as "custom",
+        # once, with ddsim's own seed
         for path in graph.plan["custom_inputs"]:
-            graph.inputs.append((CUSTOM_SCENARIO, path, None))
+            graph.inputs.append((CUSTOM_SCENARIO, path, None, [None]))
+
+    def nothing_to_use(self, task):
+        if not made_here(task) and not os.path.exists(task["output"]):
+            return ("it is made outside this repository, so it can't be made here: put it at %s, "
+                    "or publish it in a record of `published`" % task["output"])
+        return None
+
+    def remakes(self, task):
+        return made_here(task)
 
     def check_environment(self, tasks):
         problems = []
-        for kind in sorted({task["params"]["type"] for task in tasks}):
+        made = [task for task in tasks if made_here(task)]
+        for kind in sorted({task["params"]["type"] for task in made}):
             if kind in INPUT_TYPES:
-                command = next(task["params"]["command"] for task in tasks
+                command = next(task["params"]["command"] for task in made
                                if task["params"]["type"] == kind)
                 # (the script, after python3)
                 problems += missing_modules(INPUT_TYPES[kind].modules,
@@ -55,6 +82,10 @@ class Generate(Stage):
         then move what it made into place, the input itself last, so that an
         input that exists is complete."""
         output = task["output"]
+        if not made_here(task):
+            raise StageError("%s is made outside this repository (scenario %s), so it can't be "
+                             "made here: put it there, or publish it in a record of `published`"
+                             % (output, task["scenario"]))
         kind = task["params"]["type"]
         option = INPUT_TYPES[kind].save_dir_option if kind in INPUT_TYPES else None
         if option is None:

@@ -7,9 +7,11 @@ The files of the data folder (paths.data_dir) go into records:
 
   essential                       what the pipeline needs to add a model without
                                   running anything of the others: the scenarios'
-                                  inputs (input_single_particle_gun/*.slcio) and
-                                  the measurements of the full samples
-                                  (observables/<simulator>.npz), all required
+                                  inputs (<folder>/*.slcio of each scenario's
+                                  input.folder: input_single_particle_gun,
+                                  input_physics_samples) and the measurements of
+                                  the full samples (observables/<simulator>.npz),
+                                  all required
   input_truth__<scenario>         the guns' truth beside each scenario's inputs
                                   (.h5, optional: no stage reads it)
   sim_output__<scenario>__<simulator>
@@ -36,7 +38,8 @@ A manifest says, for each file: its name in the record, its path in the data
 folder, its sha256 and size, and its role: required (fetched by the
 pipeline), optional (fetched on request) or archive (never fetched
 automatically). An input says which scenarios have it and the gun options
-that made it. A measurement says which simulator and scenarios it holds, the
+that made it, or that it was made elsewhere (external: true; e.g. a physics
+sample of ILD's MC production). A measurement says which simulator and scenarios it holds, the
 settings of each observable in it, the reconstructions it was measured from,
 with their ddsim seeds and events, the inputs those were simulated from, with
 their sha256 (derived_from), the software they were made with, from the logs
@@ -77,8 +80,8 @@ import tarfile
 import tempfile
 
 from .config import REPO_DIR
-from .layout import (INPUT_DIR, OBSERVABLES_DIR, REC_DIR, REC_SUFFIX, SEED_TAG, SEP, SIM_DIR,
-                     input_stem)
+from .layout import (INPUT_DIR, INPUT_FOLDERS, OBSERVABLES_DIR, REC_DIR, REC_SUFFIX, SEED_TAG,
+                     SEP, SIM_DIR, input_stem)
 
 FORMAT = "fasinate-manifest/2"
 ESSENTIAL, TRUTH, OTHER = "essential", "input_truth", "other"
@@ -101,6 +104,9 @@ _HEADER = re.compile(r"^# (\w+)\s+(.*?)\s*$")
 _COMPACT = re.compile(r"([^/]+/compact/.+)$")
 # The arguments of ILDReconstruction.py that the reconstruct stage sets itself
 _MANAGED = ("--inputFiles", "--outputFileBase", "--compactFile", "--num-events")
+# and those it sets by the scenario (for a particle gun's events, not a physics
+# sample's), which aren't the software's, so not its stack
+_BY_SCENARIO = ("--usingParticleGun",)
 # What the simulations and reconstructions of every simulator should share
 SHARED = ("key4hep", "ddml", "ildconfig", "patches", "reconstruction_args", "compact")
 STAGE_WORDS = {SIM_DIR: "simulations", REC_DIR: "reconstructions"}
@@ -119,20 +125,21 @@ def say(message):
 # The files of the data folder, and the record each goes into
 
 
-def classify(relative, truth_scenarios=None):
+def classify(relative, truth_scenarios=None, input_folders=INPUT_FOLDERS):
     """(record, role, name in the record, packed) of a file, by its path
     relative to the data folder: packed is the name of the tar archive it goes
-    into, or None for a file of its own. truth_scenarios: {input file name:
-    scenario}, which names the record of its truth."""
+    into, or None for a file of its own. truth_scenarios: {input (its path
+    relative to the data folder): scenario}, which names the record of its
+    truth; input_folders: the folders of the scenarios' inputs."""
     parts = relative.split("/")
     name = parts[-1]
-    if len(parts) == 2 and parts[0] == INPUT_DIR and name.endswith(".slcio"):
+    if len(parts) == 2 and parts[0] in input_folders and name.endswith(".slcio"):
         return ESSENTIAL, REQUIRED, name, None
     if len(parts) == 2 and parts[0] == OBSERVABLES_DIR and name.endswith(".npz") \
             and not _TEST_SAMPLE.search(name[:-len(".npz")]):
         return ESSENTIAL, REQUIRED, name, None
-    if len(parts) == 2 and parts[0] == INPUT_DIR and name.endswith(".h5"):
-        scenario = (truth_scenarios or {}).get(input_stem(name) + ".slcio")
+    if len(parts) == 2 and parts[0] in input_folders and name.endswith(".h5"):
+        scenario = (truth_scenarios or {}).get("%s/%s.slcio" % (parts[0], input_stem(name)))
         return (TRUTH + SEP + scenario if scenario else TRUTH), OPTIONAL, name, None
     if parts[0] in (SIM_DIR, REC_DIR) and len(parts) >= 4:
         return SEP.join(parts[:3]), ARCHIVE, SEP.join(parts[3:]), None
@@ -220,7 +227,9 @@ def read_log(path):
     """{field: value} of a log's header, and what its command says: the
     Key4hep release, the DDML commit (simulations), the ILDConfig commit and
     the patches (reconstructions), the seed, the detector, the models'
-    presets and the reconstruction's arguments. {} without a log."""
+    presets and the reconstruction's arguments (but --usingParticleGun, which
+    the stage gives the particle guns' scenarios and not the physics
+    samples'). {} without a log."""
     try:
         with open(path, errors="replace") as stream:
             lines = [stream.readline() for _ in range(40)]
@@ -270,7 +279,7 @@ def _from_command(args):
             found["steering"] = os.path.basename(value)
         elif key == "--ml-model":
             presets.append(value)
-        elif rec and i > 1 and key not in _MANAGED:
+        elif rec and i > 1 and key not in _MANAGED and key not in _BY_SCENARIO:
             extra.append(arg)
         i += 1
     if presets:
@@ -307,15 +316,17 @@ def recorded_path(path):
     return path[path.rindex(marker) + 1:] if marker in path else path
 
 
-def reconstruction_sources(relative):
+def reconstruction_sources(relative, input_folders=None):
     """(input, simulation log, reconstruction log), relative to the data
-    folder, of a reconstructed file."""
+    folder, of a reconstructed file; input_folders: {scenario: the folder of
+    its inputs}, input_single_particle_gun for those it hasn't."""
     parts = relative.split("/")
     name = parts[-1]
     base = name[:-len(REC_SUFFIX)] if name.endswith(REC_SUFFIX) else os.path.splitext(name)[0]
     stem = _TEST_SAMPLE.sub("", _SEED.sub("", base))
     folder = "/".join(parts[1:-1])  # <scenario>/<simulator>
-    return ("%s/%s.slcio" % (INPUT_DIR, stem), "%s/%s/%s.log" % (SIM_DIR, folder, base),
+    inputs = (input_folders or {}).get(parts[1] if len(parts) > 2 else None, INPUT_DIR)
+    return ("%s/%s.slcio" % (inputs, stem), "%s/%s/%s.log" % (SIM_DIR, folder, base),
             "%s/%s/%s.log" % (REC_DIR, folder, base))
 
 
@@ -395,26 +406,46 @@ def configuration_snapshot(config):
 
 
 def input_commands(config, data_dir):
-    """{input file name: {"scenarios", "options"}} of the configuration's
-    scenarios; the options are the gun's, without where it writes."""
+    """{input (its path relative to the data folder): {"scenarios",
+    "generator", "options"}} of the configuration's scenarios, disabled ones
+    too (with "enabled": false); the options are the gun's, without where it
+    writes. An input made elsewhere has "external": true instead of the
+    generator and options."""
     from .layout import Layout
     from .scenarios import scenario_inputs
+    layout = Layout(data_dir)
     found = {}
-    for group in scenario_inputs(config, Layout(data_dir)):
+    for group in scenario_inputs(config, layout):
         for entry in group["inputs"]:
-            options, skip = [], False
-            for arg in entry["command"][2:]:  # after python3 and the script
-                if skip:
-                    skip = False
-                elif arg == "--save_dir":
-                    skip = True
-                else:
-                    options.append(arg)
-            item = found.setdefault(os.path.basename(entry["file"]), {
-                "scenarios": [], "generator": os.path.basename(entry["command"][1]),
-                "options": options})
+            command = entry["command"]
+            if command is None:
+                described = {"external": True}
+            else:
+                options, skip = [], False
+                for arg in command[2:]:  # after python3 and the script
+                    if skip:
+                        skip = False
+                    elif arg == "--save_dir":
+                        skip = True
+                    else:
+                        options.append(arg)
+                described = {"generator": os.path.basename(command[1]), "options": options}
+            item = found.setdefault(layout.relative(entry["file"]).replace(os.sep, "/"),
+                                    dict(described, scenarios=[], enabled=False))
             item["scenarios"].append(group["scenario"])
+            item["enabled"] = item["enabled"] or group["enabled"]
     return found
+
+
+def input_folders(config, data_dir):
+    """{scenario: the folder of its inputs} of the configuration's scenarios
+    ({} without one)."""
+    from .layout import Layout
+    from .scenarios import scenario_inputs
+    if not config:
+        return {}
+    return dict((group["scenario"], group["folder"])
+                for group in scenario_inputs(config, Layout(data_dir)))
 
 
 def measurement_status(data_dir):
@@ -530,13 +561,14 @@ def pack(archive, members, data_dir):
 
 
 def plan_records(data_dir, leave_out=(), truth_scenarios=None, max_bytes=MAX_GB * 10 ** 9,
-                 warnings=None):
+                 warnings=None, folders=INPUT_FOLDERS):
     """{record: [file entries]} of the data folder, without hashing: each
-    entry its name, path (or members, for a tar archive), size and role."""
+    entry its name, path (or members, for a tar archive), size and role;
+    folders are the folders of the inputs."""
     warnings = [] if warnings is None else warnings
     by_record = {}
     for relative in scan(data_dir, leave_out):
-        record, role, name, packed = classify(relative, truth_scenarios)
+        record, role, name, packed = classify(relative, truth_scenarios, folders)
         size = os.path.getsize(os.path.join(data_dir, relative))
         files = by_record.setdefault(record, [])
         if packed:
@@ -575,8 +607,10 @@ def build(data_dir, out, only=(), stage=False, copy=False, config=None, check=Tr
         raise ManifestError("no data folder %s" % data_dir)
     warnings = []
     commands = input_commands(config, data_dir) if config else {}
-    truth = dict((name, item["scenarios"][0]) for name, item in commands.items())
-    records = plan_records(data_dir, [out], truth, max_gb * 10 ** 9, warnings)
+    truth = dict((path, item["scenarios"][0]) for path, item in commands.items())
+    by_scenario = input_folders(config, data_dir)
+    folders = tuple(sorted(set(INPUT_FOLDERS) | set(by_scenario.values())))
+    records = plan_records(data_dir, [out], truth, max_gb * 10 ** 9, warnings, folders)
     chosen = [r for r in records if not only or any(fnmatch.fnmatch(r, p) for p in only)]
     if only and not chosen:
         raise ManifestError("no record matches %s; the records are: %s"
@@ -593,17 +627,22 @@ def build(data_dir, out, only=(), stage=False, copy=False, config=None, check=Tr
     # derived_from
     inputs = {}
     for entry in records[ESSENTIAL] if ESSENTIAL in records else []:
-        if entry["path"].startswith(INPUT_DIR + "/"):
+        if entry["path"].split("/")[0] in folders and entry["path"].endswith(".slcio"):
             inputs[entry["path"]] = entry
             entry.update(sha256=sha256(os.path.join(data_dir, entry["path"])), kind="input")
-            if entry["name"] in commands:
-                entry.update(commands[entry["name"]])
+            if entry["path"] in commands:
+                entry.update((key, value) for key, value in commands[entry["path"]].items()
+                             if key != "enabled")
             elif config:
                 warnings.append("%s isn't an input of any scenario in the configuration"
                                 % entry["path"])
-    for name in commands:
-        if "%s/%s" % (INPUT_DIR, name) not in inputs:
-            warnings.append("the configuration's input %s isn't in the data folder" % name)
+    # (A disabled scenario's inputs are described if they are there, and not
+    # missed if they aren't)
+    for path, item in commands.items():
+        if path not in inputs and item["enabled"]:
+            warnings.append("the configuration's input %s isn't in the data folder%s" % (
+                path, ", so runs here leave out %s, and its measurements with it"
+                % " and ".join(item["scenarios"]) if item.get("external") else ""))
     status = measurement_status(data_dir) if config and check and ESSENTIAL in chosen else {}
     models = described_models() if ESSENTIAL in chosen else {}
 
@@ -614,7 +653,7 @@ def build(data_dir, out, only=(), stage=False, copy=False, config=None, check=Tr
         for i, entry in enumerate(files):
             if record == ESSENTIAL and entry["path"].startswith(OBSERVABLES_DIR + "/"):
                 files[i] = _measurement(data_dir, entry["path"], entry["role"], entry["name"],
-                                        inputs, status, warnings, logs)
+                                        inputs, status, warnings, logs, by_scenario)
                 if files[i]["simulator"] in models:
                     files[i]["model"] = models[files[i]["simulator"]]
             elif "members" in entry:
@@ -660,7 +699,8 @@ def build(data_dir, out, only=(), stage=False, copy=False, config=None, check=Tr
     return manifests
 
 
-def _measurement(data_dir, relative, role, name, inputs, status, warnings, logs):
+def _measurement(data_dir, relative, role, name, inputs, status, warnings, logs,
+                 input_folders=None):
     path = os.path.join(data_dir, relative)
     held = read_measurements(path)
     entry = {"name": name, "path": relative, "sha256": sha256(path),
@@ -672,7 +712,8 @@ def _measurement(data_dir, relative, role, name, inputs, status, warnings, logs)
     for scenario in sorted(held["scenarios"]):
         entry["reconstructions"][scenario] = held["scenarios"][scenario]
         for reconstruction in held["scenarios"][scenario]:
-            source, sim_log, rec_log = reconstruction_sources(reconstruction["path"])
+            source, sim_log, rec_log = reconstruction_sources(reconstruction["path"],
+                                                              input_folders)
             if source in inputs:
                 if source not in [d["path"] for d in entry["derived_from"]]:
                     entry["derived_from"].append({"path": source,
@@ -734,10 +775,11 @@ def _archive(entry, data_dir, folder, stage):
         member["sha256"], member["size"] = hashes[member["path"]]
 
 
-def dry_run(data_dir, leave_out=(), truth_scenarios=None, max_gb=MAX_GB):
+def dry_run(data_dir, leave_out=(), truth_scenarios=None, max_gb=MAX_GB, folders=INPUT_FOLDERS):
     """What would go where, without hashing or writing anything."""
     warnings = []
-    records = plan_records(data_dir, leave_out, truth_scenarios, max_gb * 10 ** 9, warnings)
+    records = plan_records(data_dir, leave_out, truth_scenarios, max_gb * 10 ** 9, warnings,
+                           folders)
     for record, files in records.items():
         print("%s: %d files, %.3g GB  (%s)" % (record, len(files),
                                               sum(e["size"] for e in files) / 1e9,
@@ -788,9 +830,11 @@ def main(argv=None):
         parser.error("give --data-dir, as the configuration can't be read")
     try:
         if args.dry_run:
-            truth = dict((name, item["scenarios"][0]) for name, item in
+            truth = dict((path, item["scenarios"][0]) for path, item in
                          (input_commands(config, data_dir) if config else {}).items())
-            dry_run(data_dir, [args.out] if args.out else [], truth, args.max_record_gb)
+            folders = tuple(sorted(set(INPUT_FOLDERS)
+                                   | set(input_folders(config, data_dir).values())))
+            dry_run(data_dir, [args.out] if args.out else [], truth, args.max_record_gb, folders)
             return 0
         if not args.out:
             parser.error("give --out, the folder the records go to")

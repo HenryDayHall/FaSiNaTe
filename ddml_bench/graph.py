@@ -39,6 +39,16 @@ Each task gets a status: done; todo (to run); blocked (it needs what isn't done
 and won't be made this time); unneeded (an intermediate one that isn't there,
 but that nothing still to be made needs); or unselected (not chosen by
 --stages, the simulators, --scenario or the files given).
+
+The scenarios disabled in the configuration (enabled: false) aren't in the
+plan. A scenario whose inputs are made elsewhere (input type external) runs
+only with all of them: a graph leaves out a scenario any of whose inputs isn't
+there, or about to be fetched (ddml_bench/fetch.py fetches the inputs, then
+works out which measurements to fetch for the scenarios that run), with its
+tasks and the observables measured on it alone, so that everything else runs
+and the measurements are up to date without it (graph.left_out says which,
+and the executors' reports why). Asking for such a scenario, or one of its
+inputs, by name is an error.
 """
 
 import os
@@ -123,12 +133,15 @@ def make_plan(simulators=(), scenarios=(), stages=(), events=None, force=(), inp
         if stage not in selected:
             raise PlanError("--force %s: that stage isn't one of the --stages to run" % stage)
 
-    # Every scenario, even when only some are run, as the observables of a
-    # simulator are measured on all of theirs
-    groups = scenario_inputs(config, layout)
+    # Every scenario that is enabled, even when only some are run, as the
+    # observables of a simulator are measured on all of theirs
+    every = scenario_inputs(config, layout)
+    groups = [group for group in every if group["enabled"]]
+    disabled = [group["scenario"] for group in every if not group["enabled"]]
     if "generate" in selected:
         for group in groups:
-            if not INPUT_TYPES[group["type"]].save_dir_option:
+            kind = INPUT_TYPES[group["type"]]
+            if kind.made_here and not kind.save_dir_option:
                 raise PlanError("scenario %s: %s inputs can't be made one at a time; add the "
                                 "option that says where they go to INPUT_TYPES in "
                                 "ddml_bench/scenarios.py, or leave out the generate stage "
@@ -158,6 +171,9 @@ def make_plan(simulators=(), scenarios=(), stages=(), events=None, force=(), inp
                     given.append(os.path.realpath(path))
         known.append(CUSTOM_SCENARIO)
     for name in scenarios:
+        if name in disabled:
+            raise PlanError("the scenario %s is disabled (scenarios.%s.enabled is false)"
+                            % (name, name))
         if name not in known:
             raise PlanError("there is no scenario '%s'; the configuration has: %s"
                             % (name, ", ".join(configured) or "none"))
@@ -214,15 +230,16 @@ def make_plan(simulators=(), scenarios=(), stages=(), events=None, force=(), inp
         "particle_gun": [g["scenario"] for g in groups if INPUT_TYPES[g["type"]].particle_gun],
     }
 
-    # The observables
+    # The observables, of the scenarios that are enabled
     try:
         observables, measured = measure.check_observables(config)
     except measure.ObservableError as error:
         raise PlanError(str(error))
     for scenario in measured:
-        if scenario not in configured:
+        if scenario not in configured + disabled:
             raise PlanError("the observables are measured on the scenario %s, which the "
                             "configuration doesn't have" % scenario)
+    observables, measured = measure.restrict(observables, configured)
     if done_suffix != REC_SUFFIX and "observables" in selected:
         raise PlanError("the observables are measured on the EDM4hep reconstructions, but "
                         "reconstruction.extra_args has --lcioOutput only")
@@ -247,6 +264,7 @@ def make_plan(simulators=(), scenarios=(), stages=(), events=None, force=(), inp
         "only_scenarios": only_scenarios,
         "only_inputs": only_inputs,
         "scenarios": groups,
+        "disabled": disabled,
         "custom_inputs": custom_inputs,
         "given_simulations": given,
         "reference": geant4,
@@ -257,8 +275,46 @@ def make_plan(simulators=(), scenarios=(), stages=(), events=None, force=(), inp
         "published": published,
         "slurm": settings,
     }
-    Graph(plan)  # names every file, and checks that no two tasks make the same one
+    # Names every file, and checks that no two tasks make the same one, with
+    # every scenario (those that a run will leave out too, as their inputs may
+    # be fetched first)
+    Graph(plan, keep_unavailable=True)
     return plan
+
+
+def missing_inputs(plan, coming=()):
+    """{scenario: [its inputs that aren't there]} of the scenarios whose inputs
+    are made elsewhere (input type external), for those missing any: inputs
+    that aren't on disk, nor coming (about to be fetched, or to be fetched in
+    a dry run, the plan's to_fetch)."""
+    coming = set(coming) | set(plan.get("to_fetch") or {})
+    found = {}
+    for group in plan["scenarios"]:
+        if INPUT_TYPES[group["type"]].made_here:
+            continue
+        missing = [entry["file"] for entry in group["inputs"]
+                   if not os.path.isfile(entry["file"]) and entry["file"] not in coming]
+        if missing:
+            found[group["scenario"]] = missing
+    return found
+
+
+def missing_reason(missing, total):
+    """Which of a scenario's inputs made elsewhere aren't there, and what to
+    do, in words."""
+    folders = sorted({os.path.dirname(path) for path in missing})
+    one = len(missing) == 1
+    if total == 1:
+        which = "its input"
+    elif len(missing) == total:
+        which = "its %d inputs" % total
+    else:
+        which = "%d of its %d inputs" % (len(missing), total)
+    return ("%s, made outside this repository, %s in %s (%s); put %s there, or publish %s in a "
+            "record of `published`, to run it"
+            % (which, "isn't" if one else "aren't", " or ".join(folders),
+               ", ".join(os.path.basename(path) for path in missing),
+               "it" if one else "them", "it" if one else "them"))
 
 
 def published_settings(config):
@@ -296,20 +352,30 @@ def published_settings(config):
 
 class Graph(object):
     """Every task of the pipeline, in an order where each comes after the tasks
-    it needs."""
+    it needs.
 
-    def __init__(self, plan):
+    The scenarios whose inputs are made elsewhere and aren't all there, nor
+    coming (about to be fetched), are left out (left_out: {scenario: the
+    inputs missing}), with the observables measured on them alone; with
+    keep_unavailable, as when the published inputs are chosen, none is."""
+
+    def __init__(self, plan, coming=(), keep_unavailable=False):
         self.plan = plan
         self.layout = Layout(plan["data_dir"], plan["events"])
         self.list = []
         self.by_key = {}
         self.writers = {}  # output: key
+        self.left_out = {} if keep_unavailable else missing_inputs(plan, coming)
+        # The scenarios that run, and the observables measured on them
+        self.groups = [group for group in plan["scenarios"]
+                       if group["scenario"] not in self.left_out]
+        self.observables, self.measured = measure.restrict(
+            plan["observables"]["observables"], [group["scenario"] for group in self.groups])
+        self._check_left_out()
         # What the stages make, for the stages after them
-        self.inputs = []  # (scenario, input file, its generate task or None)
-        # The ddsim seeds each scenario's inputs are simulated with ([None]: once,
-        # with ddsim's own)
-        self.seeds = dict((group["scenario"], group.get("seeds") or [None])
-                          for group in plan["scenarios"])
+        # (scenario, input file, its generate task or None, the ddsim seeds it
+        # is simulated with: [None] for once, with ddsim's own)
+        self.inputs = []
         self.simulations = []  # simulation tasks
         self.reconstructions = {}  # (simulator, scenario): [reconstruction tasks]
         self.measuring = []  # observables tasks
@@ -319,6 +385,26 @@ class Graph(object):
                 stage.add_tasks(self)
         except (StageError, LayoutError, ConfigError) as error:
             raise PlanError(str(error))
+
+    def _check_left_out(self):
+        """A scenario left out, or one of its inputs, can't be asked for."""
+        for scenario, missing in self.left_out.items():
+            group = next(g for g in self.plan["scenarios"] if g["scenario"] == scenario)
+            files = [entry["file"] for entry in group["inputs"]]
+            if scenario in self.plan["only_scenarios"] or any(
+                    os.path.realpath(path) in self.plan["only_inputs"] for path in files):
+                raise PlanError("the scenario %s can't run: %s"
+                                % (scenario, missing_reason(missing, len(files))))
+
+    def left_out_reasons(self):
+        """Why each scenario left out is, a sentence each."""
+        reasons = []
+        for scenario, missing in self.left_out.items():
+            group = next(g for g in self.plan["scenarios"] if g["scenario"] == scenario)
+            reasons.append("the scenario %s is left out of this run, with the observables "
+                           "measured on it alone: %s"
+                           % (scenario, missing_reason(missing, len(group["inputs"]))))
+        return reasons
 
     def add(self, stage, output, needs, scenario=None, simulator=None, name=None, inputs=(),
             input_file=None, params=None, seed=None):
@@ -378,8 +464,11 @@ class Graph(object):
             # there: what it was made from changes
             changing = [other for other in waiting if other["changes"]]
             missing = [other for other in needs if other["status"] in (BLOCKED, UNSELECTED)]
+            # (Forcing a stage doesn't make what it can't make, e.g. the inputs
+            # made elsewhere)
+            forced_here = task["stage"] in forced and stage.remakes(task)
             done, why = stage.current(task)
-            if task["stage"] in forced:
+            if forced_here:
                 done, why = False, "--force %s" % task["stage"]
             elif changing:
                 done, why = False, "%s is made again" % self.describe(changing[0])
@@ -392,12 +481,12 @@ class Graph(object):
             if done:
                 continue
             exists = os.path.exists(task["output"])
-            if task["output"] in fetching and not exists and task["stage"] not in forced:
+            if task["output"] in fetching and not exists and not forced_here:
                 # Fetched rather than made, which needs nothing (ddml_bench/fetch.py)
                 task.update(status=TODO, fetch=True,
                             why="to fetch from %s" % fetching[task["output"]])
                 continue
-            task["changes"] = exists or bool(changing) or task["stage"] in forced
+            task["changes"] = exists or bool(changing) or forced_here
             if not self.selected(task):
                 task.update(status=UNSELECTED, why=why)
             elif missing and not stage.takes_what_there_is:

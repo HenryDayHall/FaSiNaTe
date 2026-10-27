@@ -4,8 +4,9 @@ models/, one task per input and simulator.
 Both run ddsim as DDML's README does: with DDML's steering file from the DDML
 build that setup.sh sets up, from its scripts/ folder (presets can give model
 paths relative to it), on one thread. A scenario with simulation_seeds has
-each input simulated once with each seed (ddsim's --random.seed), each a task
-of its own; otherwise ddsim chooses a seed. The models run with their presets
+each input simulated once with each seed (ddsim's --random.seed), or with
+one_seed_per_input once with its own seed, each a task of its own; otherwise
+ddsim chooses a seed. The models run with their presets
 (--ml-model). Geant4, the reference, runs scripts/ddsim_steer_geant4.py, which
 runs DDML's steering file without DDML's fast simulation, so that every other
 setting (physics list, crossing angle, filters, ...) is the same.
@@ -51,9 +52,9 @@ class Simulate(Stage):
     def add_tasks(self, graph):
         layout = graph.layout
         for simulator in self.simulators(graph):
-            for scenario, path, source in graph.inputs:
-                # Once with each of the scenario's seeds, or once with ddsim's own
-                for seed in graph.seeds.get(scenario, [None]):
+            for scenario, path, source, seeds in graph.inputs:
+                # Once with each of the input's seeds, or once with ddsim's own
+                for seed in seeds:
                     task = graph.add(
                         self.name, layout.simulation(scenario, simulator["name"], path, seed),
                         [source["key"]] if source else [], scenario=scenario,

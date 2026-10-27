@@ -130,3 +130,12 @@ def test_slurm_simulate_geant4_submits_the_geant4_stage(bench):
     assert [job["options"][0] for job in bench.slurm_jobs()] == ["--job-name=fasinate-geant4"] * 2
     status, output = bench.run("slurm_simulate_geant4.sh", "-m", "4", check=False)
     assert status == 1 and "is gone" in output
+
+
+def test_a_scenario_left_out_is_reported_and_the_rest_submitted(bench):
+    """tau_pairs without its inputs (made elsewhere): the jobs of everything
+    else, and why it is left out, worked out where the jobs run."""
+    bench.with_tau_pairs(write=False)
+    status, output = bench.run("slurm_pipeline.sh", "--dry-run")
+    assert "the scenario tau_pairs is left out of this run" in output, output
+    assert "would submit 22 job(s)" in output, output

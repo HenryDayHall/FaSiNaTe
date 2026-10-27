@@ -10,12 +10,23 @@ import shutil
 import h5py
 import numpy as np
 
+from conftest import TAU_INPUTS, TAU_SEEDS, write_tau_input
+
 INPUTS = ["p22_th43-137_ph79-109_en20_seed0_ip_surface",
           "p22_th43-137_ph79-109_en80_seed1_ip_surface"]
 SIMULATORS = ["caloclouds3", "geant4"]
 # The di_photon scenario's input, simulated with the seeds 1 and 2
 DI_PHOTON_INPUT = "diphoton_en20_sep90_x0_z70_r10_seed0"
 DI_PHOTON_SIMULATIONS = [DI_PHOTON_INPUT + "_simseed1", DI_PHOTON_INPUT + "_simseed2"]
+# The tau_pairs scenario's inputs (Bench.with_tau_pairs()), each simulated with
+# its own seed
+TAU_SIMULATIONS = ["%s_simseed%d" % (name[:-len(".slcio")], seed)
+                   for name, seed in zip(TAU_INPUTS, TAU_SEEDS)]
+
+
+def stage_line(stage, *counts):
+    """A line of the table of what each stage has done and has to do."""
+    return "  %-12s" % stage + "".join(" %6d" % count for count in counts)
 
 
 def read_metrics(path):
@@ -337,3 +348,98 @@ def test_help_needs_no_configuration(bench):
         status, output = bench.run(script, "--help", env={"FASINATE_CONFIG": "/nonexistent"})
         assert output.startswith(("Run", "Make", "Simulate", "Reconstruct", "Measure", "Plot")), \
             output
+
+
+def test_inputs_made_elsewhere_are_simulated_each_with_its_own_seed(bench):
+    """tau_pairs' inputs are made elsewhere: there, they are done, and each is
+    simulated once, with the seed it goes with; their reconstruction isn't a
+    particle gun's; and the pi0s of the paper's figure 11 are measured and
+    plotted."""
+    bench.with_tau_pairs()
+    status, output = bench.run("pipeline.sh", "--dry-run")
+    assert "left out" not in output, output
+    # The two inputs made elsewhere are done, the guns' three are to make
+    assert stage_line("generate", 2, 3) in output, output
+    assert "would run 30 task(s)" in output, output
+    status, output = bench.run("pipeline.sh")
+    assert "made 30 of 30" in output, output
+    for simulator, ending in (("geant4", ".edm4hep.root"), ("caloclouds3", ".root")):
+        assert bench.files("sim_output", "tau_pairs", simulator) == sorted(
+            name + e for name in TAU_SIMULATIONS for e in (ending, ".log"))
+    for seed, name in zip(TAU_SEEDS, TAU_SIMULATIONS):
+        log = open(bench.path("sim_output", "tau_pairs", "caloclouds3", name + ".log")).read()
+        assert "--random.seed=%d" % seed in log and "# seed      %d\n" % seed in log
+        log = open(bench.path("rec_output", "tau_pairs", "geant4", name + ".log")).read()
+        assert "--noBeamCalReco" in log and "--usingParticleGun" not in log
+
+    for simulator in SIMULATORS:
+        with np.load(bench.path("observables", simulator + ".npz")) as data:
+            assert [str(f) for f in data["tau_pairs__files"]] == [
+                "rec_output/tau_pairs/%s/%s_REC.edm4hep.root" % (simulator, name)
+                for name in TAU_SIMULATIONS]
+            assert list(data["tau_pairs__seeds"]) == TAU_SEEDS
+            assert list(data["tau_pairs__n_events"]) == [12, 12]
+            # Every event has a pi0 from the tau-, every third one from the tau+ too
+            assert list(data["pi0__tau_pairs__n_true"]) == [2, 1, 1] * 8
+            counts = data["pi0__tau_pairs__n_candidates"]
+            assert counts.shape == (24,) and counts.sum() == len(data["pi0__tau_pairs__mass"])
+            match = data["pi0__tau_pairs__match"]
+            good = match == 2
+            assert good.sum() > 10 and (match == 1).any(), match
+            # The good ones are of their MC pi0s, whose two photons are of the
+            # pi0's mass, reconstructed a little off
+            mass = data["pi0__tau_pairs__mass"][good]
+            assert ((mass > 0.095) & (mass < 0.175)).all() and abs(np.median(mass) - 0.135) < 0.01
+            true = data["pi0__tau_pairs__true_energy"]
+            assert np.isfinite(true[good]).all() and np.isnan(true[match == 0]).all()
+            ratio = data["pi0__tau_pairs__energy"][good] / true[good]
+            assert ((ratio > 0.8) & (ratio < 1.2)).all(), ratio
+            assert (np.abs(data["pi0__tau_pairs__theta"][good]
+                           - data["pi0__tau_pairs__true_theta"][good]) < 1).all()
+    rows = [row for row in read_metrics(bench.path("observables", "plots", "metrics.csv"))
+            if row["observable"] == "pi0"]
+    assert sorted((row["scenario"], row["profile"], row["simulator"], row["metric"])
+                  for row in rows) == [("tau_pairs", "energy", "caloclouds3", "JS"),
+                                       ("tau_pairs", "mass", "caloclouds3", "JS")]
+    # from the two seeds, paired, so with their spread
+    assert all(float(row["uncertainty"]) > 0 for row in rows), rows
+    for figure in ("pi0_mass__tau_pairs", "pi0_energy__tau_pairs"):
+        assert os.path.isfile(bench.path("observables", "plots", figure + ".png")), figure
+
+    # Nothing makes the inputs made elsewhere, even forced
+    path = bench.path("input_physics_samples", TAU_INPUTS[0])
+    os.utime(path, (0, 0))
+    status, output = bench.run("generate_input.sh", "-f", "tau_pairs")
+    assert "everything selected is done" in output, output
+    assert os.path.getmtime(path) == 0
+    status, output = bench.run("pipeline.sh")
+    assert "everything selected is done" in output, output
+
+
+def test_a_scenario_without_its_inputs_is_left_out_and_the_rest_runs(bench):
+    bench.with_tau_pairs(write=False)
+    status, output = bench.run("pipeline.sh")
+    assert ("the scenario tau_pairs is left out of this run, with the observables measured on "
+            "it alone: its 2 inputs, made outside this repository, aren't in %s (taus_a.slcio, "
+            "taus_b.slcio); put them there, or publish them in a record of `published`, to run "
+            "it" % bench.path("input_physics_samples")) in output, output
+    assert "made 22 of 22" in output, output
+    with np.load(bench.path("observables", "geant4.npz")) as data:
+        assert not [key for key in data.files if key.startswith(("pi0", "tau_pairs"))]
+    # Asking for it is an error
+    status, output = bench.run("simulate_geant4.sh", "-s", "tau_pairs", check=False)
+    assert status == 1 and "the scenario tau_pairs can't run: its 2 inputs" in output, output
+
+    # It runs with all of its inputs, or not at all
+    write_tau_input(bench.path("input_physics_samples", TAU_INPUTS[0]), 12, 0)
+    status, output = bench.run("pipeline.sh", "--dry-run")
+    assert "1 of its 2 inputs, made outside this repository, isn't in %s (taus_b.slcio)" \
+        % bench.path("input_physics_samples") in output, output
+    assert "everything selected is done" in output, output
+    write_tau_input(bench.path("input_physics_samples", TAU_INPUTS[1]), 12, 1)
+    status, output = bench.run("pipeline.sh", "--dry-run")
+    assert "left out" not in output, output
+    # Its simulations and reconstructions, and every simulator measured again
+    # with it, then the plots
+    assert "would run 11 task(s)" in output, output
+    assert "(geant4.npz has no pi0__tau_pairs__n_candidates)" in output, output

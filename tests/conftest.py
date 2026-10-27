@@ -3,9 +3,10 @@ own, and a fake software stack for the environment the pipeline runs in.
 
 The copy (so that the tests never touch the real data/ or configs/local.yaml)
 is configured by test.yaml: a small single_photon scenario of two energies and
-a small di_photon one of one energy simulated with two seeds, a data folder of
-its own, no container, ILDConfig cloned from a local repository and no
-patches. Its "DDML build" is a folder with the files setup.sh and the
+a small di_photon one of one energy simulated with two seeds, the tau_pairs
+scenario disabled (Bench.with_tau_pairs() enables it, with inputs of its own),
+a data folder of its own, no container, ILDConfig cloned from a local
+repository and no patches. Its "DDML build" is a folder with the files setup.sh and the
 stages' environment checks look for, and an env file that puts the fakes in
 tests/fakes on PATH and PYTHONPATH: ddsim, k4run, DDML's Python package and
 pyLCIO, and slurm's sbatch and squeue. So every script runs as it does on the
@@ -65,11 +66,26 @@ scenarios:
       energies: [20]
       n_events: 30
     simulation_seeds: [1, 2]
+  tau_pairs:
+    enabled: false
 observables:
   longitudinal_profile:
     cell_id_encoding: "{encoding}"
 published:
   enabled: false
+"""
+
+# The tau_pairs scenario of the tests (Bench.with_tau_pairs()): two inputs made
+# "elsewhere", each simulated with its own seed
+TAU_INPUTS = ["taus_a.slcio", "taus_b.slcio"]
+TAU_SEEDS = [42, 1764]
+TAU_CONFIG = """\
+scenarios:
+  tau_pairs:
+    enabled: true
+    input:
+      files: [{files}]
+    simulation_seeds: [{seeds}]
 """
 
 ENV_FILE = """\
@@ -96,6 +112,83 @@ def _write(path, text=""):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as stream:
         stream.write(text)
+
+
+PI0_MASS = 0.1349768
+
+
+def tau_events(n_events, seed):
+    """Made-up e+e- -> tau+tau- events, as the fake LCIO files hold them: their
+    MC particles with their parents and daughters (indices in the event). The
+    tau- decays to a nu_tau and a rho-, which decays to a pi- and a pi0 into two
+    photons, of exactly the pi0's mass; the tau+ to an anti-nu_tau and a pi+,
+    or in every third event to a rho+ and so a second pi0."""
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    events = []
+
+    def particle(pdg, status, momentum, mass=0.0, parents=()):
+        return {"PDG": pdg, "generatorStatus": status, "mass": mass, "charge": 0.0,
+                "momentum": [float(p) for p in momentum], "vertex": [0.0, 0.0, 0.0],
+                "parents": list(parents), "daughters": []}
+
+    def decay(particles, parent, pdg_pi0, direction, energy):
+        """A pi0 of the energy along the direction, and its two photons."""
+        pi0 = len(particles)
+        momentum = direction * np.sqrt(energy ** 2 - PI0_MASS ** 2)
+        particles.append(particle(pdg_pi0, 2, momentum, PI0_MASS, [parent]))
+        particles[parent]["daughters"].append(pi0)
+        # The photons share its energy, at the opening angle of its mass
+        share = rng.uniform(0.25, 0.75)
+        energies = np.array([share, 1 - share]) * energy
+        # In its rest frame, back to back at an angle to its flight, boosted
+        gamma = energy / PI0_MASS
+        beta = np.sqrt(1 - 1 / gamma ** 2)
+        cos_star = (energies[0] - energies[1]) / (beta * energy)
+        sin_star = np.sqrt(max(1 - cos_star ** 2, 0.0))
+        across = np.cross(direction, [0.0, 0.0, 1.0])
+        across /= np.linalg.norm(across)
+        half = PI0_MASS / 2
+        for sign in (1, -1):
+            along = gamma * (sign * half * cos_star + beta * half)
+            transverse = sign * half * sin_star
+            photon = along * direction + transverse * across
+            particles.append(particle(22, 1, photon, 0.0, [pi0]))
+            particles[pi0]["daughters"].append(len(particles) - 1)
+
+    for number in range(n_events):
+        cos_theta = rng.uniform(-0.7, 0.7)
+        phi = rng.uniform(-np.pi, np.pi)
+        sin_theta = np.sqrt(1 - cos_theta ** 2)
+        axis = np.array([sin_theta * np.cos(phi), sin_theta * np.sin(phi), cos_theta])
+        particles = [particle(15, 2, 124.9 * axis, 1.777), particle(-15, 2, -124.9 * axis, 1.777)]
+        for tau, sign, with_pi0 in ((0, 1, True), (1, -1, number % 3 == 0)):
+            nu = rng.uniform(0.1, 0.4)
+            particles.append(particle(16 * sign, 1, sign * nu * 125 * axis, 0.0, [tau]))
+            particles[tau]["daughters"].append(len(particles) - 1)
+            if not with_pi0:
+                particles.append(particle(211 * -sign, 1, sign * (1 - nu) * 125 * axis, 0.1396,
+                                          [tau]))
+                particles[tau]["daughters"].append(len(particles) - 1)
+                continue
+            rho = len(particles)
+            particles.append(particle(-213 * sign, 2, sign * (1 - nu) * 125 * axis, 0.775, [tau]))
+            particles[tau]["daughters"].append(rho)
+            pi0_energy = (1 - nu) * 125 * rng.uniform(0.3, 0.7)
+            direction = sign * axis + rng.normal(0, 0.01, 3)
+            decay(particles, rho, 111, direction / np.linalg.norm(direction), pi0_energy)
+            particles.append(particle(211 * -sign, 1, sign * ((1 - nu) * 125 - pi0_energy) * axis,
+                                      0.1396, [rho]))
+            particles[rho]["daughters"].append(len(particles) - 1)
+        events.append({"event": number, "particles": particles})
+    return events
+
+
+def write_tau_input(path, n_events, seed):
+    """A fake LCIO file of tau pair events (tau_events())."""
+    lines = [json.dumps({"run": {"made": "elsewhere, by the tests"}})]
+    lines += [json.dumps(event) for event in tau_events(n_events, seed)]
+    _write(path, "\n".join(lines) + "\n")
 
 
 class Bench(object):
@@ -206,6 +299,20 @@ class Bench(object):
                 os.remove(path)
         else:
             _write(path, pattern + "\n")
+
+    def with_tau_pairs(self, inputs=TAU_INPUTS, events=12, write=True):
+        """Enable the tau_pairs scenario, with these inputs, each simulated with
+        its own seed (TAU_SEEDS), and (with write) write them into its folder,
+        of so many events each; returns the configuration file it adds after
+        the others."""
+        override = os.path.join(self.tmp, "tau_pairs.yaml")
+        seeds = ", ".join(str(seed) for seed in TAU_SEEDS[:len(inputs)])
+        _write(override, TAU_CONFIG.format(files=", ".join(inputs), seeds=seeds))
+        self.env["FASINATE_CONFIG"] = self.env["FASINATE_CONFIG"] + ":" + override
+        if write:
+            for number, name in enumerate(inputs):
+                write_tau_input(self.path("input_physics_samples", name), events, number)
+        return override
 
     def path(self, *parts):
         return os.path.join(self.data, *parts)

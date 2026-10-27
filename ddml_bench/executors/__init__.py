@@ -48,9 +48,13 @@ def describe(task):
     return BY_NAME[task["stage"]].describe(task)
 
 
-def report_stages(out, tasks, queued=None):
+def report_stages(out, tasks, queued=None, left_out=()):
     """A table of what each stage has done and has to do; with queued (the
-    tasks that jobs of earlier submissions are queued for), as slurm sees it."""
+    tasks that jobs of earlier submissions are queued for), as slurm sees it.
+    left_out says why scenarios are left out of the run, if any are
+    (Graph.left_out_reasons())."""
+    for reason in left_out or ():
+        out("ddml-bench: " + reason)
     fetching = any(task.get("fetch") and task["status"] == TODO for task in tasks)
     columns = ["done"] + (["to fetch"] if fetching else [])
     columns += ["to submit", "queued"] if queued is not None else ["to run"]

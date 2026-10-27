@@ -46,6 +46,15 @@ its band the spread over the seeds (separation_points()). The metric compares
 the number of reconstructed photons in each bin, seed by seed, and gives the
 mean over the seeds with their spread as its uncertainty (seed_metric()).
 
+The pi0s of the tau decays (the observable pi0) give two figures, as the
+paper's figure 11 does, of the good pi0 candidates (both photons those of one
+MC pi0): the invariant mass of their two photons, and their reconstructed
+energy less the MC pi0's, each as the fraction of the good pi0s per GeV. Each
+simulator's curve is the mean over the ddsim seeds of each seed's, and its band
+the spread over the seeds; the metric compares the numbers of good pi0s in the
+bins, seed by seed, as the separation's does (seed_histograms(),
+seed_metric()).
+
   python3 -m ddml_bench.plot [--dir DIR] [--out DIR] [--events N]
                              [--format pdf,png] [--reference NAME] [SIMULATOR ...]
 
@@ -53,8 +62,9 @@ mean over the seeds with their spread as its uncertainty (seed_metric()).
 observable, profile and scenario, named <observable>_<profile>__<scenario>.<format>
 (energy_linearity__<scenario> and energy_resolution__<scenario> for the
 energy, intrinsic_angle_<angle>_<hits>__<scenario> for the intrinsic angles,
-e.g. intrinsic_angle_theta_top4__single_photon, and
-photon_separation_<E>GeV__<scenario> for the separation), with the metrics in
+e.g. intrinsic_angle_theta_top4__single_photon,
+photon_separation_<E>GeV__<scenario> for the separation, and pi0_mass__<scenario>
+and pi0_energy__<scenario> for the pi0s), with the metrics in
 metrics.csv (and their uncertainties, for those that have one) and the fitted
 parameters of the energy figures, with their uncertainties, chi^2 and degrees
 of freedom, in fits.csv. It needs numpy and matplotlib, and PyYAML only to
@@ -949,13 +959,14 @@ def separation_points(separation, photons, seeds, edges):
     return points
 
 
-def seed_metric(metric, reference, points):
-    """The metric of the photons in each bin of a simulator's events from those
-    of the reference's, seed by seed (the seeds of each in order, paired):
-    the mean of its values, their standard deviation (the sample's, ddof 1;
-    nan with fewer than two pairs), and the number of pairs."""
+def seed_metric(metric, reference, points, key="photons"):
+    """The metric of what is in each bin (key: the photons of a simulator's
+    events, or the counts of its pi0s) from the reference's, seed by seed (the
+    seeds of each in order, paired): the mean of its values, their standard
+    deviation (the sample's, ddof 1; nan with fewer than two pairs), and the
+    number of pairs."""
     import numpy as np
-    values = [metric(reference["photons"][r], points["photons"][s])
+    values = [metric(reference[key][r], points[key][s])
               for r, s in zip(reference["seeds"], points["seeds"])]
     values = [value for value in values if np.isfinite(value)]
     if not values:
@@ -1084,6 +1095,152 @@ def separation_figures(observable, scenario, simulators, reference, settings, ou
                            formats)
 
 
+# ---------------------------------------------------------------------------
+# The pi0s of the tau decays: the invariant mass of the good pi0 candidates'
+# two photons, and their reconstructed energy less their MC pi0s' (the
+# observable pi0, ddml_bench/measure.py), as in the paper's figure 11
+
+PI0_LABELS = {
+    "mass": r"Reconstructed $\pi^0$ mass $M_{\gamma\gamma}$ [GeV]",
+    "energy": r"$E_{\pi^0}^\mathrm{reco} - E_{\pi^0}^\mathrm{MC}$ [GeV]",
+}
+PI0_YLABEL = r"Fraction of good $\pi^0$s per GeV"
+
+
+def seed_histograms(values, seeds, edges):
+    """The distribution of the values, as their fraction in each bin per unit
+    of the values, from the values of each ddsim seed: a dict of "mean", the
+    mean over the seeds of each seed's fractions; "error", their standard
+    deviation over the seeds (the sample's, ddof 1), or with one seed the
+    statistical uncertainty; "spread", whether the error is the spread over
+    the seeds; "seeds", the seeds in order; "counts", {seed: the values in each
+    bin}, which the metric compares; "values", {seed: how many values it has};
+    and "outside", the fraction of all of them outside the bins. A seed's
+    fractions are of all its values, those outside the bins too; NaN values
+    are left out."""
+    import numpy as np
+    values = np.asarray(values, dtype=float)
+    seeds = np.asarray(seeds)
+    found = np.isfinite(values)
+    order = sorted(set(int(s) for s in seeds[found]))
+    widths = bin_widths(edges)
+    n_bins = len(edges) - 1
+    fractions, counts, sizes = [], {}, {}
+    for seed in order:
+        chosen = values[found & (seeds == seed)]
+        counts[seed] = np.histogram(chosen, edges)[0].astype(float)
+        sizes[seed] = int(chosen.size)
+        fractions.append(counts[seed] / chosen.size / widths)
+    fractions = np.array(fractions).reshape(len(order), n_bins)
+    if len(order) > 1:
+        error = fractions.std(axis=0, ddof=1)
+    elif order:
+        error = np.sqrt(counts[order[0]]) / sizes[order[0]] / widths
+    else:
+        error = np.full(n_bins, np.nan)
+    total = sum(sizes.values())
+    inside = sum(float(c.sum()) for c in counts.values())
+    return {"mean": fractions.mean(axis=0) if order else np.full(n_bins, np.nan),
+            "error": error, "spread": len(order) > 1, "seeds": order, "counts": counts,
+            "values": sizes, "outside": (total - inside) / total if total else 0.0}
+
+
+def good_pi0s(simulator, observable, scenario, energy):
+    """{figure: [good pi0]} of what the figures draw of a simulator's good pi0
+    candidates (measure.GOOD): the invariant mass of their two photons, and
+    their reconstructed energy (energy: the stored item, the fitted energy or
+    the sum of the photons') less the MC pi0's; and the ddsim seed of each."""
+    import numpy as np
+    stored = simulator.stored(observable, scenario)
+    counts = np.asarray(stored["n_candidates"], dtype=np.int64)
+    seeds = np.repeat(event_seeds(simulator, scenario, len(counts)), counts)
+    good = np.asarray(stored["match"]) == measure.GOOD
+    return ({"mass": np.asarray(stored["mass"])[good],
+             "energy": (np.asarray(stored[energy]) - np.asarray(stored["true_energy"]))[good]},
+            seeds[good])
+
+
+def pi0_figures(observable, scenario, simulators, reference, settings, out, suffix, formats):
+    """The figures of the pi0s of a scenario, of the simulators that measured
+    them, as the paper's figure 11: of the good candidates, the invariant mass
+    of their two photons, pi0_mass__<scenario>, and their reconstructed energy
+    (reconstructed_energy: fitted, or photons) less the MC pi0s',
+    pi0_energy__<scenario>; each as the fraction of the good pi0s per GeV,
+    the mean over the ddsim seeds with the spread over them as the band
+    (seed_histograms()), drawn as the profiles are, with each model's relative
+    deviation from Geant4 below. The legend gives each model's metric (by
+    default jensen_shannon) of the numbers of good pi0s in the bins from
+    Geant4's, seed by seed: the mean, with the spread over the seeds
+    (seed_metric()). Returns ([(simulator, figure, metric, value,
+    uncertainty)], [])."""
+    import numpy as np
+    settings = settings or {}
+    try:
+        binning = measure.pi0_binning(observable, settings)
+    except measure.ObservableError as error:
+        binning = dict(measure.PI0_BINNING)
+        say("%s, so the pi0s are drawn in the bins of %s" % (error, binning))
+    which = settings.get("reconstructed_energy") or "fitted"
+    if which not in measure.RECONSTRUCTED_ENERGIES:
+        say("observables.%s.reconstructed_energy is %r, so the fitted energy is drawn"
+            % (observable, which))
+        which = "fitted"
+    metric_name = metric_of(observable, settings)
+    short, metric = METRICS.get(metric_name, (metric_name, None))
+    if metric is None:
+        say("no metric '%s' is known (known: %s), so none is shown"
+            % (metric_name, ", ".join(METRICS)))
+    measured = []
+    for simulator in simulators:
+        values, seeds = good_pi0s(simulator, observable, scenario,
+                                  measure.RECONSTRUCTED_ENERGIES[which])
+        if not len(seeds):
+            say("%s has no good pi0 of %s, so it's left out" % (simulator.name, scenario))
+            continue
+        measured.append((simulator, values, seeds))
+
+    results = []
+    for figure in ("mass", "energy"):
+        first, last, n_bins = binning[figure]
+        edges = np.linspace(first, last, n_bins + 1)
+        entries = [(simulator, seed_histograms(values[figure], seeds, edges))
+                   for simulator, values, seeds in measured]
+        entries = [(simulator, points) for simulator, points in entries if points["seeds"]]
+        if not entries:
+            continue
+        ref = next((points for simulator, points in entries if simulator is reference), None)
+        curves = [(simulator, edges, points["mean"], points["error"],
+                   sum(points["values"].values())) for simulator, points in entries]
+        texts = []
+        for simulator, points in entries:
+            if ref is None or simulator is reference or metric is None:
+                continue
+            value, spread, pairs = seed_metric(metric, ref, points, key="counts")
+            if not pairs:
+                continue
+            results.append((simulator, figure, short, value, spread))
+            texts.append((simulator, "%s %.2e ± %.1e" % (short, value, spread)
+                          if np.isfinite(spread) else "%s %.2e" % (short, value)))
+        # The text in the corner is of Geant4, if it is there
+        shown = ref if ref is not None else entries[0][1]
+        sizes = sorted(set(shown["values"].values()))
+        note = "%s, good $\\pi^0$s\n%s × %d seed%s%s%s\nbands: %s" % (
+            scenario, sizes[0] if len(sizes) == 1 else "%d–%d" % (sizes[0], sizes[-1]),
+            len(shown["seeds"]), "" if len(shown["seeds"]) == 1 else "s",
+            " (%s)" % reference.label if ref is not None else "",
+            "\n%s energy" % which if figure == "energy" else "",
+            "seed spread" if shown["spread"] else "statistical")
+        if shown["outside"] > 0:
+            note += "\n%.2g%% outside the bins" % (100 * shown["outside"])
+        base = figure_base(out, observable, figure, scenario, suffix)
+        plot_profile(observable, scenario, figure, curves, reference if ref is not None else None,
+                     None, base, formats, xlabel=PI0_LABELS[figure], ylabel=PI0_YLABEL,
+                     note=note, trim=False, room=True, metric_texts=texts)
+        say("%s: %s" % (", ".join(c[0].label for c in curves),
+                        ", ".join("%s.%s" % (os.path.basename(base), f) for f in formats)))
+    return results, []
+
+
 # How the observables stored per event are drawn: each is called with the
 # observable, the scenario, the simulators that measured it, the reference,
 # the observable's settings in the configuration ({} without one), the folder
@@ -1092,7 +1249,7 @@ def separation_figures(observable, scenario, simulators, reference, settings, ou
 # chi^2, degrees of freedom)]); a metric may have its uncertainty after its
 # value
 EVENT_FIGURES = {"energy": energy_figures, "intrinsic_angle": angle_figures,
-                 "photon_separation": separation_figures}
+                 "photon_separation": separation_figures, "pi0": pi0_figures}
 
 
 def uncertainty_text(row, form="%.6g"):
