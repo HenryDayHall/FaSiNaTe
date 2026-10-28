@@ -375,8 +375,8 @@ observables:
     # in so many bins.
     reconstructed_energy: fitted
     mass_range: [0.09, 0.18]
-    mass_bins: 18
-    energy_range: [-6, 6]
+    mass_bins: 27
+    energy_range: [-15, 15]
     energy_bins: 48
     # How it is compared to Geant4: the Jensen-Shannon divergence of the
     # numbers of good pi0s in the bins, seed by seed, as the mean over the
