@@ -60,16 +60,32 @@ check reads `.npz` files with numpy), as do the stages' environment checks,
 so that happens in the environment the tasks run in, before anything runs or
 is submitted.
 
+The plan has the scenarios that are enabled. A scenario of inputs made
+elsewhere (input type `external`, e.g. the τ pairs of ILD's MC production)
+runs only with all of them: `Graph(plan)` leaves out a scenario any of whose
+inputs isn't on disk, nor about to be fetched (`coming`, or the plan's
+`to_fetch` in a dry run), with its tasks and the observables measured on it
+alone (`graph.left_out`, `graph.groups`, `graph.observables`), and the
+executors' reports say why. So each graph decides it from what is on disk
+when it is made: the one `fetch.prepare()` chooses the inputs from keeps every
+scenario (`keep_unavailable`), and the one it then chooses the measurements
+from knows which inputs are coming, so that published measurements made
+without a scenario that can't run are still fetched. The jobs of a slurm
+submission run the tasks of `tasks.json`, so they see what the submission saw.
+
 ## The layout
 
-`layout.py` names every file under `paths.data_dir`: inputs, simulations,
+`layout.py` names every file under `paths.data_dir`: inputs (each scenario's in
+the folder its `input.folder` names: `input_single_particle_gun` for the guns,
+`input_physics_samples` for the physics samples), simulations,
 reconstructions, measurements, plots and logs. A `Layout` is one sample: the
 full inputs, or the first N events of each (`-n N`). The sample is chosen
 once, when an input is simulated, and its name carries on: the simulation of
 the first N events of `<input>` is `<input>_n<N>`, its reconstruction
 `<input>_n<N>_REC.edm4hep.root`, the measurements `<simulator>_n<N>.npz`, and
 the metrics `metrics_n<N>.csv`. A scenario with `simulation_seeds` has each
-input simulated once with each `ddsim` seed, and the seed goes into the names
+input simulated once with each `ddsim` seed (or with `one_seed_per_input`,
+once with its own), and the seed goes into the names
 the same way: `<input>_simseed<S>`, or `<input>_n<N>_simseed<S>`. Every task
 records its seed (`null` for those without one of their own), and the
 observables record each reconstructed file's seed in the `.npz`. Records of
@@ -92,6 +108,10 @@ lists them in order. A stage:
   the DDML build, the plugins of the presets and model configurations, the
   weights' md5 sums (and that the plugins load those weights), the compact
   files, ILDConfig, the Python modules each needs;
+- says why a task can't run with what there is (`nothing_to_use`): the plots
+  with nothing measured, an input made elsewhere that isn't there;
+- says whether forcing it (`--force`) makes a task again (`remakes`): not an
+  input made elsewhere, which the generate stage can't make;
 - runs one task (`run`), raising `StageError` if it fails.
 
 Five attributes shape how the graph treats a stage's tasks: `gathers` (a
@@ -237,4 +257,5 @@ Tests section; CI runs them on every push.
   graph leaves out what isn't needed. It runs where the plan is made, so on
   slurm the login node fetches and the jobs need no internet. Fetching another
   kind of output is a check in `fetch.choose()` of whether the published file
-  is what the task would make.
+  is what the task would make. An input made elsewhere is the published file
+  of its name in its folder; it is chosen even with `--force generate`.

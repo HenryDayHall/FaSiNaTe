@@ -3,7 +3,9 @@ simulator, which gathers the numbers every plot needs into one .npz file
 (ddml_bench/measure.py has the observables and the keys of the files).
 
 A simulator is measured once every input of every scenario the observables
-use is reconstructed, and measured again when its .npz file is out of date:
+use is reconstructed (of the scenarios that run: those left out of a run, as
+their inputs aren't there, aren't measured, nor the observables of them
+alone), and measured again when its .npz file is out of date:
 when the observables' settings change, or its reconstructions do. The .npz
 file records what it was made from, so it is up to date by that record alone,
 whether its reconstructions are still there or not (records_inputs): the
@@ -30,13 +32,16 @@ class Observables(Stage):
 
     def add_tasks(self, graph):
         plan = graph.plan
-        settings = plan["observables"]
+        # The observables of the scenarios that run (ddml_bench/graph.py)
+        observables = graph.observables
+        if not observables:
+            return
         for simulator in [plan["reference"]] + plan["models"]:
             name = simulator["name"]
             # The reconstructions of every input of the scenarios measured, with
             # the ddsim seed of each (None if ddsim chose it)
             files, seeds, needs = {}, {}, []
-            for scenario in settings["scenarios"]:
+            for scenario in graph.measured:
                 tasks = [task for task in graph.reconstructions.get((name, scenario), [])
                          if task["input_file"] is not None]
                 files[scenario] = [task["output"] for task in tasks]
@@ -46,7 +51,7 @@ class Observables(Stage):
                          for key in ("name", "label", "color", "linestyle", "compact_file"))
             task = graph.add(self.name, graph.layout.observables(name), needs, simulator=name,
                              name=name, inputs=[p for s in files for p in files[s]],
-                             params={"observables": settings["observables"], "files": files,
+                             params={"observables": observables, "files": files,
                                      "seeds": seeds, "simulator": style,
                                      "data_dir": plan["data_dir"]})
             graph.measuring.append(task)

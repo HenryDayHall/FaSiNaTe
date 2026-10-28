@@ -9,6 +9,7 @@ import tarfile
 
 from ddml_bench import ddml_configs, manifest, process
 
+from conftest import TAU_INPUTS
 from test_pipeline_local import DI_PHOTON_INPUT, DI_PHOTON_SIMULATIONS, INPUTS
 
 
@@ -80,7 +81,7 @@ def test_the_records_of_a_data_folder(bench):
         "compact": "ILD/compact/ILD_l5_o1_v02/ILD_l5_o1_v02.xml",
         "ddml": "0123456789abcdef0123456789abcdef01234567",
         "ildconfig": geant4["stack"]["ildconfig"], "key4hep": "2026-04-08", "patches": "none",
-        "reconstruction_args": "--noBeamCalReco --usingParticleGun",
+        "reconstruction_args": "--noBeamCalReco",
         "steering": "ddsim_steer_geant4.py"}
     assert len(geant4["stack"]["ildconfig"]) == 40
     assert essential["stack"] == dict((k, v) for k, v in geant4["stack"].items()
@@ -227,7 +228,7 @@ def test_the_headers_of_the_logs(tmp_path):
     assert manifest.read_log(str(log)) == {
         "key4hep": "2026-04-08", "ildconfig": "6922e3bbd7e7d221557a2aa62c945a23cf318467",
         "patches": "marlintrkprocessors", "compact": "ILD/compact/ILD_l5_o1_v02/ILD_l5_o1_v02.xml",
-        "reconstruction_args": "--noBeamCalReco --usingParticleGun"}
+        "reconstruction_args": "--noBeamCalReco"}
     assert manifest.read_log(str(tmp_path / "none.log")) == {}
 
 
@@ -236,7 +237,8 @@ def test_which_record_each_file_goes_into():
         "essential", "required", "a.slcio", None)
     assert manifest.classify("observables/geant4.npz") == ("essential", "required",
                                                             "geant4.npz", None)
-    assert manifest.classify("input_single_particle_gun/a.h5", {"a.slcio": "s"}) == (
+    assert manifest.classify("input_single_particle_gun/a.h5",
+                             {"input_single_particle_gun/a.slcio": "s"}) == (
         "input_truth__s", "optional", "a.h5", None)
     assert manifest.classify("input_single_particle_gun/a.h5")[0] == "input_truth"
     assert manifest.classify("observables/geant4_n10.npz") == ("other", "archive",
@@ -251,3 +253,51 @@ def test_which_record_each_file_goes_into():
     assert manifest.reconstruction_sources("rec_output/s/geant4/a_n5_simseed2_REC.edm4hep.root") \
         == ("input_single_particle_gun/a.slcio", "sim_output/s/geant4/a_n5_simseed2.log",
             "rec_output/s/geant4/a_n5_simseed2.log")
+    # The inputs of each scenario in its own folder
+    assert manifest.classify("input_physics_samples/taus.slcio") == (
+        "essential", "required", "taus.slcio", None)
+    assert manifest.classify("my_inputs/taus.slcio", None, ("my_inputs",))[0] == "essential"
+    assert manifest.classify("my_inputs/taus.slcio")[0] == "other"
+    assert manifest.classify("input_physics_samples/t.h5", {"input_physics_samples/t.slcio": "x"}
+                             )[0] == "input_truth__x"
+    assert manifest.reconstruction_sources("rec_output/taus/geant4/t_simseed42_REC.edm4hep.root",
+                                           {"taus": "input_physics_samples"})[0] \
+        == "input_physics_samples/t.slcio"
+
+
+def test_the_records_of_a_data_folder_with_inputs_made_elsewhere(bench):
+    """tau_pairs' inputs, in their own folder, are required inputs like the
+    guns', said to be made elsewhere, and the measurements were derived from
+    them; a configured input that isn't there is warned about."""
+    bench.with_tau_pairs()
+    bench.run("pipeline.sh")
+    out = os.path.join(bench.tmp, "zenodo")
+    status, output = bench.run("scripts/ddml-bench", "manifest", "--out", out, "--records",
+                               "essential")
+    assert "warning" not in output, output
+    essential = load(out, "essential")
+    by_name = dict((entry["name"], entry) for entry in essential["files"])
+    for name in TAU_INPUTS:
+        entry = by_name[name]
+        assert entry["path"] == "input_physics_samples/" + name and entry["role"] == "required"
+        assert entry["external"] is True and entry["scenarios"] == ["tau_pairs"]
+        assert "options" not in entry and "generator" not in entry
+        assert entry["sha256"] == digest(bench.path(entry["path"]))
+    geant4 = by_name["geant4.npz"]
+    assert geant4["up_to_date"] is True
+    assert sorted(geant4["scenarios"]) == ["di_photon", "single_photon", "tau_pairs"]
+    assert geant4["observables"]["pi0"]["scenarios"] == ["tau_pairs"]
+    assert [(r["seed"], r["events"]) for r in geant4["reconstructions"]["tau_pairs"]] == [
+        (42, 12), (1764, 12)]
+    assert sorted(d["path"] for d in geant4["derived_from"] if "physics" in d["path"]) == [
+        "input_physics_samples/" + name for name in TAU_INPUTS]
+    # The reconstructions of the physics samples aren't told they are a
+    # particle gun's, as the others are, which isn't the software's stack
+    assert geant4["stack"]["reconstruction_args"] == "--noBeamCalReco"
+    assert essential["stack"]["reconstruction_args"] == "--noBeamCalReco"
+
+    os.remove(bench.path("input_physics_samples", TAU_INPUTS[1]))
+    status, output = bench.run("scripts/ddml-bench", "manifest", "--out", out, "--records",
+                               "essential")
+    assert "the configuration's input input_physics_samples/taus_b.slcio isn't in the data " \
+        "folder, so runs here leave out tau_pairs, and its measurements with it" in output, output

@@ -51,6 +51,12 @@ scenarios:
       energies: [20]
       n_events: 10
     simulation_seeds: [1, 2]
+  # Its inputs are made elsewhere and can't be made shorter here, so it is
+  # left out of this test: with its inputs in this data folder (linked from the
+  # full one's), enabling it and running with -n 10 tests it on the first 10
+  # events of each.
+  tau_pairs:
+    enabled: false
 
 published:
   # Its inputs and measurements aren't the published ones (it has fewer

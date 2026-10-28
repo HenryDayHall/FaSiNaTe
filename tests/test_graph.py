@@ -3,6 +3,7 @@ in this process with the tests' configuration (no environment needed)."""
 
 import collections
 import os
+import re
 import shutil
 
 import pytest
@@ -345,3 +346,140 @@ def test_a_simulation_given_is_the_graph_task_making_it(configured):
 def test_bad_options_are_caught_before_anything_runs(configured, options, message):
     with pytest.raises(PlanError, match=message):
         make_plan(**options)
+
+
+# ---------------------------------------------------------------------------
+# Inputs made elsewhere (input type external): tau_pairs, enabled
+
+
+@pytest.fixture
+def taus(configured, monkeypatch):
+    """tau_pairs enabled, with its two inputs there."""
+    configured.with_tau_pairs()
+    monkeypatch.setenv("FASINATE_CONFIG", configured.env["FASINATE_CONFIG"])
+    return configured
+
+
+@pytest.fixture
+def no_taus(configured, monkeypatch):
+    """tau_pairs enabled, without its inputs."""
+    configured.with_tau_pairs(write=False)
+    monkeypatch.setenv("FASINATE_CONFIG", configured.env["FASINATE_CONFIG"])
+    return configured
+
+
+def test_inputs_made_elsewhere_are_done_and_each_simulated_with_its_own_seed(taus,
+                                                                            monkeypatch):
+    monkeypatch.setenv("DDML_SOURCE_DIR", "/ddml")
+    graph = Graph(make_plan()).find_status()
+    assert graph.left_out == {}
+    inputs = [task for task in graph.list
+              if task["stage"] == "generate" and task["scenario"] == "tau_pairs"]
+    assert [os.path.relpath(task["output"], taus.data) for task in inputs] == [
+        "input_physics_samples/taus_a.slcio", "input_physics_samples/taus_b.slcio"]
+    assert all(task["status"] == DONE and task["params"]["command"] is None for task in inputs)
+    simulations = [task for task in graph.list
+                   if task["stage"] in ("geant4", "models") and task["scenario"] == "tau_pairs"]
+    assert sorted((task["simulator"], task["name"], task["seed"]) for task in simulations) == [
+        (simulator, name, seed) for simulator in ("caloclouds3", "geant4")
+        for name, seed in (("taus_a_simseed42", 42), ("taus_b_simseed1764", 1764))]
+    for task in simulations:
+        command = BY_NAME[task["stage"]].command(task, "/detector.xml", "/out/.partial.root")
+        assert command[-1] == "--random.seed=%d" % task["seed"]
+    for task in graph.list:
+        if task["stage"] == "reconstruct" and task["scenario"] == "tau_pairs":
+            assert "--usingParticleGun" not in task["params"]["args"]
+            assert "--noBeamCalReco" in task["params"]["args"]
+    measuring = [task for task in graph.list if task["stage"] == "observables"]
+    for task in measuring:
+        assert task["params"]["observables"]["pi0"]["scenarios"] == ["tau_pairs"]
+        assert task["params"]["seeds"]["tau_pairs"] == [42, 1764]
+    # Forcing the generate stage remakes the guns' inputs, not these
+    graph = Graph(make_plan(force=["generate"])).find_status()
+    assert collections.Counter((task["scenario"], task["status"]) for task in graph.list
+                               if task["stage"] == "generate") == {
+        ("single_photon", TODO): 2, ("di_photon", TODO): 1, ("tau_pairs", DONE): 2}
+
+
+def test_a_scenario_without_all_its_inputs_is_left_out(no_taus):
+    plan = make_plan()
+    paths = [os.path.join(no_taus.data, "input_physics_samples", name)
+             for name in ("taus_a.slcio", "taus_b.slcio")]
+    graph = Graph(plan)
+    assert graph.left_out == {"tau_pairs": paths}
+    assert not [task for task in graph.list if task["scenario"] == "tau_pairs"]
+    assert graph.measured == ["single_photon", "di_photon"] and "pi0" not in graph.observables
+    for task in graph.list:
+        if task["stage"] == "observables":
+            assert "pi0" not in task["params"]["observables"]
+            assert sorted(task["params"]["files"]) == ["di_photon", "single_photon"]
+    assert graph.left_out_reasons() == [
+        "the scenario tau_pairs is left out of this run, with the observables measured on it "
+        "alone: its 2 inputs, made outside this repository, aren't in %s (taus_a.slcio, "
+        "taus_b.slcio); put them there, or publish them in a record of `published`, to run it"
+        % os.path.dirname(paths[0])]
+
+    # Kept, as when the inputs to fetch are chosen: an input that isn't there
+    # can't be made here
+    graph = Graph(plan, keep_unavailable=True).find_status()
+    blocked = [task for task in graph.list
+               if task["stage"] == "generate" and task["scenario"] == "tau_pairs"]
+    assert [task["status"] for task in blocked] == [BLOCKED] * 2
+    assert "it is made outside this repository, so it can't be made here" in blocked[0]["why"]
+    # Not left out with its inputs about to be fetched, or to be fetched in a dry run
+    assert Graph(plan, coming=paths).left_out == {}
+    assert Graph(dict(plan, to_fetch=dict((p, "Zenodo record 1") for p in paths))).left_out \
+        == {}
+    assert Graph(plan, coming=paths[:1]).left_out == {"tau_pairs": paths[1:]}
+    # Asking for it, or for one of its inputs, is an error
+    with pytest.raises(PlanError, match="the scenario tau_pairs can't run: its 2 inputs"):
+        Graph(make_plan(scenarios=["tau_pairs"]))
+    touch(paths[0])
+    with pytest.raises(PlanError, match="can't run: 1 of its 2 inputs"):
+        Graph(make_plan(stages=["geant4"], files=[paths[0]]))
+
+
+def test_a_disabled_scenario_isnt_in_the_plan(configured):
+    """The tests' configuration disables tau_pairs."""
+    plan = make_plan()
+    assert [group["scenario"] for group in plan["scenarios"]] == ["single_photon", "di_photon"]
+    assert plan["disabled"] == ["tau_pairs"]
+    assert "pi0" not in plan["observables"]["observables"]
+    with pytest.raises(PlanError, match=r"the scenario tau_pairs is disabled \(scenarios"):
+        make_plan(scenarios=["tau_pairs"])
+
+
+@pytest.mark.parametrize("settings, message", [
+    ("    input:\n      files: taus.slcio\n", "input.files should be a list of the names"),
+    ("    input:\n      files: [sub/taus.slcio]\n", "not 'sub/taus.slcio'"),
+    ("    input:\n      files: [taus.hepmc]\n", "taus.hepmc isn't an LCIO file (.slcio)"),
+    ("    input:\n      files: [a.slcio, a.slcio]\n", "input.files has a.slcio twice"),
+    ("    input:\n      folder: sim_output\n", "can't be sim_output, which the pipeline"),
+    ("    input:\n      folder: input/physics\n", "not 'input/physics'"),
+    ("    simulation_seeds: [42]\n", "has 3 inputs but 1 simulation_seeds; with "
+                                     "one_seed_per_input it needs one seed for each input"),
+    ("    simulation_seeds: null\n", "one_seed_per_input needs simulation_seeds"),
+    ("    one_seed_per_input: 1\n", "one_seed_per_input should be true or false"),
+    ("    enabled: maybe\n", "enabled should be true or false"),
+])
+def test_a_scenario_of_inputs_made_elsewhere_is_checked(configured, monkeypatch, settings,
+                                                        message):
+    override = os.path.join(configured.tmp, "taus.yaml")
+    with open(override, "w") as stream:
+        stream.write("scenarios:\n  tau_pairs:\n" + settings)
+    monkeypatch.setenv("FASINATE_CONFIG", configured.config + ":" + override)
+    with pytest.raises(ConfigError, match=re.escape(message)):
+        make_plan()
+
+
+def test_inputs_made_elsewhere_take_only_their_files():
+    from ddml_bench.scenarios import scenario_inputs
+    config = {"scenarios": {"taus": {"input": {"type": "external", "files": ["a.slcio"],
+                                               "n_events": 6791}}}}
+    with pytest.raises(ConfigError, match="input has n_events, which inputs made elsewhere"):
+        scenario_inputs(config, Layout("/data"))
+    del config["scenarios"]["taus"]["input"]["n_events"]
+    group, = scenario_inputs(config, Layout("/data"))
+    assert group["folder"] == "input_physics_samples" and group["enabled"]
+    assert group["inputs"] == [{"file": "/data/input_physics_samples/a.slcio", "command": None,
+                                "seeds": [None]}]

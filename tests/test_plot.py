@@ -473,3 +473,105 @@ def test_the_seeds_of_the_events_come_from_their_files():
     assert list(plot.event_seeds(simulator, "s", 4)) == [-1] * 4
     assert [plot.energy_name(e) for e in (20.0000004, 99.999, 12.5, 5)] == [
         "20GeV", "100GeV", "12.5GeV", "5GeV"]
+
+
+# ---------------------------------------------------------------------------
+# The pi0s of tau decays: of the good ones, the mass of their two photons and
+# their energy less the MC pi0s', over the seeds (the paper's figure 11)
+
+
+def test_the_distribution_over_the_seeds_and_its_spread():
+    edges = np.linspace(0.0, 4.0, 5)
+    values = np.array([0.5, 1.5, 1.5, 3.5, 9.0, np.nan,  # seed 1: 5 values, one outside
+                       0.5, 0.5, 2.5, 2.5,  # seed 2
+                       1.5, 1.5, 1.5, 3.5])  # seed 3
+    seeds = np.array([1] * 6 + [2] * 4 + [3] * 4)
+    points = plot.seed_histograms(values, seeds, edges)
+    fractions = np.array([[1, 2, 0, 1], [2, 0, 2, 0], [0, 3, 0, 1]]) / np.array([[5], [4], [4]])
+    np.testing.assert_allclose(points["mean"], fractions.mean(axis=0))
+    np.testing.assert_allclose(points["error"], fractions.std(axis=0, ddof=1))
+    assert points["seeds"] == [1, 2, 3] and points["spread"]
+    assert points["values"] == {1: 5, 2: 4, 3: 4}
+    np.testing.assert_array_equal(points["counts"][3], [0, 3, 0, 1])
+    assert points["outside"] == pytest.approx(1 / 13)
+    # Of one seed, the statistical uncertainty, per unit of the values
+    single = plot.seed_histograms(values[seeds == 2], seeds[seeds == 2], edges)
+    np.testing.assert_allclose(single["error"], np.sqrt([2, 0, 2, 0]) / 4)
+    assert not single["spread"]
+
+
+def pi0_simulator(name, label, color, linestyle, scale, seed, seeds=(1, 2, 3), n_events=1500):
+    """A simulator that measured the pi0s of tau_pairs: of each of n_events
+    for each ddsim seed, its candidates (0 to 2), each good, confused or fake,
+    with the mass of its photons, its fitted energy, its photons' energy and
+    its MC pi0's, the energies scaled."""
+    rng = np.random.default_rng(seed)
+    counts = rng.integers(0, 3, n_events * len(seeds))
+    k = int(counts.sum())
+    match = rng.choice([measure.GOOD, measure.CONFUSED, measure.FAKE], k, p=[0.8, 0.15, 0.05])
+    true = rng.uniform(10, 80, k)
+    stored = {"n_candidates": counts, "match": match,
+              "mass": rng.normal(0.135 * np.sqrt(scale), 0.011, k),
+              "energy": rng.normal(true * scale, 0.8),
+              "photon_energy": rng.normal(true * scale - 0.5, 1.0),
+              "true_energy": np.where(match != measure.FAKE, true, np.nan)}
+    data = {"tau_pairs__n_events": np.array([n_events] * len(seeds)),
+            "tau_pairs__seeds": np.array(seeds)}
+    return types.SimpleNamespace(name=name, label=label, color=color, linestyle=linestyle,
+                                 data=data, stored=lambda observable, scenario: stored)
+
+
+def test_the_pi0_figures_draw_the_good_pi0s_over_the_seeds(figures, tmp_path):
+    geant4 = pi0_simulator("geant4", "Geant4", "#8c8c8c", "-", 1.0, 1)
+    model = pi0_simulator("model", "Model", "#e66100", "--", 0.98, 2)
+    settings = {"mass_range": [0.09, 0.18], "mass_bins": 18, "energy_range": [-4, 4],
+                "energy_bins": 32, "reconstructed_energy": "photons"}
+    results, fits = plot.pi0_figures("pi0", "tau_pairs", [geant4, model], geant4, settings,
+                                     str(tmp_path), "", ["png"])
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["pi0_energy__tau_pairs.png",
+                                                          "pi0_mass__tau_pairs.png"]
+    assert fits == [] and [result[:3] for result in results] == [(model, "mass", "JS"),
+                                                                 (model, "energy", "JS")]
+    for figure, (_, name, _, value, spread), (first, last, n_bins) in zip(
+            figures, results, ((0.09, 0.18, 18), (-4.0, 4.0, 32))):
+        edges = np.linspace(first, last, n_bins + 1)
+        width = (last - first) / n_bins
+        expected, counts = [], []
+        for simulator in (geant4, model):
+            stored = simulator.stored(None, None)
+            seeds = np.repeat(np.repeat([1, 2, 3], 1500), stored["n_candidates"])
+            good = stored["match"] == measure.GOOD
+            values = stored["mass"] if name == "mass" else (stored["photon_energy"]
+                                                           - stored["true_energy"])
+            per_seed = [np.histogram(values[good & (seeds == s)], edges)[0] for s in (1, 2, 3)]
+            sizes = [np.sum(good & (seeds == s)) for s in (1, 2, 3)]
+            expected.append(np.mean([c / n / width for c, n in zip(per_seed, sizes)], axis=0))
+            counts.append(per_seed)
+        top, bottom = figure.axes
+        assert top.get_xlim() == (first, last)
+        steps = drawn_steps(top)
+        for values, wanted in zip(steps, (expected[0], expected[0], expected[1])):
+            np.testing.assert_allclose(values, wanted)
+        # The metric: of the good pi0s in the bins, seed by seed
+        each = [plot.jensen_shannon(g, m) for g, m in zip(*counts)]
+        assert value == pytest.approx(np.mean(each)) and spread == pytest.approx(
+            np.std(each, ddof=1))
+        (note,) = [text.get_text() for text in top.texts]
+        assert note.startswith("tau_pairs, good $\\pi^0$s\n")
+        assert "× 3 seeds (Geant4)" in note and "\nbands: seed spread" in note, note
+        assert ("photons energy" in note) == (name == "energy")
+        assert "JS %.2e ± %.1e" % (value, spread) in [t.get_text() for t in
+                                                           top.get_legend().get_texts()][1]
+    # The scale of the model's energies shows in the energy, below Geant4's
+    model_energy = drawn_steps(figures[1].axes[0])[2]
+    centres = np.linspace(-4, 4, 33)[:-1] + 0.125
+    assert np.sum(model_energy * centres) < np.sum(drawn_steps(figures[1].axes[0])[0] * centres)
+
+
+def test_a_simulator_without_good_pi0s_is_left_out(figures, tmp_path):
+    model = pi0_simulator("model", "Model", "#e66100", "--", 1.0, 2)
+    stored = model.stored(None, None)
+    stored["match"][:] = measure.CONFUSED
+    results, _ = plot.pi0_figures("pi0", "tau_pairs", [model], None, {}, str(tmp_path), "",
+                                  ["png"])
+    assert results == [] and figures == [] and not list(tmp_path.iterdir())

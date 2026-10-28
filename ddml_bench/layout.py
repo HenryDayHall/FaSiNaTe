@@ -2,7 +2,10 @@
 
 Everything is written under paths.data_dir:
 
-  input_single_particle_gun/<input>.slcio (and .h5)          the scenarios' inputs
+  <folder>/<input>.slcio (and .h5)                            the scenarios' inputs,
+      each scenario's in the folder its input.folder names: the guns' in
+      input_single_particle_gun, and the physics samples, made elsewhere, in
+      input_physics_samples
   sim_output/<scenario>/<simulator>/<input><sample><ending>   each input simulated,
       with <input><sample>.log; the ending is .edm4hep.root for Geant4 and .root
       for the models, EDM4hep both
@@ -36,11 +39,16 @@ import glob
 import os
 import re
 
+# The folders of the inputs: the guns' (the default), and the physics samples'
 INPUT_DIR = "input_single_particle_gun"
+PHYSICS_INPUT_DIR = "input_physics_samples"
+INPUT_FOLDERS = (INPUT_DIR, PHYSICS_INPUT_DIR)
 SIM_DIR = "sim_output"
 REC_DIR = "rec_output"
 OBSERVABLES_DIR = "observables"
 PLOTS_DIR = "plots"
+# The folders the harness keeps for itself, which no inputs may go in
+RESERVED_FOLDERS = (SIM_DIR, REC_DIR, OBSERVABLES_DIR, "slurm")
 
 # The reference simulator, which no model may be named after
 GEANT4 = "geant4"
@@ -81,6 +89,16 @@ def check_name(name, what):
         raise LayoutError("%s names become folder names, so use only letters, digits and _.+- "
                           "in them, starting with a letter or digit, not %r" % (what, name))
     return name
+
+
+def check_input_folder(folder, what):
+    """folder, if it can hold inputs: a folder of the data folder (one name, not
+    a path), and not one of the harness's own."""
+    check_name(folder, what)
+    if folder in RESERVED_FOLDERS:
+        raise LayoutError("%s can't be %s, which the pipeline writes its own files to"
+                          % (what, folder))
+    return folder
 
 
 def sample_suffix(events):
@@ -159,7 +177,12 @@ class Layout(object):
 
     @property
     def input_dir(self):
-        return os.path.join(self.data_dir, INPUT_DIR)
+        """The guns' folder of inputs, the default."""
+        return self.inputs(INPUT_DIR)
+
+    def inputs(self, folder):
+        """A folder of inputs (a scenario's input.folder)."""
+        return os.path.join(self.data_dir, folder)
 
     # The simulations
 

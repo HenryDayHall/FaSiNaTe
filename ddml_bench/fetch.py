@@ -8,7 +8,9 @@ isn't there yet and the published one is what the task would make:
 
   an input (the generate stage)  when its gun options are the configuration's,
                                  as the inputs' names don't say everything
-                                 (e.g. the number of events)
+                                 (e.g. the number of events); an input made
+                                 elsewhere (input type external) is the
+                                 published file of its name in its folder
   a simulator's measurements     when they are what the observables stage
   (the observables stage)        would make: the same observables with the same
                                  settings, measured on the same scenarios'
@@ -20,8 +22,14 @@ isn't there yet and the published one is what the task would make:
                                  from is the published one: fetched now, or
                                  here already and the same by sha256
 
+The inputs are chosen first, of every scenario, and the measurements then for
+the scenarios that will run: a scenario whose inputs are made elsewhere runs
+only with all of them there or fetched now (ddml_bench/graph.py), so the
+measurements fetched are those without it when they are missing.
+
 Nothing that is there is replaced, and nothing of a stage that is forced
-(--force) is fetched. Each file is downloaded to a hidden file beside where
+(--force) is fetched, but for the inputs made elsewhere, which can't be made
+here. Each file is downloaded to a hidden file beside where
 it goes, checked against the sha256 and size in the manifest, and then moved
 into place; the manifests themselves are checked against the md5 sums
 configured for them (Zenodo shows each file's md5). So, as published
@@ -187,6 +195,9 @@ def gun_options(args):
 def input_matches(task, published):
     """(the same, why not) for a generate task and a published input."""
     command = task["params"]["command"]
+    if command is None:
+        # Made elsewhere: the file the configuration names, in its folder
+        return True, ""
     if not published.get("options"):
         return False, "the manifest doesn't say how it was made"
     if published.get("generator") != os.path.basename(command[1]):
@@ -272,10 +283,11 @@ def measurements_match(task, published, plan):
 def choose(plan, manifests):
     """([(task, record, entry)] to fetch, [why each published file at a task's
     output isn't fetched]) for the plan's tasks, by the manifests ({record:
-    manifest})."""
+    manifest}): the inputs of every scenario first, then the measurements of
+    the scenarios that will run with them (ddml_bench/graph.py). Raises
+    PlanError if a scenario asked for by name can't run even so."""
     from .graph import Graph
-    graph = Graph(plan)
-    layout = graph.layout
+    from .stages import BY_NAME
     published = {}  # path in the data folder: (record, entry)
     for record, manifest in manifests.items():
         for entry in manifest.get("files", []):
@@ -285,9 +297,16 @@ def choose(plan, manifests):
     chosen, notes = [], []
     fetched_inputs = {}  # path: sha256 of the inputs to fetch
     forced = set(plan.get("force") or [])
+    # The inputs of every scenario, those made elsewhere too, which a run
+    # leaves out unless they are here or fetched
+    graph = Graph(plan, keep_unavailable=True)
     for stage in ("generate", "observables"):
+        if stage == "observables":
+            # The scenarios that run with the inputs fetched
+            graph = Graph(plan, coming=[task["output"] for task, _, _ in chosen])
+        layout = graph.layout
         for task in graph.list:
-            if task["stage"] != stage or stage in forced:
+            if task["stage"] != stage or (stage in forced and BY_NAME[stage].remakes(task)):
                 continue
             relative = layout.relative(task["output"])
             if relative not in published or os.path.exists(task["output"]):

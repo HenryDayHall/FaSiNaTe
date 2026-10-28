@@ -16,6 +16,20 @@ observables have something to measure and compare. Of an event of two photons
 far enough apart to be told apart, which depends on their energy and is a
 little further for the models, and one photon of both their energies before
 that, with now and then a small photon split off as well.
+
+Of events whose MC particles have parents and daughters (a physics sample's,
+e.g. the tau pairs of tests/conftest.py), it writes the MC particles with
+those relations, as podio does, and, as ILD's reconstruction does: a
+PandoraPFO for each charged pion; for each pi0's two photons, a photon each
+(their energies smeared and their directions a little off), or now and then,
+more often for the models, one photon of both their energies (merged), and a
+pi0 candidate (GammaGammaCandidatePi0s) of most pairs of photons, with an
+energy fitted part of the way to the pi0's and the pi0's mass; now and then a
+small photon split off a charged pion's shower, paired with a pi0's photon as
+a candidate too (confused); and the links of the reconstructed particles to
+the MC particles each way (RecoMCTruthLink, MCTruthRecoLink), weighted as
+ILD's are (10000 times 1000 times the share of the cluster's energy, plus
+1000 times the track's). It makes no hits of those events.
 """
 
 import json
@@ -127,6 +141,154 @@ def pair_pfos(photons):
     return pfo_energies, pdgs
 
 
+# The events of a physics sample: their MC particles have parents and daughters
+physics = any("daughters" in p for event in events for p in event["particles"])
+# Its own random numbers, so the particle guns' outputs are as before
+tau_rng = np.random.default_rng(zlib.crc32(os.path.basename(options["inputFiles"]).encode()
+                                           + b" taus"))
+PI0_MASS = 0.1349768
+# Fake collection IDs of the relations' and links' ends (no podio metadata says
+# which they are, so they aren't checked)
+IDS = {"MCParticles": 1, "PandoraPFOs": 2, "GammaGammaCandidatePi0s": 3}
+if physics:
+    for name in ("MCParticles.parents_begin", "MCParticles.parents_end",
+                 "MCParticles.daughters_begin", "MCParticles.daughters_end",
+                 "_MCParticles_parents.index", "_MCParticles_parents.collectionID",
+                 "_MCParticles_daughters.index", "_MCParticles_daughters.collectionID",
+                 "PandoraPFOs.momentum.x", "PandoraPFOs.momentum.y", "PandoraPFOs.momentum.z",
+                 "GammaGammaCandidatePi0s.PDG", "GammaGammaCandidatePi0s.energy",
+                 "GammaGammaCandidatePi0s.mass", "GammaGammaCandidatePi0s.momentum.x",
+                 "GammaGammaCandidatePi0s.momentum.y", "GammaGammaCandidatePi0s.momentum.z",
+                 "GammaGammaCandidatePi0s.particles_begin",
+                 "GammaGammaCandidatePi0s.particles_end",
+                 "_GammaGammaCandidatePi0s_particles.index",
+                 "_GammaGammaCandidatePi0s_particles.collectionID"):
+        columns[name] = []
+    for link in ("RecoMCTruthLink", "MCTruthRecoLink"):
+        columns[link + ".weight"] = []
+        for end in ("from", "to"):
+            columns["_%s_%s.index" % (link, end)] = []
+            columns["_%s_%s.collectionID" % (link, end)] = []
+
+
+def link_weight(cluster, track=0.0):
+    """A link's weight, as ILD's RecoMCTruthLinker encodes it."""
+    return 10000 * int(1000 * cluster) + int(1000 * track)
+
+
+def off_by(direction, angle):
+    """A unit vector at about the angle (radians) from the direction."""
+    other = np.cross(direction, [0.0, 0.0, 1.0])
+    other /= np.linalg.norm(other)
+    turned = direction + angle * tau_rng.normal() * other \
+        + angle * tau_rng.normal() * np.cross(direction, other)
+    return turned / np.linalg.norm(turned)
+
+
+def reconstruct_physics(particles):
+    """The columns of the reconstruction of a physics event (see the docstring)."""
+    flat = {"parents": [], "daughters": []}
+    ends = dict((name, []) for name in ("parents_begin", "parents_end", "daughters_begin",
+                                        "daughters_end"))
+    for particle in particles:
+        for relation in ("parents", "daughters"):
+            ends[relation + "_begin"].append(len(flat[relation]))
+            flat[relation] += particle.get(relation, [])
+            ends[relation + "_end"].append(len(flat[relation]))
+    out = dict(("MCParticles." + name, values) for name, values in ends.items())
+    for relation in ("parents", "daughters"):
+        out["_MCParticles_%s.index" % relation] = flat[relation]
+        out["_MCParticles_%s.collectionID" % relation] = [IDS["MCParticles"]] * len(
+            flat[relation])
+
+    pfos = []  # (energy, momentum, PDG)
+    candidates = []  # (energy, momentum, [PFO, PFO])
+    links, reverse = [], []  # (weight, PFO, MC particle)
+    pions = []
+    for index, particle in enumerate(particles):
+        momentum = np.array(particle["momentum"])
+        if particle["generatorStatus"] == 1 and abs(particle["PDG"]) == 211:
+            pions.append(index)
+            pfos.append((float(np.linalg.norm(momentum)), momentum, particle["PDG"]))
+            links.append((link_weight(1.0, 1.0), len(pfos) - 1, index))
+            reverse.append((link_weight(0.97, 1.0), len(pfos) - 1, index))
+        if particle["PDG"] != 111 or len(particle.get("daughters", [])) != 2:
+            continue
+        photons = particle["daughters"]
+        momenta = [np.array(particles[d]["momentum"]) for d in photons]
+        energies = [float(np.linalg.norm(p)) for p in momenta]
+        if tau_rng.random() < (0.15 if geant4 else 0.22):
+            # Both in one photon
+            total = momenta[0] + momenta[1]
+            pfos.append((smeared_tau(sum(energies)), total / np.linalg.norm(total), 22))
+            for d, energy in zip(photons, energies):
+                links.append((link_weight(energy / sum(energies)), len(pfos) - 1, d))
+                reverse.append((link_weight(0.96), len(pfos) - 1, d))
+            continue
+        made = []
+        for d, p, energy in zip(photons, momenta, energies):
+            pfos.append((smeared_tau(energy), off_by(p / energy, 0.0003), 22))
+            made.append(len(pfos) - 1)
+            reverse.append((link_weight(0.95), made[-1], d))
+        for mine, d, other in zip(made, photons, photons[::-1]):
+            links.append((link_weight(0.96), mine, d))
+            links.append((link_weight(0.03), mine, other))
+        # As GammaGammaCandidateFinder: pairs within 40 MeV of the pi0's mass,
+        # most of which pass the fit
+        (e1, d1, _), (e2, d2, _) = (pfos[m] for m in made)
+        mass = np.sqrt(max(2 * e1 * e2 * (1 - float(d1 @ d2)), 0.0))
+        if abs(mass - PI0_MASS) < 0.04 and tau_rng.random() < 0.9:
+            reconstructed = sum(pfos[m][0] for m in made)
+            true = float(np.sqrt(np.sum(np.square(particle["momentum"])) + PI0_MASS ** 2))
+            fitted = reconstructed + 0.5 * (true - reconstructed)
+            direction = sum(pfos[m][1] * pfos[m][0] for m in made)
+            candidates.append((fitted, fitted * direction / np.linalg.norm(direction), made))
+    # A small photon split off a charged pion's shower, paired with a pi0's
+    if pions and tau_rng.random() < 0.3:
+        pion = pions[0]
+        direction = np.array(particles[pion]["momentum"])
+        pfos.append((float(tau_rng.uniform(1.0, 3.0)), off_by(direction / np.linalg.norm(
+            direction), 0.01), 22))
+        links.append((link_weight(0.9), len(pfos) - 1, pion))
+        reverse.append((link_weight(0.02), len(pfos) - 1, pion))
+        partner = next((i for i, (_, _, pdg) in enumerate(pfos[:-1]) if pdg == 22), None)
+        if partner is not None:
+            energy = pfos[-1][0] + pfos[partner][0]
+            direction = pfos[-1][1] * pfos[-1][0] + pfos[partner][1] * pfos[partner][0]
+            candidates.append((energy, energy * direction / np.linalg.norm(direction),
+                               [partner, len(pfos) - 1]))
+
+    out["PandoraPFOs.energy"] = [e for e, _, _ in pfos]
+    out["PandoraPFOs.PDG"] = [pdg for _, _, pdg in pfos]
+    for i, c in enumerate("xyz"):
+        # A photon's momentum is its energy along its direction
+        out["PandoraPFOs.momentum." + c] = [float(p[i] * (e if pdg == 22 else 1.0))
+                                            for e, p, pdg in pfos]
+        out["GammaGammaCandidatePi0s.momentum." + c] = [float(p[i]) for _, p, _ in candidates]
+    out["GammaGammaCandidatePi0s.PDG"] = [111] * len(candidates)
+    out["GammaGammaCandidatePi0s.energy"] = [e for e, _, _ in candidates]
+    out["GammaGammaCandidatePi0s.mass"] = [PI0_MASS] * len(candidates)
+    out["GammaGammaCandidatePi0s.particles_begin"] = [2 * i for i in range(len(candidates))]
+    out["GammaGammaCandidatePi0s.particles_end"] = [2 * i + 2 for i in range(len(candidates))]
+    out["_GammaGammaCandidatePi0s_particles.index"] = [p for _, _, made in candidates
+                                                       for p in made]
+    out["_GammaGammaCandidatePi0s_particles.collectionID"] = [IDS["PandoraPFOs"]] * (
+        2 * len(candidates))
+    for name, found in (("RecoMCTruthLink", links), ("MCTruthRecoLink", reverse)):
+        out[name + ".weight"] = [float(w) for w, _, _ in found]
+        out["_%s_from.index" % name] = [pfo for _, pfo, _ in found]
+        out["_%s_to.index" % name] = [mc for _, _, mc in found]
+        out["_%s_from.collectionID" % name] = [IDS["PandoraPFOs"]] * len(found)
+        out["_%s_to.collectionID" % name] = [IDS["MCParticles"]] * len(found)
+    return out
+
+
+def smeared_tau(energy):
+    """A photon's reconstructed energy, in a physics event."""
+    resolution = np.hypot(stochastic / np.sqrt(energy), 0.01)
+    return float(energy * scale * (1 + resolution * tau_rng.normal()))
+
+
 for event in events:
     particles = event["particles"]
     for name in ("generatorStatus", "PDG", "mass"):
@@ -134,6 +296,12 @@ for event in events:
     for i, c in enumerate("xyz"):
         columns["MCParticles.vertex." + c].append([p["vertex"][i] for p in particles])
         columns["MCParticles.momentum." + c].append([p["momentum"][i] for p in particles])
+    if physics:
+        for name, values in reconstruct_physics(particles).items():
+            columns[name].append(values)
+        for name in ("energy", "cellID", "position.x", "position.y", "position.z"):
+            columns["EcalBarrelCollectionRec." + name].append([])
+        continue
     incident = [p for p in particles if p["generatorStatus"] == 1] or particles[:1]
     hits = [shower(photon) for photon in incident]
     columns["EcalBarrelCollectionRec.energy"].append(
@@ -160,6 +328,14 @@ types = {"MCParticles.generatorStatus": np.int32, "MCParticles.PDG": np.int32,
          "MCParticles.momentum.z": np.float32, "EcalBarrelCollectionRec.energy": np.float32,
          "EcalBarrelCollectionRec.cellID": np.uint64, "PandoraPFOs.energy": np.float32,
          "PandoraPFOs.PDG": np.int32}
+# The physics events' columns, typed as podio writes them
+for name in columns:
+    if name.endswith(("_begin", "_end", ".collectionID")):
+        types[name] = np.uint32
+    elif name.endswith((".index", ".PDG")):
+        types[name] = np.int32
+    elif name.startswith(("PandoraPFOs.", "GammaGammaCandidatePi0s.")) or name.endswith(".weight"):
+        types.setdefault(name, np.float32)
 arrays = dict((name, ak.values_astype(ak.Array(values), types.get(name, np.float64)))
               for name, values in columns.items())
 base = options["outputFileBase"]

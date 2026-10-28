@@ -1,6 +1,7 @@
 """The layout: the one place that names files."""
 
 import os
+import re
 import subprocess
 import sys
 
@@ -112,3 +113,16 @@ heavy = [m for m in ("yaml", "numpy", "pyLCIO", "h5py", "particle") if m in sys.
 assert not heavy, heavy
 """ % REPO
     subprocess.check_call([sys.executable, "-S", "-c", code])
+
+
+def test_each_scenarios_inputs_go_in_a_folder_of_the_data_folder():
+    from ddml_bench.layout import check_input_folder
+    layout = Layout("/data")
+    assert layout.input_dir == "/data/input_single_particle_gun"
+    assert layout.inputs("input_physics_samples") == "/data/input_physics_samples"
+    assert check_input_folder("input_physics_samples", "x") == "input_physics_samples"
+    for folder, message in (("rec_output", "can't be rec_output"),
+                            ("../elsewhere", "not '../elsewhere'"),
+                            (".hidden", "not '.hidden'")):
+        with pytest.raises(LayoutError, match=re.escape(message)):
+            check_input_folder(folder, "scenarios.s.input.folder")

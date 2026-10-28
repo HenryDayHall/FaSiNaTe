@@ -16,9 +16,11 @@
 # Each scenario's input.type says how its inputs are made (ddml_bench/scenarios.py);
 # a particle_gun input runs ILD_Particle_Gun.py once per energy. Each input is
 # made in a hidden folder next to it and moved into place when it is complete,
-# and an input that exists is skipped. The commands run in the environment
-# setup.sh gives (what it needs is built first if needed), inside the container
-# unless container.enabled is false.
+# and an input that exists is skipped. Inputs made elsewhere (type external,
+# e.g. the physics samples) aren't made: they are fetched if published, and a
+# scenario without all of them is left out, saying which files to put where.
+# The commands run in the environment setup.sh gives (what it needs is built
+# first if needed), inside the container unless container.enabled is false.
 #
 # Run it from the repository root (or set FASINATE_REPO_DIR), not with source.
 

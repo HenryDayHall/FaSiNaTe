@@ -216,3 +216,38 @@ def test_a_manifest_sum_read_as_a_number_is_caught(bench, published):
         stream.write(text.replace('"%s"' % published["md5"], "1" * 32))
     status, output = bench.run("pipeline.sh", "--dry-run", check=False)
     assert status == 1 and "should be 32 hex digits, in quotes" in output, output
+
+
+def test_inputs_made_elsewhere_are_fetched_when_published(bench):
+    """A record with tau_pairs' inputs, made elsewhere: a run fetches them (even
+    forcing the generate stage, which can't make them), and the scenario runs;
+    without them, it would be left out."""
+    from conftest import TAU_INPUTS, write_tau_input
+    folder = os.path.join(bench.tmp, "zenodo", RECORD)
+    files = []
+    for number, name in enumerate(TAU_INPUTS):
+        path = os.path.join(folder, name)
+        write_tau_input(path, 12, number)
+        files.append({"name": name, "path": "input_physics_samples/" + name,
+                      "sha256": digest(path), "size": os.path.getsize(path), "role": "required",
+                      "kind": "input", "external": True, "scenarios": ["tau_pairs"]})
+    with open(os.path.join(folder, "manifest.json"), "w") as stream:
+        json.dump({"format": "fasinate-manifest/2", "record": "essential", "files": files},
+                  stream)
+    fetching(bench, {"zenodo": os.path.dirname(folder),
+                     "md5": digest(os.path.join(folder, "manifest.json"), "md5")})
+    bench.with_tau_pairs(write=False)
+
+    status, output = bench.run("pipeline.sh", "--dry-run")
+    assert "would fetch 2 published file(s), " in output, output
+    assert "left out" not in output and "geant4 tau_pairs/taus_a_simseed42" in output, output
+    status, output = bench.run("pipeline.sh", "--dry-run", "-f", "generate")
+    assert "would fetch 2 published file(s), " in output, output
+
+    status, output = bench.run("pipeline.sh", "--stages", "generate")
+    assert "fetching 2 published file(s)" in output and "made 3 of 3" in output, output
+    for name in TAU_INPUTS:
+        assert digest(bench.path("input_physics_samples", name)) == digest(
+            os.path.join(folder, name))
+    status, output = bench.run("pipeline.sh", "--dry-run")
+    assert "would fetch" not in output and "left out" not in output, output

@@ -161,7 +161,7 @@ def test_the_energy_settings_are_checked():
     with pytest.raises(measure.ObservableError) as error:
         measure.check_observables({"observables": {"energy_resolution": {"scenarios": ["s"]}}})
     assert str(error.value).endswith(
-        "radial_profile, longitudinal_profile, energy, intrinsic_angle, photon_separation")
+        "radial_profile, longitudinal_profile, energy, intrinsic_angle, photon_separation, pi0")
 
 
 # ---------------------------------------------------------------------------
@@ -562,3 +562,277 @@ def test_the_separation_settings_are_checked():
         with pytest.raises(measure.ObservableError) as error:
             configured_separation(**settings)
         assert message in str(error.value), (settings, str(error.value))
+
+
+# ---------------------------------------------------------------------------
+# The pi0s of tau decays: the pi0 candidates of the reconstruction, matched to
+# the MC pi0s through their photons' links
+
+
+PI0_MASS = 0.1349768
+
+
+def photon_pair(energy, mass=PI0_MASS, share=0.6, theta=80.0, phi=95.0):
+    """The momenta of two photons sharing the energy, with the invariant mass,
+    about the direction of theta and phi."""
+    e1, e2 = share * energy, (1 - share) * energy
+    opening = np.arccos(1 - mass ** 2 / (2 * e1 * e2))
+    axis, across = direction(theta, phi), towards_theta(theta, phi)
+    # each turned from the axis so that the pair's momentum is along it
+    a1 = np.arctan2(e2 * np.sin(opening), e1 + e2 * np.cos(opening))
+    d1 = np.cos(a1) * axis + np.sin(a1) * across
+    d2 = np.cos(opening - a1) * axis - np.sin(opening - a1) * across
+    return e1 * d1, e2 * d2
+
+
+def mc(pdg, status, momentum, mass=0.0, parents=(), daughters=()):
+    return {"PDG": pdg, "status": status, "momentum": np.asarray(momentum, dtype=float),
+            "mass": mass, "parents": list(parents), "daughters": list(daughters)}
+
+
+def tau_decay(pi0_momentum, photons, status=2):
+    """The MC particles of a tau- decaying to a rho- that decays into a pi- and
+    a pi0, decaying into the two photons: [tau, nu, rho, pi-, pi0, photon,
+    photon] (indices 0 to 6)."""
+    return [mc(15, status, [0, 0, 120.0], 1.777, daughters=[1, 2]),
+            mc(16, 1, [0, 0, 20.0], parents=[0]),
+            mc(-213, 2, [0, 0, 100.0], 0.775, parents=[0], daughters=[3, 4]),
+            mc(-211, 1, [0, 0, 40.0], 0.1396, parents=[2]),
+            mc(111, 2, pi0_momentum, PI0_MASS, parents=[2], daughters=[5, 6]),
+            mc(22, 1, photons[0], parents=[4]), mc(22, 1, photons[1], parents=[4])]
+
+
+def write_pi0_events(path, events):
+    """A reconstructed file of events, each {"mc": [mc()], "pfos": [(energy,
+    momentum, PDG)], "candidates": [(energy, momentum, [pfo, pfo])], "links":
+    [(weight, pfo, mc)], "reverse": [(weight, pfo, mc)]}, as podio writes them
+    (the relations by begin and end in each event's list of indices)."""
+    import awkward as ak
+    import uproot
+    columns = {}
+
+    def add(name, values):
+        columns.setdefault(name, []).append(values)
+
+    for event in events:
+        particles = event["mc"]
+        add("MCParticles.PDG", [p["PDG"] for p in particles])
+        add("MCParticles.generatorStatus", [p["status"] for p in particles])
+        add("MCParticles.mass", [p["mass"] for p in particles])
+        for i, c in enumerate("xyz"):
+            add("MCParticles.vertex." + c, [0.0] * len(particles))
+            add("MCParticles.momentum." + c, [float(p["momentum"][i]) for p in particles])
+        for relation in ("parents", "daughters"):
+            ends = np.cumsum([0] + [len(p[relation]) for p in particles])
+            add("MCParticles.%s_begin" % relation, ends[:-1].tolist())
+            add("MCParticles.%s_end" % relation, ends[1:].tolist())
+            add("_MCParticles_%s.index" % relation, [i for p in particles for i in p[relation]])
+        add("PandoraPFOs.energy", [e for e, _, _ in event["pfos"]])
+        add("PandoraPFOs.PDG", [pdg for _, _, pdg in event["pfos"]])
+        candidates = event["candidates"]
+        add("GammaGammaCandidatePi0s.energy", [e for e, _, _ in candidates])
+        for i, c in enumerate("xyz"):
+            add("PandoraPFOs.momentum." + c, [float(p[i]) for _, p, _ in event["pfos"]])
+            add("GammaGammaCandidatePi0s.momentum." + c, [float(p[i]) for _, p, _ in candidates])
+        ends = np.cumsum([0] + [len(made_of) for _, _, made_of in candidates])
+        add("GammaGammaCandidatePi0s.particles_begin", ends[:-1].tolist())
+        add("GammaGammaCandidatePi0s.particles_end", ends[1:].tolist())
+        add("_GammaGammaCandidatePi0s_particles.index",
+            [i for _, _, made_of in candidates for i in made_of])
+        for name, key in (("RecoMCTruthLink", "links"), ("MCTruthRecoLink", "reverse")):
+            add(name + ".weight", [float(w) for w, _, _ in event[key]])
+            add("_%s_from.index" % name, [pfo for _, pfo, _ in event[key]])
+            add("_%s_to.index" % name, [particle for _, _, particle in event[key]])
+    types = {}
+    for name in columns:
+        if name.endswith(("_begin", "_end")):
+            types[name] = np.uint32
+        elif name.endswith((".index", ".PDG", "generatorStatus")):
+            types[name] = np.int32
+        elif name.startswith(("PandoraPFOs", "GammaGamma")) or name.endswith(".weight"):
+            types[name] = np.float32
+    arrays = dict((name, ak.values_astype(ak.Array(values), types.get(name, np.float64)))
+                  for name, values in columns.items())
+    with uproot.recreate(path) as output:
+        output.mktree("events", dict((name, array.type) for name, array in arrays.items()))
+        output["events"].extend(arrays)
+    return path
+
+
+def link(cluster, track=0.0):
+    """A link's weight, as ILD's RecoMCTruthLinker encodes it."""
+    return 10000 * int(round(1000 * cluster)) + int(round(1000 * track))
+
+
+@pytest.fixture
+def pi0_file(tmp_path):
+    """Four events: (a) a pi0 of a tau decay reconstructed as two photons and
+    found (good); one of them paired with a photon split off the pi-'s shower
+    (confused); and a pair of the photons of a pi0 made by the simulation and of
+    one with no tau ancestor (fake); (b) a pi0 whose first photon's MC photon
+    is best matched, the other way, by a fragment (confused, but good without
+    the reverse links); (c) a pi0 not found; (d) an event without an incident
+    particle (generator status 1), which is left out with its candidate."""
+    g1, g2 = photon_pair(30.0)
+    pi0 = g1 + g2
+    a = tau_decay(pi0, (g1, g2))
+    # a pi0 made by the simulation (generator status 0), and one with no tau
+    a += [mc(111, 0, [5.0, 0, 0], PI0_MASS, daughters=[8, 9]),
+          mc(22, 0, [3.0, 0, 0], parents=[7]), mc(22, 0, [2.0, 0, 0], parents=[7]),
+          mc(111, 2, [0, 5.0, 0], PI0_MASS, daughters=[11, 12]),
+          mc(22, 1, [0, 3.0, 0], parents=[10]), mc(22, 1, [0, 2.0, 0], parents=[10])]
+    r1, r2 = 0.97 * g1, 1.01 * g2  # reconstructed a little off
+    split = 0.05 * a[3]["momentum"]
+    event_a = {"mc": a,
+               "pfos": [(40.0, a[3]["momentum"], -211), (np.linalg.norm(r1), r1, 22),
+                        (np.linalg.norm(r2), r2, 22), (3.0, np.array([3.0, 0, 0]), 22),
+                        (3.0, np.array([0, 3.0, 0]), 22), (2.0, split, 22)],
+               "candidates": [(29.5, 29.5 * pi0 / np.linalg.norm(pi0), [1, 2]),
+                              (20.0, r1 + split, [1, 5]),
+                              (6.0, np.array([3.0, 3.0, 0]), [3, 4])],
+               "links": [(link(1.0, 1.0), 0, 3), (link(0.96), 1, 5), (link(0.03), 1, 6),
+                         (link(0.95), 2, 6), (link(0.04), 2, 5), (link(0.99), 3, 8),
+                         (link(0.99), 4, 11), (link(0.9), 5, 3)],
+               "reverse": [(link(0.97, 1.0), 0, 3), (link(0.02), 5, 3), (link(0.96), 1, 5),
+                           (link(0.95), 2, 6), (link(0.99), 3, 8), (link(0.99), 4, 11)]}
+    h1, h2 = photon_pair(20.0, share=0.5, theta=100.0, phi=80.0)
+    b = tau_decay(h1 + h2, (h1, h2))
+    event_b = {"mc": b,
+               "pfos": [(0.4 * 20, 0.4 * h1 / 0.5, 22), (np.linalg.norm(h2), h2, 22),
+                        (6.0, 6.0 * h1 / np.linalg.norm(h1), 22)],
+               "candidates": [(19.0, h1 + h2, [0, 1])],
+               "links": [(link(0.9), 0, 5), (link(0.95), 1, 6), (link(0.97), 2, 5)],
+               "reverse": [(link(0.3), 0, 5), (link(0.6), 2, 5), (link(0.95), 1, 6)]}
+    c1, c2 = photon_pair(10.0)
+    event_c = {"mc": tau_decay(c1 + c2, (c1, c2)), "pfos": [], "candidates": [], "links": [],
+               "reverse": []}
+    no_primary = tau_decay(c1 + c2, (c1, c2))
+    for particle in no_primary:
+        particle["status"] = 2
+    event_d = {"mc": no_primary, "pfos": [(10.0, c1 + c2, 22), (1.0, c1, 22)],
+               "candidates": [(10.0, c1 + c2, [0, 1])], "links": [], "reverse": []}
+    return write_pi0_events(str(tmp_path / "taus_REC.edm4hep.root"),
+                            [event_a, event_b, event_c, event_d])
+
+
+def configured_pi0(**pi0):
+    settings = dict({"scenarios": ["s"], "candidate_collection": "GammaGammaCandidatePi0s",
+                     "particle_collection": "PandoraPFOs", "link_collection": "RecoMCTruthLink",
+                     "reverse_link_collection": "MCTruthRecoLink", "ancestor_pdg": [15]}, **pi0)
+    return measure.check_observables({"observables": {"pi0": settings}})[0]
+
+
+def test_the_pi0_candidates_are_matched_to_the_mc_pi0s_through_their_photons(pi0_file,
+                                                                             tmp_path):
+    data = measured(configured_pi0(), pi0_file, str(tmp_path / "geant4.npz"))
+    key = "pi0__s__"
+    assert sorted(k[len(key):] for k in data if k.startswith(key)) == sorted(
+        measure.PI0_EVENT_ITEMS + measure.PI0_CANDIDATE_ITEMS + ("settings",))
+    # The event without an incident particle is left out, with its candidate
+    assert list(data["s__n_events"]) == [3] and list(data["s__n_no_primary"]) == [1]
+    assert list(data[key + "n_candidates"]) == [3, 1, 0]
+    # Only the pi0s of the generator, of tau decays, into two photons
+    assert list(data[key + "n_true"]) == [1, 1, 1]
+    good, confused, fake = measure.GOOD, measure.CONFUSED, measure.FAKE
+    assert list(data[key + "match"]) == [good, confused, fake, confused]
+    assert list(data[key + "true_index"]) == [0, 0, -1, 0]
+    # The invariant mass of the two photons, as reconstructed
+    e1, e2 = 0.97 * 18.0, 1.01 * 12.0
+    expected = PI0_MASS * np.sqrt(0.97 * 1.01)  # each photon's energy scaled
+    np.testing.assert_allclose(data[key + "mass"][0], expected, rtol=1e-5)
+    np.testing.assert_allclose(data[key + "photon_energy"][0], e1 + e2, rtol=1e-5)
+    np.testing.assert_allclose(data[key + "energy"], [29.5, 20.0, 6.0, 19.0], rtol=1e-6)
+    true_energy = np.sqrt(np.sum(np.square(sum(photon_pair(30.0)))) + PI0_MASS ** 2)
+    np.testing.assert_allclose(data[key + "true_energy"][:2], true_energy, rtol=1e-6)
+    assert np.isnan(data[key + "true_energy"][2]) and np.isnan(data[key + "true_theta"][2])
+    np.testing.assert_allclose(data[key + "theta"][0], data[key + "true_theta"][0], atol=1e-4)
+    np.testing.assert_allclose(data[key + "true_theta"][0], 80.0, atol=1e-6)
+    np.testing.assert_allclose(data[key + "true_phi"][0], 95.0, atol=1e-6)
+
+
+def test_without_the_reverse_links_a_photon_needs_only_its_best_mc_particle(pi0_file, tmp_path):
+    data = measured(configured_pi0(reverse_link_collection=None), pi0_file,
+                    str(tmp_path / "geant4.npz"))
+    assert list(data["pi0__s__match"]) == [measure.GOOD, measure.CONFUSED, measure.FAKE,
+                                           measure.GOOD]
+
+
+def test_without_ancestor_pdg_every_mc_pi0_of_the_generator_counts(pi0_file, tmp_path):
+    data = measured(configured_pi0(ancestor_pdg=None), pi0_file, str(tmp_path / "geant4.npz"))
+    # The pi0 without a tau too, but not the simulation's
+    assert list(data["pi0__s__n_true"]) == [2, 1, 1]
+    assert list(data["pi0__s__match"]) == [measure.GOOD, measure.CONFUSED, measure.CONFUSED,
+                                           measure.CONFUSED]
+    assert list(data["pi0__s__true_index"]) == [0, 0, 1, 0]
+
+
+def test_drawing_the_pi0s_differently_needs_no_measuring_again(pi0_file, tmp_path):
+    out = str(tmp_path / "geant4.npz")
+    measured(configured_pi0(), pi0_file, out)
+    files = {"s": [pi0_file]}
+    for drawn in ({"reconstructed_energy": "photons"}, {"mass_range": [0.1, 0.17]},
+                  {"mass_bins": 30}, {"energy_range": [-3, 3], "energy_bins": 12},
+                  {"metric": "l1"}):
+        assert measure.is_up_to_date(out, measure.wanted(configured_pi0(**drawn)), files) \
+            == (True, ""), drawn
+    assert measure.is_up_to_date(out, measure.wanted(configured_pi0(ancestor_pdg=[15, 24])),
+                                 files) == (False, "the settings of pi0 changed")
+
+
+def test_the_pi0_settings_are_checked():
+    assert measure.pi0_binning("pi0", {}) == {"mass": (0.09, 0.18, 18),
+                                              "energy": (-6.0, 6.0, 48)}
+    for settings, message in (
+            ({"candidate_collection": None}, "observables.pi0.candidate_collection should be "
+                                             "the name of a collection"),
+            ({"reverse_link_collection": 3}, "should be the name of a collection, or null"),
+            ({"ancestor_pdg": 15}, "observables.pi0.ancestor_pdg should be a list of PDG codes"),
+            ({"reconstructed_energy": "sum"}, "reconstructed_energy should be fitted or photons"),
+            ({"mass_range": [0.18, 0.09]}, "observables.pi0.mass_range should be [first, last]"),
+            ({"energy_range": [-6]}, "energy_range should be [first, last]"),
+            ({"mass_bins": 0}, "observables.pi0.mass_bins should be a number of bins")):
+        with pytest.raises(measure.ObservableError) as error:
+            configured_pi0(**settings)
+        assert message in str(error.value), (settings, str(error.value))
+
+
+def test_a_missing_pi0_collection_says_what_to_set(pi0_file, tmp_path):
+    for settings, message in (
+            ({"candidate_collection": "GammaGammaParticles"},
+             "has no GammaGammaParticles.energy (does it have the collection GammaGammaParticles? "
+             "set observables.pi0.candidate_collection)"),
+            ({"link_collection": "MCTruthLinks"},
+             "has no MCTruthLinks.weight (does it have the links MCTruthLinks? set "
+             "observables.pi0.link_collection)")):
+        with pytest.raises(measure.ObservableError) as error:
+            measured(configured_pi0(**settings), pi0_file, str(tmp_path / "geant4.npz"))
+        assert message in str(error.value), str(error.value)
+
+
+def test_relations_and_links_must_point_to_the_collections_set():
+    """When the file's metadata names the collections (podio's table)."""
+    class Stub(object):
+        path = "rec.root"
+
+        def __init__(self, table):
+            self.collection_ids = lambda: table
+
+    table = {"PandoraPFOs": 2, "MCParticles": 1, "DistilledPFOs": 7}
+    measure._points_to(Stub(table), np.array([2, 2]), "PandoraPFOs", "the links", "pi0",
+                       "link_collection")
+    with pytest.raises(measure.ObservableError) as error:
+        measure._points_to(Stub(table), np.array([2, 7]), "PandoraPFOs",
+                           "the particles of GammaGammaCandidatePi0s", "pi0",
+                           "particle_collection")
+    assert str(error.value) == ("the particles of GammaGammaCandidatePi0s in rec.root points to "
+                                "DistilledPFOs, not to PandoraPFOs; set "
+                                "observables.pi0.particle_collection")
+    # Without the table (files not written by podio), or the IDs, nothing to check
+    measure._points_to(Stub({}), np.array([7]), "PandoraPFOs", "x", "pi0", "y")
+    measure._points_to(Stub(table), None, "PandoraPFOs", "x", "pi0", "y")
+
+
+def test_the_best_link_is_of_the_highest_weight_the_first_of_equal_ones():
+    links = [(5.0, 0, 10), (9.0, 0, 11), (9.0, 0, 12), (1.0, 1, 10)]
+    assert measure.best_links(links, by_reco=True) == {0: 11, 1: 10}
+    assert measure.best_links(links, by_reco=False) == {10: 0, 11: 0, 12: 0}

@@ -54,8 +54,15 @@ class Stage(object):
         return False, "not made yet"
 
     def nothing_to_use(self, task):
-        """Why a task that takes what there is has nothing to work on, or None."""
+        """Why a task can't run with what there is, though nothing it needs is
+        still to be made, or None: e.g. the plots, with nothing measured, or an
+        input made elsewhere that isn't there."""
         return None
+
+    def remakes(self, task):
+        """Whether forcing the stage (--force) makes the task's output again:
+        not for what the stage can't make, e.g. the inputs made elsewhere."""
+        return True
 
     def check_environment(self, tasks):
         """What in this environment would make these tasks fail: a list of

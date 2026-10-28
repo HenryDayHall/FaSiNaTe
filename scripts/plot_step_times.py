@@ -106,6 +106,7 @@ SCENARIOS = {
     "single_photon": ("Single photon gun", "o"),
     "photon": ("Single photon gun", "o"),
     "di_photon": ("Di-photon", "s"),
+    "tau_pairs": ("τ pairs (physics sample)", "v"),
 }
 ALL, UNKNOWN = "<all>", "<unknown>"  # logs whose name and run give no single scenario
 PSEUDO_SCENARIOS = {ALL: ("All scenarios", "D"), UNKNOWN: ("Scenario unknown", "X")}

@@ -494,6 +494,336 @@ def measure_separation(observable, settings, branches, start, stop, primary, hit
             "n_photons": count_reconstructed(branches, settings, observable, start, stop)}
 
 
+# The neutral pions of the tau decays: the pi0 candidates of the
+# reconstruction, each matched to the MC truth through its two photons
+
+# What is stored of each event (the number of its pi0 candidates, and of its MC
+# pi0s matched to), and of each candidate, in the order of the events, each
+# event's candidates in turn: the invariant mass of its two photons, its
+# (fitted) energy, the sum of its photons' energies, theta and phi of its
+# momentum, its match (PI0_MATCHES), and the energy, theta and phi of the MC
+# pi0 it is matched to, with that pi0's place among its event's (NaN, and -1,
+# for a fake one)
+PI0_EVENT_ITEMS = ("n_candidates", "n_true")
+PI0_CANDIDATE_ITEMS = ("mass", "energy", "photon_energy", "theta", "phi", "match",
+                       "true_energy", "true_theta", "true_phi", "true_index")
+# A candidate's match: neither photon correct, only one, or both, of one MC pi0
+FAKE, CONFUSED, GOOD = 0, 1, 2
+PI0_MATCHES = {FAKE: "fake", CONFUSED: "confused", GOOD: "good"}
+# The bins of the figures when the settings don't say (GeV): the mass from 90
+# to 180 MeV in bins of 5 MeV, around GammaGammaCandidateFinder's window of
+# 40 MeV either side of the pi0's mass, and the energy less the MC pi0's from
+# -6 to 6 GeV in bins of 250 MeV
+PI0_BINNING = {"mass": (0.09, 0.18, 18), "energy": (-6.0, 6.0, 48)}
+# A candidate's reconstructed energy in the figures: its own, from the fit, or
+# the sum of its two photons'
+RECONSTRUCTED_ENERGIES = {"fitted": "energy", "photons": "photon_energy"}
+# The links of the reconstructed particles to the MC particles: the members
+# with the indices of each end, from podio's links (EDM4hep 0.99 on) or the
+# associations before them
+LINK_ENDS = (("_from", "_to"), ("_rec", "_sim"))
+PI0 = 111
+PHOTON = 22
+
+
+def _collection_name(observable, settings, key, optional=False):
+    value = settings.get(key)
+    if value is None and optional:
+        return None
+    if not isinstance(value, str) or not value:
+        raise ObservableError("observables.%s.%s should be the name of a collection%s"
+                              % (observable, key, ", or null" if optional else ""))
+    return value
+
+
+def pi0_binning(observable, settings):
+    """{"mass": (first, last, bins), "energy": (...)}: how the figures bin the
+    mass of the good pi0s and their energy less the MC pi0s', from the first
+    to the last of mass_range and energy_range (GeV) in mass_bins and
+    energy_bins bins (PI0_BINNING where not given)."""
+    binning = {}
+    for figure, default in PI0_BINNING.items():
+        given = settings.get(figure + "_range")
+        bins = settings.get(figure + "_bins")
+        if given is None:
+            first, last = default[:2]
+        elif isinstance(given, list) and len(given) == 2:
+            first, last = given
+        else:
+            first = last = None
+        bins = default[2] if bins is None else bins
+        if not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                   for v in (first, last)) or not first < last:
+            raise ObservableError("observables.%s.%s_range should be [first, last], the lowest "
+                                  "and highest edges of the bins in GeV" % (observable, figure))
+        if not isinstance(bins, int) or isinstance(bins, bool) or bins < 1:
+            raise ObservableError("observables.%s.%s_bins should be a number of bins, at least 1"
+                                  % (observable, figure))
+        binning[figure] = (float(first), float(last), bins)
+    return binning
+
+
+def check_pi0(observable, settings):
+    """The settings of the pi0s."""
+    for key in ("candidate_collection", "particle_collection", "link_collection"):
+        _collection_name(observable, settings, key)
+    _collection_name(observable, settings, "reverse_link_collection", optional=True)
+    codes = settings.get("ancestor_pdg")
+    if codes is not None and (not isinstance(codes, list) or not codes or not all(
+            isinstance(c, int) and not isinstance(c, bool) for c in codes)):
+        raise ObservableError("observables.%s.ancestor_pdg should be a list of PDG codes, e.g. "
+                              "[15] for the taus, or null for every MC pi0" % observable)
+    energy = settings.get("reconstructed_energy")
+    if energy is not None and energy not in RECONSTRUCTED_ENERGIES:
+        raise ObservableError("observables.%s.reconstructed_energy should be %s, not %r"
+                              % (observable, " or ".join(RECONSTRUCTED_ENERGIES), energy))
+    pi0_binning(observable, settings)
+
+
+def pi0_items(observable, settings):
+    return PI0_EVENT_ITEMS + PI0_CANDIDATE_ITEMS
+
+
+def _flat(branches, name, start, stop):
+    """A member of a collection, flattened over the events, with the offset of
+    each event's first object (one more than the events)."""
+    import awkward as ak
+    import numpy as np
+    values = branches.jagged(name, start, stop)
+    counts = ak.to_numpy(ak.num(values)).astype(np.int64)
+    return ak.to_numpy(ak.flatten(values)), np.concatenate([[0], np.cumsum(counts)])
+
+
+def _relation(branches, collection, relation, start, stop, observable):
+    """A relation of the objects of a collection (podio's), e.g. the parents
+    of the MC particles: each object's begin and end in its event's list of
+    related objects (flattened over the events), the indices in that list of
+    the objects related to (within their event, flattened), with the offset of
+    each event's list, and their collection IDs."""
+    import numpy as np
+    begin = "%s.%s_begin" % (collection, relation)
+    index = "_%s_%s.index" % (collection, relation)
+    for name in (begin, index):
+        if name not in branches.keys:
+            raise ObservableError("%s has no %s (the %s of the %s), which observables.%s needs"
+                                  % (branches.path, name, relation, collection, observable))
+    starts, _ = _flat(branches, begin, start, stop)
+    ends, _ = _flat(branches, "%s.%s_end" % (collection, relation), start, stop)
+    indices, offsets = _flat(branches, index, start, stop)
+    ids = (_flat(branches, "_%s_%s.collectionID" % (collection, relation), start, stop)[0]
+           if "_%s_%s.collectionID" % (collection, relation) in branches.keys else None)
+    return starts.astype(np.int64), ends.astype(np.int64), indices.astype(np.int64), offsets, ids
+
+
+def _links(branches, collection, start, stop, observable, setting):
+    """The links of a link collection: weight, the indices of the
+    reconstructed and of the MC particle of each (within their events), the
+    offset of each event's links, and the collection IDs of either end."""
+    import numpy as np
+    if collection + ".weight" not in branches.keys:
+        raise ObservableError("%s has no %s.weight (does it have the links %s? set "
+                              "observables.%s.%s)" % (branches.path, collection, collection,
+                                                      observable, setting))
+    weight, offsets = _flat(branches, collection + ".weight", start, stop)
+    for reco, mc in LINK_ENDS:
+        names = ["_%s%s.index" % (collection, end) for end in (reco, mc)]
+        if all(name in branches.keys for name in names):
+            ends = [_flat(branches, name, start, stop)[0].astype(np.int64) for name in names]
+            ids = [_flat(branches, name[:-len("index")] + "collectionID", start, stop)[0]
+                   if name[:-len("index")] + "collectionID" in branches.keys else None
+                   for name in names]
+            return weight.astype(np.float64), ends[0], ends[1], offsets, ids
+    raise ObservableError("the links %s in %s have no ends (_%s_from and _to, or _rec and _sim)"
+                          % (collection, branches.path, collection))
+
+
+def _points_to(branches, ids, target, what, observable, setting):
+    """Check that the collection IDs a relation or link records are all of the
+    target collection, when the file's metadata says which that is (podio's
+    table of collections; ids None or the table empty: nothing to check)."""
+    import numpy as np
+    table = branches.collection_ids()
+    if ids is None or not table or target not in table or not len(ids):
+        return
+    others = set(int(i) for i in np.unique(ids)) - {table[target]}
+    if others:
+        names = dict((value, name) for name, value in table.items())
+        raise ObservableError("%s in %s points to %s, not to %s; set observables.%s.%s"
+                              % (what, branches.path, ", ".join(sorted(
+                                  names.get(i, "collection %d" % i) for i in others)), target,
+                                 observable, setting))
+
+
+def best_links(event_links, by_reco):
+    """{the index of a particle at one end: the index at the other end of its
+    link of the highest weight} of an event's links [(weight, reco index, MC
+    index)]: for each reconstructed particle (by_reco) or each MC particle. Of
+    links of the same weight, the first."""
+    best = {}
+    for weight, reco, mc in event_links:
+        key, other = (reco, mc) if by_reco else (mc, reco)
+        if key not in best or weight > best[key][0]:
+            best[key] = (weight, other)
+    return dict((key, other) for key, (_, other) in best.items())
+
+
+def match_pi0(photons, energies, best_mc, best_reco, slots):
+    """(match, the place of the MC pi0) of a candidate of two photons (indices
+    of reconstructed particles, with their energies): a photon is correct when
+    its best MC particle is a photon of a selected MC pi0 (slots: {MC photon:
+    the place of its pi0}) and, with the reverse links (best_reco not None),
+    that MC photon's best reconstructed particle is it. GOOD when both are
+    correct and the two photons of one pi0, CONFUSED when only one is (or
+    they are of different pi0s: the place is then that of the more energetic
+    photon's), FAKE (-1) otherwise."""
+    correct = []
+    for photon, energy in zip(photons, energies):
+        mc = best_mc.get(photon)
+        if mc is None or mc not in slots:
+            continue
+        if best_reco is not None and best_reco.get(mc) != photon:
+            continue
+        correct.append((energy, slots[mc], mc))
+    if len(correct) == 2 and correct[0][1] == correct[1][1] and correct[0][2] != correct[1][2]:
+        return GOOD, correct[0][1]
+    if correct:
+        return CONFUSED, max(correct, key=lambda item: item[0])[1]
+    return FAKE, -1
+
+
+def measure_pi0(observable, settings, branches, start, stop, primary, hits):
+    """Each event's pi0 candidates (candidate_collection), with the invariant
+    mass and energies of their two photons (particle_collection), matched to
+    the event's MC pi0s through the links (match_pi0()): the MC pi0s from the
+    generator that decay into two photons, with an ancestor of the PDG codes
+    of ancestor_pdg (the taus) if given."""
+    import numpy as np
+    n = stop - start
+    mc = branches.collection_with(MC_COLLECTIONS, "PDG")
+    candidates = settings["candidate_collection"]
+    particles = settings["particle_collection"]
+    for collection, setting in ((candidates, "candidate_collection"),
+                                (particles, "particle_collection")):
+        if collection + ".energy" not in branches.keys:
+            raise ObservableError("%s has no %s.energy (does it have the collection %s? set "
+                                  "observables.%s.%s)" % (branches.path, collection, collection,
+                                                          observable, setting))
+    ancestors = set(abs(code) for code in settings.get("ancestor_pdg") or [])
+
+    def momenta(collection):
+        return np.stack([_flat(branches, "%s.momentum.%s" % (collection, c), start, stop)[0]
+                         for c in "xyz"], axis=1).astype(np.float64)
+
+    # The MC particles, with their daughters (and parents, for their ancestors)
+    pdg, mc_offsets = _flat(branches, mc + ".PDG", start, stop)
+    status = _flat(branches, mc + ".generatorStatus", start, stop)[0]
+    mc_momentum = momenta(mc)
+    mc_mass = _flat(branches, mc + ".mass", start, stop)[0].astype(np.float64)
+    daughters = _relation(branches, mc, "daughters", start, stop, observable)
+    parents = _relation(branches, mc, "parents", start, stop, observable) if ancestors else None
+
+    # The candidates, and the reconstructed particles they are made of
+    energy, candidate_offsets = _flat(branches, candidates + ".energy", start, stop)
+    momentum = momenta(candidates)
+    made_of = _relation(branches, candidates, "particles", start, stop, observable)
+    _points_to(branches, made_of[4], particles, "the particles of %s" % candidates, observable,
+               "particle_collection")
+    particle_energy, particle_offsets = _flat(branches, particles + ".energy", start, stop)
+    particle_momentum = momenta(particles)
+
+    # The links between them, each way
+    links = {}
+    for key in ("link_collection", "reverse_link_collection"):
+        if settings.get(key):
+            weight, reco, truth, offsets, ids = _links(branches, settings[key], start, stop,
+                                                       observable, key)
+            for end, target in zip(ids, (particles, mc)):
+                _points_to(branches, end, target, "the links %s" % settings[key], observable, key)
+            links[key] = (weight, reco, truth, offsets)
+
+    def related(relation, event, particle):
+        """The indices (within the event) of the objects one is related to."""
+        starts, ends, indices, offsets, _ = relation
+        return indices[offsets[event] + starts[particle]:offsets[event] + ends[particle]]
+
+    def descends(event, first, local):
+        """Whether an MC particle has an ancestor of the PDG codes asked for."""
+        seen, todo = set(), [local]
+        while todo:
+            for parent in related(parents, event, first + todo.pop()):
+                parent = int(parent)
+                if parent not in seen:
+                    seen.add(parent)
+                    if abs(int(pdg[first + parent])) in ancestors:
+                        return True
+                    todo.append(parent)
+        return False
+
+    def event_links(key, event):
+        weight, reco, truth, offsets = links[key]
+        span = slice(offsets[event], offsets[event + 1])
+        return zip(weight[span].tolist(), reco[span].tolist(), truth[span].tolist())
+
+    values = dict((what, []) for what in PI0_CANDIDATE_ITEMS if what not in ("theta", "phi"))
+    true_directions = []
+    counts = np.diff(candidate_offsets)
+    n_true = np.zeros(n, dtype=np.int64)
+    for event in range(n):
+        # The MC pi0s of the event: their energies and momenta, and the place
+        # of the pi0 of each of their photons
+        first = int(mc_offsets[event])
+        slots, truth = {}, []
+        for local in np.flatnonzero(np.abs(pdg[first:mc_offsets[event + 1]]) == PI0):
+            particle = first + int(local)
+            if status[particle] == 0:  # made by the simulation, not the generator
+                continue
+            photons = [int(d) for d in related(daughters, event, particle)]
+            if len(photons) != 2 or any(int(pdg[first + d]) != PHOTON for d in photons):
+                continue
+            if ancestors and not descends(event, first, int(local)):
+                continue
+            for photon in photons:
+                slots[photon] = len(truth)
+            p = mc_momentum[particle]
+            truth.append((float(np.sqrt(p @ p + mc_mass[particle] ** 2)), p))
+        n_true[event] = len(truth)
+        best_mc = best_links(event_links("link_collection", event), by_reco=True)
+        best_reco = (best_links(event_links("reverse_link_collection", event), by_reco=False)
+                     if "reverse_link_collection" in links else None)
+
+        # Its candidates
+        base = int(particle_offsets[event])
+        for candidate in range(int(candidate_offsets[event]), int(candidate_offsets[event + 1])):
+            photons = [int(p) for p in related(made_of, event, candidate)]
+            mass = photon_energy = float("nan")
+            match, slot = FAKE, -1
+            if len(photons) == 2:
+                e1, e2 = (float(particle_energy[base + p]) for p in photons)
+                p1, p2 = (particle_momentum[base + p] for p in photons)
+                norms = float(np.linalg.norm(p1) * np.linalg.norm(p2))
+                if norms > 0:
+                    cos = float(p1 @ p2) / norms
+                    mass = float(np.sqrt(max(2 * e1 * e2 * (1 - cos), 0.0)))
+                photon_energy = e1 + e2
+                match, slot = match_pi0(photons, (e1, e2), best_mc, best_reco, slots)
+            values["mass"].append(mass)
+            values["energy"].append(float(energy[candidate]))
+            values["photon_energy"].append(photon_energy)
+            values["match"].append(match)
+            values["true_index"].append(slot)
+            values["true_energy"].append(truth[slot][0] if slot >= 0 else float("nan"))
+            true_directions.append(truth[slot][1] if slot >= 0 else np.full(3, np.nan))
+
+    result = {"n_candidates": counts.astype(np.int64), "n_true": n_true}
+    for what, stored in values.items():
+        result[what] = np.array(stored, dtype=np.int64 if what in ("match", "true_index")
+                                else np.float64)
+    result["theta"], result["phi"] = polar_angles(momentum.reshape(-1, 3))
+    result["true_theta"], result["true_phi"] = polar_angles(
+        np.array(true_directions, dtype=np.float64).reshape(-1, 3))
+    return result
+
+
 # The observables of each event as a whole, stored per event rather than in
 # bins, as the figures need every event: observable: (what checks its
 # settings, what is stored of each event (given the settings), and what
@@ -502,7 +832,12 @@ PER_EVENT = {
     "energy": (check_particles, energy_items, measure_energy),
     "intrinsic_angle": (check_angles, angle_items, measure_angles),
     "photon_separation": (check_separation, separation_items, measure_separation),
+    "pi0": (check_pi0, pi0_items, measure_pi0),
 }
+# Of those, the observables that store some of their items per object of an
+# event rather than per event (e.g. per pi0 candidate): observable: (the item
+# per event giving each event's number of them, the items stored per object)
+PER_CANDIDATE = {"pi0": ("n_candidates", PI0_CANDIDATE_ITEMS)}
 
 
 def event_items(name, settings):
@@ -513,7 +848,9 @@ def event_items(name, settings):
 # The settings of each observable that only change its figures, not what is
 # measured, so changing them only needs plotting again (./plot_observables.sh)
 DRAWING = {"intrinsic_angle": ("max_residual", "n_bins"),
-           "photon_separation": ("max_separation", "n_bins")}
+           "photon_separation": ("max_separation", "n_bins"),
+           "pi0": ("reconstructed_energy", "mass_range", "mass_bins", "energy_range",
+                   "energy_bins")}
 
 
 def observable_settings(name, settings):
@@ -546,6 +883,21 @@ def check_observables(config):
             if scenario not in scenarios:
                 scenarios.append(scenario)
     return observables, scenarios
+
+
+def restrict(observables, scenarios):
+    """The observables measured on these scenarios alone, and the scenarios
+    they are then measured on, in order: each observable with only those of
+    its scenarios, and without those left with none (the observables of a
+    scenario that is disabled, or whose inputs aren't there to run it)."""
+    kept, measured = {}, []
+    for name, settings in observables.items():
+        on = [scenario for scenario in settings["scenarios"] if scenario in scenarios]
+        if not on:
+            continue
+        kept[name] = dict(settings, scenarios=on)
+        measured += [scenario for scenario in on if scenario not in measured]
+    return kept, measured
 
 
 # ---------------------------------------------------------------------------
@@ -656,6 +1008,26 @@ class Branches:
         for key in self.tree.keys(recursive=True):
             self.keys.setdefault(key.split("/")[-1], key)
         self.entries = self.tree.num_entries
+        self._ids = None
+
+    def collection_ids(self):
+        """{collection: its collection ID} from podio's table of the events'
+        collections in the file's metadata, or {} if it has none that can be
+        read (files not written by podio, e.g. the tests')."""
+        if self._ids is None:
+            self._ids = {}
+            try:
+                tree = self.file["podio_metadata"]
+                keys = dict((key.split("/")[-1], key) for key in tree.keys(recursive=True))
+                ids = keys.get("events___CollectionTypeInfo.collectionID")
+                names = keys.get("events___CollectionTypeInfo.name")
+                if ids and names:
+                    found = tree.arrays([ids, names], library="np", entry_stop=1)
+                    self._ids = dict((str(name), int(value)) for name, value
+                                     in zip(found[names][0], found[ids][0]))
+            except Exception:  # no metadata, or another podio's
+                self._ids = {}
+        return self._ids
 
     def jagged(self, name, start, stop):
         if name not in self.keys:
@@ -936,8 +1308,12 @@ def measure_file(path, observables, profiles, simulator, cache):
             for name, settings in by_event.items():
                 measured = PER_EVENT[name][2](name, settings, branches, start, stop, primary,
                                               hits)
+                # What is stored per object of an event (e.g. per pi0
+                # candidate) is kept of the events kept, as the rest is
+                count, per_object = PER_CANDIDATE.get(name, (None, ()))
+                kept = np.repeat(has, measured[count]) if count else None
                 for what, stored in events[name].items():
-                    stored.append(measured[what][has])
+                    stored.append(measured[what][kept if what in per_object else has])
             for collection, event, energy, position, cell_id in hits:
                 values = {}
                 if "radius" in by_collection[collection]:
