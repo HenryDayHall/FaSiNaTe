@@ -277,12 +277,13 @@ class Bench(object):
         _write(env_file, ENV_FILE.format(stamp=stamp, ddml=ddml, tmp=tmp, bin=self.bin,
                                          python=os.path.join(FAKES, "python")))
 
-    def add_model(self, name, text=None):
-        """Put the repository's models/<name>.yaml (or text) in the copy's
-        models/, with fake weights in the fake DDML build, whose md5 sum it is
-        then given."""
+    def add_model(self, name, text=None, folder="models"):
+        """Put the repository's <folder>/<name>.yaml (models/ unless said, or
+        unused_models/ for a model set aside), or text, in the copy's models/,
+        with fake weights in the fake DDML build, whose md5 sum it is then
+        given."""
         if text is None:
-            with open(os.path.join(REPO, "models", name + ".yaml")) as stream:
+            with open(os.path.join(REPO, folder, name + ".yaml")) as stream:
                 text = stream.read()
         weights = (yaml.safe_load(text).get("ddml") or {}).get("weights")
         if weights:

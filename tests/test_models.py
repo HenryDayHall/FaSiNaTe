@@ -20,6 +20,10 @@ from ddml_bench import ddml_configs, models
 
 REPO_MODELS = sorted(name[:-len(".yaml")] for name in os.listdir(os.path.join(REPO, "models"))
                      if name.endswith(".yaml"))
+# Models set aside for now (unused_models/), whose descriptions some tests still
+# use: the closure test of caloclouds3 (caloclouds3_libtorch), and a model
+# trained on other particles than DDML gives it (par04_vae_onnx)
+UNUSED_MODELS = os.path.join(REPO, "unused_models")
 INPUTS = ["p22_th43-137_ph79-109_en20_seed0_ip_surface",
           "p22_th43-137_ph79-109_en80_seed1_ip_surface"]
 DI_PHOTON_SIMULATIONS = ["diphoton_en20_sep90_x0_z70_r10_seed0_simseed%d" % seed
@@ -66,11 +70,10 @@ def test_every_model_in_the_repository_is_described_whole():
             if "plugin_properties" in entry and "ModelPath" in entry["plugin_properties"]:
                 # Relative to DDML's scripts/ folder, where ddsim runs
                 assert entry["plugin_properties"]["ModelPath"] == "../" + model["weights"]
+    # The models with closure tests (caloclouds3_libtorch, gan_onnx) are set
+    # aside in unused_models/ for now
     closures = dict((m["name"], m["closure"]) for m in described if m["closure"])
-    # Statistical both: CaloClouds3 draws from LibTorch's generator, which isn't
-    # seeded by ddsim, and ONNX Runtime and LibTorch round differently
-    assert closures == {"caloclouds3_libtorch": {"of": "caloclouds3", "identical": False},
-                        "gan_onnx": {"of": "gan_libtorch", "identical": False}}
+    assert closures == {}
 
 
 def describe(tmp_path, monkeypatch, ddml=None, **settings):
@@ -295,7 +298,7 @@ def test_every_model_of_the_repository_runs_in_ddsim(bench):
 
 
 def test_the_environment_check_finds_what_a_model_gets_wrong(bench):
-    text = open(os.path.join(REPO, "models", "caloclouds3_libtorch.yaml")).read()
+    text = open(os.path.join(UNUSED_MODELS, "caloclouds3_libtorch.yaml")).read()
     assert "    - preset: CC3_BARREL\n" in text and "ModelPath: ../models/CC3_SF_2A.pt" in text
     bench.add_model("other_weights", text.replace("ModelPath: ../models/CC3_SF_2A.pt",
                                                   "ModelPath: ../models/CC3_paper_checkpoint.pt"))
@@ -308,7 +311,7 @@ def test_the_environment_check_finds_what_a_model_gets_wrong(bench):
     bench.add_model("no_preset", text.replace("    - preset: CC3_BARREL\n",
                                               "    - preset: CC3_NOPE\n"))
     # Given other particles on purpose, and saying so
-    bench.add_model("par04_vae_onnx")
+    bench.add_model("par04_vae_onnx", folder="unused_models")
     bench.run("generate_input.sh", "single_photon")
     status, output = bench.run("simulate_models.sh", "--dry-run", "-n", "1", "-s",
                                "single_photon", check=False)
@@ -331,7 +334,8 @@ def test_the_environment_check_finds_what_a_model_gets_wrong(bench):
 
 
 def test_a_compiled_model_is_its_python_twins_closure_test(bench):
-    bench.add_model("caloclouds3_libtorch")
+    # Set aside in unused_models/ for now, but its closure test still runs
+    bench.add_model("caloclouds3_libtorch", folder="unused_models")
     status, output = bench.run("pipeline.sh")
     # It ran with its configuration, from the steering file for them
     with open(bench.path("sim_output", "di_photon", "caloclouds3_libtorch",
