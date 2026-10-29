@@ -108,7 +108,8 @@ def ddml_build_stamp(config):
     image = flat["container.image"]
     values = [flat[key] for key in (
         "ddml.repository", "ddml.branch", "ddml.commit", "ddml.embedded_python",
-        "ddml.download_models", "ddml.cmake_args", "key4hep.setup_script",
+        "ddml.download_models", "ddml.extra_models", "ddml.models_url", "ddml.cmake_args",
+        "key4hep.setup_script",
         "key4hep.release", "container.enabled")]
     values.append(image if "://" in image else os.path.basename(image))
     text = json.dumps(values, default=_to_str)

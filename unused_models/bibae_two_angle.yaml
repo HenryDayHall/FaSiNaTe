@@ -1,0 +1,71 @@
+# BIB-AE with two angles: a Bounded-Information-Bottleneck autoencoder of photon
+# showers in the ILD Si-W ECal barrel, on a regular grid, conditioned on the
+# energy and both angles of incidence, through DDML's LibTorch backend: DDML's
+# preset BIBAE_BARREL as it is (weights: DDML's
+# models/BIBAE_Two_Angle_Full_PP_cut.pt).
+#
+# simulate_models.sh simulates the benchmark scenarios with every model in this
+# folder; the file name (bibae_two_angle) names the model and its output
+# folders.
+#
+# The training ranges are from P. McKeown's talk at the ILD meeting of December
+# 2023 (https://agenda.linearcollider.org/event/10243/contributions/53767/);
+# see also his thesis, DESY-THESIS-2024 (doi:10.3204/PUBDB-2024-01825). The
+# grid is DDML's (RegularGridTwoAngleBIBAEModel).
+
+name: BIB-AE (two angles)
+
+# The energy of each cell of a fixed grid, 30 layers of 30 x 49 cells of
+# 5.09 x 5.09 mm^2, which DDML centres where the photon enters and deposits
+# cell by cell in the real detector.
+representation: regular_grid
+
+# Factors fixed when the model was trained. The model has no input for them, so
+# it is only valid where they hold.
+fixed_at_training:
+  detector:
+    name: ILD_l5_o1_v02
+    calorimeter: EcalBarrel
+    # The training showers were simulated in a regular copy of the ILD ECal
+    # (the talk above). simulate_models.sh simulates in this detector: the path
+    # is relative to k4geo ($k4geo_DIR) unless absolute.
+    compact_file: ILD/compact/ILD_l5_o1_v02/ILD_l5_o1_v02.xml
+  particle:
+    name: gamma  # Geant4's name, which DDML uses
+    pdg: 22
+
+# Factors given to the model as context for each shower.
+context:
+  energy:
+    unit: GeV
+    training_range: [5, 126]
+  direction:
+    # DDML passes the polar and azimuthal angles of incidence on the stave
+    # (RegularGridTwoAngleBIBAEModel's conditioning angles); the ranges are as
+    # the talk gives them.
+    unit: deg
+    training_range:
+      theta: [30, 95]
+      phi: [65, 95]
+
+# How simulate_models.sh runs the model with the DDML build from
+# scripts/build_ddml.sh (DDML's python-inference branch).
+ddml:
+  # Presets from DDML's python/ddml/configs.py, each passed to ddsim with
+  # --ml-model. BIBAE_BARREL is the two-angle BIB-AE plugin compiled against
+  # LibTorch (RegularGridTwoAngleBIBAEModelPolyhedraBarrelTorchModel), loading
+  # ../models/BIBAE_Two_Angle_Full_PP_cut.pt from DDML's scripts/ folder, for
+  # photons above 10 GeV entering the ECal barrel, except near the ends of the
+  # barrel and the joins between its staves (the trigger CaloClouds3's plugin
+  # has too). Only the barrel: BIBAE_ENDCAP would add the endcaps.
+  presets: [BIBAE_BARREL]
+  # The weights the preset loads, relative to the DDML clone (building DDML
+  # downloads them), and their md5 sum, which simulate_models.sh checks.
+  weights: models/BIBAE_Two_Angle_Full_PP_cut.pt
+  weights_md5: "0b99c7e0baa0f3af473a5943c79b8688"
+
+# How plot_observables.sh draws this model: a colour and a line style
+# (matplotlib's) of its own.
+plot:
+  color: "#2a9a3a"
+  linestyle: ":"

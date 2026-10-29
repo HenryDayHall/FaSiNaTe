@@ -1,0 +1,90 @@
+# Par04 VAE: the variational autoencoder of Geant4's example Par04 (DDML's
+# models/Generator.onnx), through DDML's ONNX Runtime backend. It was trained
+# on electron showers in Par04's own calorimeter, a cylinder of tungsten and
+# silicon layers read out in cylindrical cells, not in ILD, so here it tests
+# DDML's ONNX path through the whole chain rather than being a surrogate for
+# ILD's ECal. DDML has no preset for it, so its DDML model configuration is
+# written out below.
+#
+# simulate_models.sh simulates the benchmark scenarios with every model in this
+# folder; the file name (par04_vae_onnx) names the model and its output
+# folders.
+#
+# The training details are from Geant4's documentation of the example,
+# https://geant4.web.cern.ch/documentation/dev/bfad_html/ForApplicationDevelopers/Examples/extended/Par04.html
+
+name: Par04 VAE (ONNX)
+
+# The energy of each cell of a cylindrical grid about the shower's axis, 45
+# layers of 18 rings (2.325 mm apart) of 50 sectors, which DDML places in
+# ILD's layers.
+representation: cylindrical_grid
+
+# Factors fixed when the model was trained. The model has no input for them, so
+# it is only valid where they hold.
+fixed_at_training:
+  detector:
+    # Par04's calorimeter: 90 layers of 1.4 mm of tungsten and 0.3 mm of
+    # silicon, an 80 cm cylinder 2 m long. simulate_models.sh simulates in ILD,
+    # as for the other models: the path is relative to k4geo ($k4geo_DIR)
+    # unless absolute.
+    name: Geant4 example Par04
+    calorimeter: Par04 silicon-tungsten cylinder
+    compact_file: ILD/compact/ILD_l5_o1_v02/ILD_l5_o1_v02.xml
+  particle:
+    name: e-  # Geant4's name, which DDML uses
+    pdg: 11
+
+# Factors given to the model as context for each shower.
+context:
+  energy:
+    unit: GeV
+    # In powers of 2
+    training_range: [1, 1024]
+  direction:
+    # In training, the polar angle of the electron's direction, from the
+    # cylinder's axis (90 degrees perpendicular to it, at normal incidence on
+    # the layers), in steps of 10 degrees. DDML (Par04ExampleVAE.cc) passes
+    # the angle from the normal to ILD's layers instead, 0 at normal
+    # incidence, so the model is asked for angles outside its training.
+    unit: deg
+    training_range:
+      frame: local
+      theta: [50, 90]
+
+# How simulate_models.sh runs the model with the DDML build from
+# scripts/build_ddml.sh (DDML's python-inference branch).
+ddml:
+  # A DDML model configuration written out (ddml_bench/ddml_configs.py), as
+  # DDML's earlier steering file set the Par04 VAE up: its plugin compiled
+  # against ONNX Runtime, with its own grid (Par04ExampleVAE; the 10 numbers of
+  # the latent vector are drawn from Geant4's random numbers), loading
+  # ../models/Generator.onnx (relative to DDML's scripts/ folder, where ddsim
+  # runs), for photons above 10 GeV entering the ECal barrel, as for the other
+  # models (DDML's earlier steering file gave it electrons and positrons too).
+  # DDML places each layer of its shower where the photon's line of flight
+  # crosses it (correct_angles). Its plugin has no trigger of its own leaving
+  # out the ends of the barrel and the joins between its staves.
+  model_configs:
+    - plugin: Par04ExampleVAEPolyhedraBarrelONNXModel/BarrelModelONNX
+      geometry: ILD_BARREL
+      plugin_properties:
+        ModelPath: ../models/Generator.onnx
+        OptimizeFlag: 1
+        IntraOpNumThreads: 1
+      applicable_particles: [gamma]
+      triggers: {gamma: 10}
+      correct_angles: true
+  # The particles DDML gives the model: photons, though it was trained on
+  # electrons, as the benchmark's scenarios are of photons.
+  particles: [gamma]
+  # The weights, in the DDML repository, and their md5 sum, which
+  # simulate_models.sh checks, as it checks that ModelPath is this file.
+  weights: models/Generator.onnx
+  weights_md5: "cacd07c24b704decca28de990850287e"
+
+# How plot_observables.sh draws this model: a colour and a line style
+# (matplotlib's: here a dash pattern, offset and lengths) of its own.
+plot:
+  color: "#b8860b"
+  linestyle: [0, [6, 2, 2, 2, 2, 2]]

@@ -44,8 +44,8 @@ settings of each observable in it, the reconstructions it was measured from,
 with their ddsim seeds and events, the inputs those were simulated from, with
 their sha256 (derived_from), the software they were made with, from the logs
 of those simulations and reconstructions (stack), a model's description from
-models/ (model: its presets, detector and weights with their md5 sum), and
-whether it is up to date
+models/ (model: its presets or DDML model configurations, detector and
+weights with their md5 sum), and whether it is up to date
 with this configuration, as the observables stage decides; the essential
 record's stack is what all of them should share (Key4hep, DDML, ILDConfig,
 the patches, the reconstruction's arguments and the detector), with a
@@ -80,6 +80,7 @@ import tarfile
 import tempfile
 
 from .config import REPO_DIR
+from .ddml_configs import OPTION as ML_CONFIG, canonical
 from .layout import (INPUT_DIR, INPUT_FOLDERS, OBSERVABLES_DIR, REC_DIR, REC_SUFFIX, SEED_TAG,
                      SEP, SIM_DIR, input_stem)
 
@@ -227,9 +228,12 @@ def read_log(path):
     """{field: value} of a log's header, and what its command says: the
     Key4hep release, the DDML commit (simulations), the ILDConfig commit and
     the patches (reconstructions), the seed, the detector, the models'
-    presets and the reconstruction's arguments (but --usingParticleGun, which
+    presets or DDML model configurations (--ml-config, as one string,
+    ddml_configs.canonical()) 
+    and the reconstruction's arguments (but --usingParticleGun, which
     the stage gives the particle guns' scenarios and not the physics
-    samples'). {} without a log."""
+    samples').
+    {} without a log."""
     try:
         with open(path, errors="replace") as stream:
             lines = [stream.readline() for _ in range(40)]
@@ -262,13 +266,13 @@ def read_log(path):
 
 
 def _from_command(args):
-    found, presets, extra = {}, [], []
+    found, presets, configs, extra = {}, [], [], []
     rec = any(os.path.basename(a) == "k4run" for a in args[:1])
     i = 0
     while i < len(args):
         arg = args[i]
         key, _, value = arg.partition("=")
-        if key in ("--compactFile", "--steeringFile", "--ml-model") and not value \
+        if key in ("--compactFile", "--steeringFile", "--ml-model", ML_CONFIG) and not value \
                 and i + 1 < len(args):
             value = args[i + 1]
             i += 1
@@ -279,11 +283,18 @@ def _from_command(args):
             found["steering"] = os.path.basename(value)
         elif key == "--ml-model":
             presets.append(value)
+        elif key == ML_CONFIG:
+            try:
+                configs.append(json.loads(value))
+            except ValueError:
+                configs.append(value)
         elif rec and i > 1 and key not in _MANAGED and key not in _BY_SCENARIO:
             extra.append(arg)
         i += 1
     if presets:
         found["presets"] = " ".join(presets)
+    if configs:
+        found["model_configs"] = canonical(configs)
     if rec:
         found["reconstruction_args"] = " ".join(extra)
     return found
@@ -485,8 +496,9 @@ def _plan_in(data_dir):
 
 def described_models():
     """{model: what of models/<model>.yaml decides its showers}, for the
-    measurements of the models: the presets, the detector and the weights
-    (with their md5 sum), which fetching published measurements checks."""
+    measurements of the models: the presets or DDML model configurations, the
+    detector and the weights (with their md5 sum), which fetching published
+    measurements checks."""
     try:
         from .models import load_models
         models = load_models()
@@ -495,6 +507,7 @@ def described_models():
             "them" % error)
         return {}
     return dict((m["name"], {"config": m["config"], "presets": list(m["presets"]),
+                             "model_configs": list(m["model_configs"]),
                              "compact_file": m["compact_file"], "weights": m["weights"],
                              "weights_md5": m["weights_md5"]}) for m in models)
 

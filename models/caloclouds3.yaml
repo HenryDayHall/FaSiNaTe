@@ -60,7 +60,9 @@ ddml:
   # The weights that wrapper loads, relative to the DDML clone (building DDML
   # downloads them), and their md5 sum, which simulate_models.sh checks. This is
   # not the checkpoint published with the paper: DDML's LibTorch preset,
-  # CC3_BARREL, loads that one, models/CC3_paper_checkpoint.pt.
+  # CC3_BARREL, loads that one, models/CC3_paper_checkpoint.pt
+  # (models/caloclouds3_paper.yaml). models/caloclouds3_libtorch.yaml runs these
+  # weights with that LibTorch plugin instead, as this model's closure test.
   weights: models/CC3_SF_2A.pt
   weights_md5: "2ad56d91577686071a20278825d48c7e"
 

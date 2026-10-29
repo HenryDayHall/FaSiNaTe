@@ -22,14 +22,21 @@
 #                      paths.data_dir)
 #   -o, --out DIR      where the figures go (default: <dir>/plots)
 #       --format LIST  figure formats, e.g. pdf,png (the default)
+#       --reference S  compare the others with the simulator S instead of
+#                      Geant4
+#       --no-closure   leave out the closure tests
 #   -h, --help         show this help
 #
 # Each figure is <observable>_<profile>__<scenario>.<format>, e.g.
 # radial_profile_r100__single_photon.pdf, energy_resolution__single_photon.pdf
 # or intrinsic_angle_theta_top4__single_photon.pdf;
 # the metrics go to metrics.csv next to them, and the fitted parameters of the
-# energy figures to fits.csv. It runs with this shell's python3 if that has
-# numpy and matplotlib, and otherwise in the environment from setup.sh.
+# energy figures to fits.csv. A model that is the closure test of another
+# (closure in models/<model>.yaml: the same model through another DDML
+# backend) is also drawn against that one alone, in closure/<model>/, and
+# closure.csv says for each scenario whether the two measured the same,
+# number for number. It runs with this shell's python3 if that has numpy and
+# matplotlib, and otherwise in the environment from setup.sh.
 
 if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
     echo "plot_observables.sh exits when something fails, so run it instead of sourcing it" >&2
@@ -63,6 +70,12 @@ while (($#)); do
             args+=(--format "$2")
             shift 2
             ;;
+        --reference)
+            (($# >= 2)) || die "--reference needs a simulator"
+            args+=(--reference "$2")
+            shift 2
+            ;;
+        --no-closure) args+=(--no-closure); shift ;;
         -h | --help) usage; exit 0 ;;
         -*) die "unknown option '$1' (see --help)" ;;
         *) args+=("$1"); shift ;;
