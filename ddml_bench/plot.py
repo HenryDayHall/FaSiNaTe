@@ -1103,11 +1103,11 @@ def separation_figures(observable, scenario, simulators, reference, settings, ou
 PI0_LABELS = {
     "mass": r"Reconstructed $\pi^0$ mass $M_{\gamma\gamma}$ [GeV]",
     "energy": r"$E_{\pi^0}^\mathrm{reco} - E_{\pi^0}^\mathrm{MC}$ [GeV]",
-    "reco_catigories": r"Reconstructed $\pi^0$ categories",
+    "reco_categories": r"Reconstructed $\pi^0$ categories",
 }
 PI0_YLABEL = {"mass": r"Fraction of good $\pi^0$s per GeV",
               "energy": r"Fraction of good $\pi^0$s per GeV",
-              "reco_catigories": r"Fraction of $\pi^0$s",
+              "reco_categories": r"Fraction of $\pi^0$s",
 }
 
 
@@ -1169,12 +1169,15 @@ def pi0_reconstruction_categories(simulator, observable, scenario):
     import numpy as np
     stored = simulator.stored(observable, scenario)
     n_reco = np.asarray(stored["n_candidates"], dtype=np.int64)
-    n_good = np.sum(np.asarray(stored["match"]) == measure.GOOD, axis=-1).astype(np.int64)
-    n_confused = np.sum(np.asarray(stored["match"]) == measure.CONFUSED, axis=-1).astype(np.int64)
+    n_events = len(n_reco)
+    event = np.repeat(np.arange(n_events), n_reco)
+    match = np.asarray(stored["match"])
+    n_good = np.bincount(event[match == measure.GOOD], minlength=n_events)
+    n_confused = np.bincount(event[match == measure.CONFUSED], minlength=n_events)
     n_fake = n_reco - n_good - n_confused
     n_true = np.asarray(stored["n_true"], dtype=np.int64)
-    n_missed = n_true - n_good
-    seeds = np.repeat(event_seeds(simulator, scenario, len(n_true)), n_true)
+    n_missed = n_true - n_good - n_confused
+    seeds = event_seeds(simulator, scenario, n_events)
     return ({"n_reco": n_reco, "n_good": n_good, "n_confused": n_confused, "n_fake": n_fake,
              "n_missed": n_missed}, seeds)
 
