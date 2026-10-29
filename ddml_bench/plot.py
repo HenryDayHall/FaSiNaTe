@@ -1103,8 +1103,14 @@ def separation_figures(observable, scenario, simulators, reference, settings, ou
 PI0_LABELS = {
     "mass": r"Reconstructed $\pi^0$ mass $M_{\gamma\gamma}$ [GeV]",
     "energy": r"$E_{\pi^0}^\mathrm{reco} - E_{\pi^0}^\mathrm{MC}$ [GeV]",
+    "reco_catigories": r"Reconstructed $\pi^0$ categories",
 }
-PI0_YLABEL = r"Fraction of good $\pi^0$s per GeV"
+PI0_YLABEL = {"mass": r"Fraction of good $\pi^0$s per GeV",
+              "energy": r"Fraction of good $\pi^0$s per GeV",
+              "reco_catigories": r"Fraction of $\pi^0$s",
+}
+
+
 
 
 def seed_histograms(values, seeds, edges):
@@ -1158,6 +1164,19 @@ def good_pi0s(simulator, observable, scenario, energy):
     return ({"mass": np.asarray(stored["mass"])[good],
              "energy": (np.asarray(stored[energy]) - np.asarray(stored["true_energy"]))[good]},
             seeds[good])
+
+def pi0_reconstruction_categories(simulator, observable, scenario):
+    import numpy as np
+    stored = simulator.stored(observable, scenario)
+    n_reco = np.asarray(stored["n_candidates"], dtype=np.int64)
+    n_good = np.sum(np.asarray(stored["match"]) == measure.GOOD, axis=-1).astype(np.int64)
+    n_confused = np.sum(np.asarray(stored["match"]) == measure.CONFUSED, axis=-1).astype(np.int64)
+    n_fake = n_reco - n_good - n_confused
+    n_true = np.asarray(stored["n_true"], dtype=np.int64)
+    n_missed = n_true - n_good
+    seeds = np.repeat(event_seeds(simulator, scenario, len(n_true)), n_true)
+    return ({"n_reco": n_reco, "n_good": n_good, "n_confused": n_confused, "n_fake": n_fake,
+             "n_missed": n_missed}, seeds)
 
 
 def pi0_figures(observable, scenario, simulators, reference, settings, out, suffix, formats):
@@ -1234,7 +1253,7 @@ def pi0_figures(observable, scenario, simulators, reference, settings, out, suff
             note += "\n%.2g%% outside the bins" % (100 * shown["outside"])
         base = figure_base(out, observable, figure, scenario, suffix)
         plot_profile(observable, scenario, figure, curves, reference if ref is not None else None,
-                     None, base, formats, xlabel=PI0_LABELS[figure], ylabel=PI0_YLABEL,
+                     None, base, formats, xlabel=PI0_LABELS[figure], ylabel=PI0_YLABEL[figure],
                      note=note, trim=False, room=True, metric_texts=texts)
         say("%s: %s" % (", ".join(c[0].label for c in curves),
                         ", ".join("%s.%s" % (os.path.basename(base), f) for f in formats)))
