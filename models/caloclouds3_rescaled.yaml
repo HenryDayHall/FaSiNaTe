@@ -1,8 +1,11 @@
-# CaloClouds3 (CC3): a generative model of photon showers in the ILD Si-W ECal
-# barrel, run inside ddsim with DDML's embedded-Python inference.
+# CaloClouds3 (CC3), rescaled: the checkpoint of the CaloClouds3 paper, run
+# inside ddsim with DDML's embedded-Python inference by this repository's own
+# inference code, models/caloclouds3_rescaled.py, which multiplies the energy
+# of every point of a shower by energy_rescale.
 #
 # simulate_models.sh simulates the benchmark scenarios with every model in this
-# folder; the file name (caloclouds3) names the model and its output folders.
+# folder; the file name (caloclouds3_rescaled) names the model and its output
+# folders, and the inference code is the module of the same name.
 #
 # The training details are from the CaloClouds3 paper, arXiv:2511.01460, and
 # the benchmark paper, "A First Full Physics Benchmark for Highly Granular
@@ -15,8 +18,12 @@ name: CaloClouds3 (rescaled)
 # point in the cell of the real detector it falls in.
 representation: point_cloud
 
-# Factor by which the energy coming out of the model is multipled
+# The factor that models/caloclouds3_rescaled.py multiplies the energy of every
+# point the model makes by. The module reads it from here, so changing it
+# changes the model's description, which each simulation's log records (as its
+# sha256), and the manifest of published measurements with it.
 energy_rescale: 1.0065416493
+
 # Factors fixed when the model was trained. The model has no input for them, so
 # it is only valid where they hold.
 fixed_at_training:
@@ -54,30 +61,31 @@ context:
 # How simulate_models.sh runs the model with the DDML build from
 # scripts/build_ddml.sh (DDML's python-inference branch).
 ddml:
-  # Use inference code from the models folder of this repo, not DDML's
-  # this requires adding the models folder of this repo to PythonPath
-  # for the ddml call.
-  local_inference: true
-  # The name of the inference script, in thi models folder, without an extention
-  # This script will have a 
-  PythonModule: caloclouds3_rescaled
-  # Presets from DDML's python/ddml/configs.py, each passed to ddsim with
-  # --ml-model. This one gives photons above 10 GeV entering the ECal barrel to
-  # python/examples/cc3_sf_2a_wrapper.py, except near the ends of the barrel and
-  # the joins between its staves; Geant4 simulates everything else.
-  presets: [CC3_BARREL_PY_INTERFACE]
-  # The weights that wrapper loads, relative to the DDML clone (building DDML
-  # downloads them), and their md5 sum, which simulate_models.sh checks. This is
-  # not the checkpoint published with the paper: DDML's LibTorch preset,
-  # CC3_BARREL, loads that one, models/CC3_paper_checkpoint.pt
-  # (models/caloclouds3_paper.yaml). models/caloclouds3_libtorch.yaml runs these
-  # weights with that LibTorch plugin instead, as this model's closure test.
+  # A DDML model configuration written out (ddml_bench/ddml_configs.py): DDML's
+  # preset CC3_BARREL_PY_INTERFACE, which gives photons above 10 GeV entering
+  # the ECal barrel to DDML's embedded-Python plugin, except near the ends of
+  # the barrel and the joins between its staves (Geant4 simulates everything
+  # else), with the plugin running models/caloclouds3_rescaled.py in place of
+  # DDML's python/examples/cc3_sf_2a_wrapper.py. scripts/ddsim_steer_models.py,
+  # which runs the configurations, puts models/ first on ddsim's Python path,
+  # so the plugin imports the module from there.
+  model_configs:
+    - preset: CC3_BARREL_PY_INTERFACE
+      plugin_properties:
+        PythonModule: caloclouds3_rescaled
+  # The weights the module loads (it reads them from here), relative to the
+  # DDML clone (building DDML downloads them), and their md5 sum, which
+  # simulate_models.sh checks: the checkpoint published with the CaloClouds3
+  # paper, which DDML's LibTorch preset CC3_BARREL loads too
+  # (models/caloclouds3_paper.yaml).
   weights: models/CC3_paper_checkpoint.pt
-  weights_md5: "2ad56d91577686071a20278825d48c7e"
+  weights_md5: "efa35d840d739be8047109813d80c474"
 
 # How plot_observables.sh draws this model: a colour and a line style
-# (matplotlib's), as in the benchmark paper. Every model needs a line style of
-# its own, as well as a colour, so the curves can be told apart without colour.
+# (matplotlib's: here a dash pattern, offset and lengths), as in the benchmark
+# paper. Every model needs a line style of its own, as well as a colour, so the
+# curves can be told apart without colour; this blue is a lighter one of
+# caloclouds3_paper's, whose weights it runs.
 plot:
-  color: "#e8710a"
-  linestyle: "-"
+  color: "#6baed6"
+  linestyle: [0, [5, 5]]

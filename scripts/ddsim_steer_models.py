@@ -16,6 +16,13 @@ DDML preset to start from and the fields of DDML's ModelConfig to set
 and --record-calo-entry still work as with DDML's steering file. The
 configurations made are printed, so the log says what ran.
 
+A configuration can have one of DDML's embedded-Python plugins run a module of
+models/, the model's own inference code (plugin_properties PythonModule, e.g.
+models/caloclouds3_rescaled.py). The plugin imports its module in ddsim's own
+interpreter as Geant4 sets it up, so models/ goes first on the Python path
+here, ahead of DDML's modules, as ddml_bench.models.python_module_file() and
+the models stage's check of the environment find them.
+
 ddsim runs a steering file with exec() and separate global and local
 namespaces, so nothing defined in functions here may use the names defined at
 its top level.
@@ -34,6 +41,12 @@ if not os.path.isfile(os.path.join(_here, "ddml_bench", "ddml_configs.py")):
     raise RuntimeError("can't find FaSiNaTe's ddml_bench: source setup.sh first")
 if _here not in sys.path:
     sys.path.insert(0, _here)
+# The models' own inference code, first (wherever else it was), for DDML's
+# embedded-Python plugins
+_models = os.path.join(_here, "models")
+while _models in sys.path:
+    sys.path.remove(_models)
+sys.path.insert(0, _models)
 if not os.environ.get("DDML_SOURCE_DIR"):
     raise RuntimeError("DDML_SOURCE_DIR isn't set: source setup.sh first")
 _steering = os.path.join(os.environ["DDML_SOURCE_DIR"], "scripts", "ddsim_steer.py")

@@ -7,7 +7,9 @@ import os
 import shutil
 import tarfile
 
-from ddml_bench import ddml_configs, manifest, process
+import yaml
+
+from ddml_bench import ddml_configs, manifest, models, process
 
 from conftest import TAU_INPUTS
 from test_pipeline_local import DI_PHOTON_INPUT, DI_PHOTON_SIMULATIONS, INPUTS
@@ -86,7 +88,17 @@ def test_the_records_of_a_data_folder(bench):
     assert len(geant4["stack"]["ildconfig"]) == 40
     assert essential["stack"] == dict((k, v) for k, v in geant4["stack"].items()
                                       if k != "steering")
-    assert by_name["caloclouds3.npz"]["stack"]["presets"] == "CC3_BARREL_PY_INTERFACE"
+    caloclouds3 = by_name["caloclouds3.npz"]
+    assert caloclouds3["stack"]["presets"] == "CC3_BARREL_PY_INTERFACE"
+    # What the model is, by its logs and by its description now: DDML's own
+    # Python module, none of models/
+    with open(os.path.join(bench.repo, "models", "caloclouds3.yaml")) as stream:
+        described = models.description_sha256(yaml.safe_load(stream))
+    assert caloclouds3["stack"]["description_sha256"] == described
+    assert caloclouds3["stack"]["python"] == "none"
+    assert caloclouds3["model"]["description_sha256"] == described
+    assert caloclouds3["model"]["python"] == {}
+    assert "description_sha256" not in essential["stack"]
 
     # The catalogue says what every record holds
     catalogue = essential["catalogue"]
@@ -163,6 +175,50 @@ def test_measurements_from_a_data_folder_without_logs_say_so(bench):
     assert sorted(os.listdir(out)) == ["essential"]
 
 
+def test_the_manifest_records_what_a_model_with_its_own_code_is(bench):
+    """caloclouds3_rescaled, whose inference code is a module of models/: the
+    logs of its simulations record the sha256 of its description and of that
+    code as ddsim started, and its measurements' entry in the manifest has
+    those (stack), and the description's as it is now (model)."""
+    bench.add_model("caloclouds3_rescaled")
+    bench.run("pipeline.sh")
+    code = os.path.join(bench.repo, "models", "caloclouds3_rescaled.py")
+    description = os.path.join(bench.repo, "models", "caloclouds3_rescaled.yaml")
+    with open(code, "rb") as stream:
+        sha256 = hashlib.sha256(stream.read()).hexdigest()
+    with open(description) as stream:
+        text = stream.read()
+    described = models.description_sha256(yaml.safe_load(text))
+    out = os.path.join(bench.tmp, "zenodo")
+
+    def entry():
+        bench.run("scripts/ddml-bench", "manifest", "--out", out, "--records", "essential")
+        return dict((e["name"], e) for e in load(out, "essential")["files"])[
+            "caloclouds3_rescaled.npz"]
+
+    measured = entry()
+    assert measured["stack"]["description_sha256"] == described
+    assert measured["stack"]["python"] == "caloclouds3_rescaled:" + sha256
+    assert measured["stack"]["model_configs"] == ddml_configs.canonical(
+        [{"preset": "CC3_BARREL_PY_INTERFACE",
+          "plugin_properties": {"PythonModule": "caloclouds3_rescaled"}}])
+    assert measured["model"]["description_sha256"] == described
+    assert measured["model"]["python"] == {"caloclouds3_rescaled": {
+        "path": "models/caloclouds3_rescaled.py", "sha256": sha256}}
+
+    # Both changed since: the logs still say what the simulations were made
+    # with, and the description what the model is now
+    with open(code, "a") as stream:
+        stream.write("# changed\n")
+    with open(description, "w") as stream:
+        stream.write(text.replace("energy_rescale: 1.0065416493", "energy_rescale: 1.01"))
+    measured = entry()
+    assert measured["stack"]["description_sha256"] == described
+    assert measured["stack"]["python"] == "caloclouds3_rescaled:" + sha256
+    assert measured["model"]["description_sha256"] not in (None, described)
+    assert measured["model"]["python"]["caloclouds3_rescaled"]["sha256"] != sha256
+
+
 def test_records_are_split_with_each_samples_files_together():
     files = [{"name": "%s%s" % (sample, ending), "size": size}
              for sample, size in (("a", 30), ("b", 30), ("c", 10))
@@ -206,6 +262,9 @@ def test_the_headers_of_the_logs(tmp_path):
                 "triggers": {"gamma": 10}}]
     log.write_text(
         "# ddml-bench models: caloclouds3_libtorch on di_photon\n"
+        "# model     %s, of models/caloclouds3_libtorch.yaml as read, without what only the "
+        "plots use\n"
+        "# python    own:%s, from models/own.py\n" % ("a" * 64, "b" * 64) +
         "# DDML      263256cca31b37335cd2aae34b81e899bd2a5851, installed in /sw/DDML/install\n"
         "# command   (in /sw/DDML/scripts) " + process.quote(
             ["ddsim", "--steeringFile", "/repo/scripts/ddsim_steer_models.py", "--compactFile",
@@ -216,7 +275,8 @@ def test_the_headers_of_the_logs(tmp_path):
     assert manifest.read_log(str(log)) == {
         "ddml": "263256cca31b37335cd2aae34b81e899bd2a5851", "steering": "ddsim_steer_models.py",
         "compact": "ILD/compact/ILD_l5_o1_v02/ILD_l5_o1_v02.xml",
-        "model_configs": ddml_configs.canonical(configs)}
+        "model_configs": ddml_configs.canonical(configs),
+        "description_sha256": "a" * 64, "python": "own:" + "b" * 64}
     log.write_text(
         "# reconstruct_simulation.sh: geant4 on single_photon\n"
         "# Key4hep   2026-04-08\n"

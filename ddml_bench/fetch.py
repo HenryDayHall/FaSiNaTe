@@ -17,7 +17,9 @@ isn't there yet and the published one is what the task would make:
                                  reconstructions, of a simulator of this
                                  configuration (a model with the same presets
                                  or DDML model configurations, detector and,
-                                 where the manifest has them, weights), and
+                                 where the manifest has them, weights,
+                                 description and own Python code, by their
+                                 sha256: ddml_bench/models.py), and
                                  every input they were measured
                                  from is the published one: fetched now, or
                                  here already and the same by sha256
@@ -55,6 +57,7 @@ import urllib.request
 
 from .ddml_configs import canonical
 from .layout import Layout
+from .models import python_summary
 
 USER_AGENT = "FaSiNaTe-ddml-bench (+https://github.com/HenryDayHall/FaSiNaTe)"
 FORMATS = ("fasinate-manifest/1", "fasinate-manifest/2")
@@ -273,6 +276,48 @@ def measurements_match(task, published, plan):
                 and described["weights_md5"] != model["weights_md5"]:
             return False, "the model's weights differ (md5 %s, not %s)" % (
                 described["weights_md5"], model["weights_md5"])
+        same, why = _same_model(model, stack, described, source)
+        if not same:
+            return False, why
+    return True, ""
+
+
+def _short(value):
+    """sha256 sums, as their first 12 digits, for messages."""
+    return " ".join(part[:part.index(":") + 13] if ":" in part else part[:12]
+                    for part in str(value).split())
+
+
+def _same_model(model, stack, described, source):
+    """(the same, why not): the model's description and its own Python code,
+    by their sha256, are what published measurements were simulated with (by
+    the logs of their simulations, as each started) and described with (by
+    their manifest, as it was written), where those record them."""
+    mine = model.get("description_sha256")
+    code = python_summary(model.get("python") or {})
+    ran = stack.get("description_sha256")
+    if isinstance(ran, dict):
+        return False, "they were simulated with %d versions of the model's description" % len(ran)
+    if mine and ran not in (None, "unknown") and ran != mine:
+        return False, "the model was simulated with another description than %s (sha256 %s " \
+            "there, %s here)" % (source, _short(ran), _short(mine))
+    ran = stack.get("python")
+    if isinstance(ran, dict):
+        return False, "they were simulated with %d versions of the model's own Python code" \
+            % len(ran)
+    if ran is not None and ran != code:
+        return False, "the model ran other Python code of its own than %s's (%s there, %s " \
+            "here)" % (source, _short(ran), _short(code))
+    theirs = described.get("description_sha256")
+    if mine and theirs and theirs != mine:
+        return False, "the model's description differs from %s" % source
+    if isinstance(described.get("python"), dict):
+        theirs = python_summary(dict((module, {"sha256": entry.get("sha256")})
+                                     for module, entry in described["python"].items()
+                                     if isinstance(entry, dict)))
+        if theirs != code:
+            return False, "the model's own Python code differs from %s's (%s there, %s " \
+                "here)" % (source, _short(theirs), _short(code))
     return True, ""
 
 

@@ -171,6 +171,21 @@ manifest records the presets or configurations of each model's simulations,
 from their logs, and fetching published measurements of a model needs them to
 be the model's.
 
+A configuration can have one of DDML's embedded-Python plugins run a module of
+`models/` (its `PythonModule`): the model's own inference code, e.g.
+`models/caloclouds3_rescaled.py`, which reads what it needs from the model's
+description beside it. The plugin imports it in ddsim's own interpreter, so
+`scripts/ddsim_steer_models.py` puts `models/` first on the Python path, and
+`models.python_module_file()` finds it the same way for the environment check.
+What a model is, beyond its presets or configurations, is two sha256 sums
+(`ddml_bench/models.py`): its description's as read, without what only the
+plots use (`description_sha256()`, so comments, the label and the plot style
+don't count), and each module of its own code's (`python_code()`). The models
+stage writes them at the top of each simulation's log as `ddsim` starts, the
+manifest takes them from the logs (`stack`) and from the description as it is
+now (`model`), and fetching published measurements of a model needs them to be
+the model's.
+
 A model can be the closure test of another (`closure`): the same model
 through another backend. The plots (`ddml_bench/plot.py`, `closures()`) then
 draw it against that one alone, as the reference, and say for each scenario

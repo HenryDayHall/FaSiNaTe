@@ -8,11 +8,24 @@ How DDML runs a model is either DDML's presets (ddml.presets: names from
 python/ddml/configs.py in DDML, which ddsim takes with --ml-model), or DDML
 model configurations written out (ddml.model_configs, each a preset to start
 from and the fields of DDML's ModelConfig to set; ddml_bench/ddml_configs.py),
-for a model DDML has no preset for. A model can be another's closure test
-(closure): the same model, e.g. the same weights through another of DDML's
-inference backends, which the plots then compare with it directly.
+for a model DDML has no preset for. A configuration can have one of DDML's
+embedded-Python plugins run a module of models/ (its plugin_properties
+PythonModule): the model's own inference code, e.g.
+models/caloclouds3_rescaled.py, which ddsim imports from there, ahead of
+DDML's modules (scripts/ddsim_steer_models.py). A model can be another's
+closure test (closure): the same model, e.g. the same weights through another
+of DDML's inference backends, which the plots then compare with it directly.
+
+What a model is, beyond its presets or configurations and weights, is
+recorded by two sha256 sums, which each simulation's log has (as ddsim
+starts), and so the manifests of published measurements, which fetching them
+checks: its description's (description_sha256(): as read, so not its
+comments or layout, and without what only the plots use) and its own Python
+code's (python_code(): each module of models/ its configurations run).
 """
 
+import hashlib
+import json
 import os
 import re
 
@@ -28,6 +41,10 @@ MODELS_DIR = os.path.join(REPO_DIR, "models")
 GEANT4_STYLE = {"label": "Geant4", "color": "#9a9a9a", "linestyle": "-"}
 FALLBACK_STYLES = [("#e8710a", "-"), ("#1f6fb4", "--"), ("#2a9a3a", "-."),
                    ("#a8329e", ":"), ("#0095aa", (0, (5, 1, 1, 1, 1, 1)))]
+# What of a description only the plots use (its label, its style, the model it
+# is the closure test of), which its sha256 leaves out, so that drawing a model
+# otherwise doesn't make it another model
+PLOTS_ONLY = ("name", "plot", "closure")
 
 _MD5 = re.compile(r"^[0-9a-f]{32}$")
 
@@ -51,7 +68,9 @@ def load_model(name):
     model_configs (the other empty), weights, weights_md5, closure (None, or
     {of: the model it is a closure test of, identical: whether the events
     should be identical where both have the same seeds}), color and
-    linestyle."""
+    linestyle, and the sha256 sums of what it is: description_sha256 (of the
+    description) and python ({module: {path, sha256}} of its own Python code,
+    python_code())."""
     names = model_names()
     path = os.path.join(MODELS_DIR, name + ".yaml")
     source = os.path.relpath(path, REPO_DIR)
@@ -146,6 +165,9 @@ def load_model(name):
                 entry, "%s: ddml.model_configs, entry %d" % (source, number)))
         except ModelConfigError as error:
             raise ModelError(str(error))
+    # What it is: its description, and its own Python code
+    model["description_sha256"] = description_sha256(data)
+    model["python"] = python_code(model["model_configs"])
 
     # The model it is the closure test of
     closure = data.get("closure")
@@ -190,3 +212,84 @@ def load_models(names=None):
 def reference(config):
     """Geant4, as the models are described: its detector and how it is drawn."""
     return dict(GEANT4_STYLE, name=GEANT4, compact_file=config["geant4"]["compact"])
+
+
+# ---------------------------------------------------------------------------
+# What a model is: the sha256 sums of its description and its own Python code
+
+_MODULE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
+
+
+def _same_every_time(value):
+    """A description's settings with every key a string, for JSON."""
+    if isinstance(value, dict):
+        return dict((str(key), _same_every_time(item)) for key, item in value.items())
+    if isinstance(value, (list, tuple)):
+        return [_same_every_time(item) for item in value]
+    return value
+
+
+def description_sha256(data):
+    """The sha256 of a model's description as read (data, from
+    models/<name>.yaml), without what only the plots use (PLOTS_ONLY): so its
+    comments, layout, label and plot style don't change it, and anything else
+    does, e.g. a setting the model's own Python code reads, as
+    models/caloclouds3_rescaled.py reads energy_rescale."""
+    kept = dict((key, value) for key, value in data.items() if key not in PLOTS_ONLY)
+    text = json.dumps(_same_every_time(kept), sort_keys=True, separators=(",", ":"),
+                      default=str)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def description_sha256_now(model):
+    """description_sha256() of a model's description as it is now (as a
+    simulation starts), or None if it can't be read here, e.g. without
+    PyYAML."""
+    try:
+        import yaml
+        with open(os.path.join(REPO_DIR, model["config"])) as stream:
+            data = yaml.safe_load(stream)
+    except Exception:  # no PyYAML, the file gone, or not YAML any more
+        return None
+    return description_sha256(data) if isinstance(data, dict) else None
+
+
+def python_module_file(module):
+    """The file of a module of models/: the models' own inference code, which
+    a DDML model configuration's PythonModule can name, and ddsim imports from
+    models/, ahead of DDML's modules (scripts/ddsim_steer_models.py). None if
+    models/ has no module of that name."""
+    if not isinstance(module, str) or not _MODULE.match(module):
+        return None
+    base = os.path.join(MODELS_DIR, *module.split("."))
+    for path in (base + ".py", os.path.join(base, "__init__.py")):
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def python_code(model_configs):
+    """{module: {"path", "sha256"}} of the models' own Python code that these
+    DDML model configurations (ddml.model_configs, as checked) run: each
+    module of models/ that one names as its PythonModule (plugin_properties),
+    with its path in the repository and its sha256 as it is now."""
+    code = {}
+    for entry in model_configs:
+        properties = entry.get("plugin_properties") if isinstance(entry, dict) else None
+        module = (properties or {}).get("PythonModule")
+        path = python_module_file(module)
+        if path:
+            digest = hashlib.sha256()
+            with open(path, "rb") as stream:
+                digest.update(stream.read())
+            code[module] = {"path": os.path.relpath(path, REPO_DIR).replace(os.sep, "/"),
+                            "sha256": digest.hexdigest()}
+    return code
+
+
+def python_summary(code):
+    """A model's own Python code (python_code()) in one line, as the log of a
+    simulation records it: <module>:<sha256> of each module, by name, or
+    none."""
+    return " ".join("%s:%s" % (module, code[module]["sha256"]) for module in sorted(code)) \
+        or "none"
