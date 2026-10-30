@@ -207,6 +207,62 @@ def test_the_manifest_describes_the_models():
         False, "the model ran with the presets P, not the DDML model configurations of "
         "models/cc3.yaml")
 
+    # What the model is, by the sha256 of its description and of its own Python
+    # code: as the logs say it was simulated, and the manifest describes it
+    own = {"own": {"path": "models/own.py", "sha256": "c" * 64}}
+    plan["models"][0].update(description_sha256="d" * 64, python=own)
+    ran = dict(ran, stack=dict(ran["stack"], description_sha256="d" * 64,
+                               python="own:" + "c" * 64),
+               model={"description_sha256": "d" * 64, "python": own})
+    assert fetch.measurements_match(task, ran, plan) == (True, "")
+
+    def changed(**stack):
+        return fetch.measurements_match(task, dict(ran, stack=dict(ran["stack"], **stack)), plan)
+    assert changed(description_sha256="e" * 64) == (
+        False, "the model was simulated with another description than models/cc3.yaml (sha256 "
+        "eeeeeeeeeeee there, dddddddddddd here)")
+    assert changed(python="own:" + "f" * 64) == (
+        False, "the model ran other Python code of its own than models/cc3.yaml's "
+        "(own:ffffffffffff there, own:cccccccccccc here)")
+    assert changed(python="none")[1].startswith("the model ran other Python code of its own")
+    # its simulations made with several, as the manifest counts them by log
+    assert changed(description_sha256={"d" * 64: 3, "e" * 64: 1}) == (
+        False, "they were simulated with 2 versions of the model's description")
+    assert changed(python={"own:" + "c" * 64: 3, "none": 1}) == (
+        False, "they were simulated with 2 versions of the model's own Python code")
+    # or the manifest describing it otherwise
+    assert fetch.measurements_match(task, dict(ran, model={"description_sha256": "e" * 64}),
+                                    plan) == (
+        False, "the model's description differs from models/cc3.yaml")
+    assert fetch.measurements_match(task, dict(ran, model={"python": {}}), plan) == (
+        False, "the model's own Python code differs from models/cc3.yaml's (none there, "
+        "own:cccccccccccc here)")
+    # Manifests from before they were recorded don't say, so don't stop it
+    old = dict(ran, model={}, stack=dict((key, value) for key, value in ran["stack"].items()
+                                         if key not in ("description_sha256", "python")))
+    assert fetch.measurements_match(task, old, plan) == (True, "")
+
+
+def test_published_measurements_of_a_model_described_otherwise_arent_used(bench, published):
+    fetching(bench, published)
+    path = os.path.join(bench.repo, "models", "caloclouds3.yaml")
+    with open(path) as stream:
+        text = stream.read()
+    assert "\nname: CaloClouds3\n" in text and 'color: "#e8710a"' in text
+    # Its comments, label and plot style don't make it another model...
+    with open(path, "w") as stream:
+        stream.write("# Said otherwise.\n" + text.replace("\nname: CaloClouds3\n", "\nname: CC3\n")
+                     .replace('color: "#e8710a"', 'color: "#000000"'))
+    status, output = bench.run("pipeline.sh", "--dry-run")
+    assert "would fetch 5 published file(s)" in output, output
+    # ... but anything else does, e.g. a setting its own code would read
+    with open(path, "w") as stream:
+        stream.write(text + "energy_rescale: 1.01\n")
+    status, output = bench.run("pipeline.sh", "--dry-run")
+    assert "the published caloclouds3.npz (Zenodo record 123) isn't used, as the model was " \
+        "simulated with another description than models/caloclouds3.yaml" in output, output
+    assert "would fetch 4 published file(s)" in output, output
+
 
 def test_a_manifest_sum_read_as_a_number_is_caught(bench, published):
     override = fetching(bench, published)

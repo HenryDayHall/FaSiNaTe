@@ -15,7 +15,12 @@ events of the input (the JSON "LCIO" of tests/fakes/python/pyLCIO) into the
 output, noting which simulator it was (geant4, without a fast simulation, or
 else the presets and model configurations it was given, by their presets or
 plugins), the DDML model configurations the steering file set up (models),
-and the seed it was given (--random.seed), if any.
+and the seed it was given (--random.seed), if any. A configuration's
+embedded-Python plugin imports its module (PythonModule) in ddsim's own
+interpreter as Geant4 sets it up, so the module is looked for on the Python
+path the steering file left, failing as DDML does where there is none, but
+not run (it may need PyTorch): each configuration notes where it was found
+(python_module).
 
 It fails when "<simulator> <input file name>" matches the shell pattern in
 $FAKE_CONTROL/ddsim_fail, if there is one, e.g. "geant4 *en80*" or "* *en80*".
@@ -24,6 +29,7 @@ in a variable; the fake DDML build's env file sets FAKE_CONTROL.)
 """
 
 import fnmatch
+import importlib.util
 import io
 import json
 import os
@@ -73,6 +79,21 @@ if len(made) != 1:
     fail("the steering file %s made %d DD4hepSimulation objects, not one" % (steering, len(made)))
 physics = made[0].physics._values.get("user_physics")
 configs = list(getattr(physics, "configs", None) or [])
+# The modules of the embedded-Python plugins, as EmbeddedPyInference::initialize()
+# imports them: here only found
+modules = []
+for config in configs:
+    module = dict(config.plugin_properties).get("PythonModule")
+    if not module:
+        modules.append(None)
+        continue
+    try:
+        spec = importlib.util.find_spec(module)
+    except (ImportError, ValueError):
+        spec = None
+    if spec is None or not spec.origin:
+        fail("EmbeddedPyInference init: ModuleNotFoundError: No module named '%s'" % module)
+    modules.append(spec.origin)
 
 # Then the rest of the command line, as the steering file left it
 args = sys.argv[1:]
@@ -120,10 +141,11 @@ if os.path.exists(control):
         fail("failing on %s, as %s says" % (options["inputFiles"], control), 3)
 models = [{"plugin": config.plugin,
            "plugin_properties": dict(config.plugin_properties),
+           "python_module": module,
            "detector": config.geometry.ecal.detector,
            "applicable_particles": sorted(config.applicable_particles),
            "triggers_gev": dict((p, e / GeV) for p, e in config.triggers.items()),
-           "correct_angles": config.correct_angles} for config in configs]
+           "correct_angles": config.correct_angles} for config, module in zip(configs, modules)]
 with open(options["outputFile"], "w") as stream:
     json.dump({"simulator": simulator, "compact": options["compactFile"],
                "seed": options["seed"], "models": models, "events": events}, stream)

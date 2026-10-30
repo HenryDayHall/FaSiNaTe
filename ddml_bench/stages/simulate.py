@@ -10,10 +10,14 @@ ddsim chooses a seed.
 A model with presets runs with them (--ml-model); one with DDML model
 configurations written out (ddml.model_configs) runs scripts/ddsim_steer_models.py,
 which runs DDML's steering file with the configurations made from its --ml-config options
-(ddml_bench/ddml_configs.py) in place of presets. Geant4, the reference, runs
+(ddml_bench/ddml_configs.py) in place of presets, with models/ first on
+ddsim's Python path, for a configuration whose embedded-Python plugin runs a
+module of models/, the model's own inference code. Geant4, the reference, runs
 scripts/ddsim_steer_geant4.py, which runs DDML's steering file without DDML's
 fast simulation. So every other setting (physics list, crossing angle,
-filters, ...) is the same for every simulator.
+filters, ...) is the same for every simulator. A model's log starts with the
+sha256 of its description and of its own Python code, as ddsim starts
+(ddml_bench/models.py), which the manifests record.
 
 ddsim writes to a hidden file next to the output, renamed once ddsim
 succeeds, so an output that exists is complete; its log goes next to it.
@@ -30,6 +34,7 @@ import time
 
 from .. import ddml_configs, process
 from ..config import REPO_DIR
+from ..models import description_sha256_now, python_code, python_module_file, python_summary
 from .base import Stage, StageError, compact_problems, resolve_compact
 
 GEANT4_STEERING = os.path.join(REPO_DIR, "scripts", "ddsim_steer_geant4.py")
@@ -246,7 +251,20 @@ class Models(Simulate):
                    "--numberOfEvents=%d" % params["events"]] + self.seed_args(params))
 
     def header(self, task):
-        return ["# ddml-bench models: %s on %s" % (task["simulator"], task["scenario"])]
+        """The lines that start a simulation's log, with what the model is as
+        ddsim starts (ddml_bench/models.py): the sha256 of its description, and
+        its own Python code, which the manifests then record from the logs."""
+        model = task["params"]["model"]
+        described, how = description_sha256_now(model), "as read, without what only the plots use"
+        if described is None:
+            described = model.get("description_sha256") or "unknown"
+            how = "as planned, as it can't be read now"
+        code = python_code(model.get("model_configs") or [])
+        where = ("from " + ", ".join(code[module]["path"] for module in sorted(code)) if code
+                 else "the model runs no module of models/")
+        return ["# ddml-bench models: %s on %s" % (task["simulator"], task["scenario"]),
+                "# model     %s, of %s %s" % (described, model.get("config"), how),
+                "# python    %s, %s" % (python_summary(code), where)]
 
     def ddml_line(self, source):
         return "# DDML      %s, installed in %s" % (os.environ.get("DDML_COMMIT") or "unknown",
@@ -365,6 +383,8 @@ def check_models(models):
     for model in models:
         name = model["name"]
         problems += compact_problems([model["compact_file"]], name)
+        # Its own Python code, which its description names
+        own_code = python_code(model["model_configs"])
         # What DDML is to run: (what, its ModelConfig), for each preset, or each
         # configuration as the steering file makes it (ddml_bench/ddml_configs.py)
         configs = []
@@ -414,12 +434,24 @@ def check_models(models):
                     else "DDML gives it %s (ddml.particles)" % ", ".join(model["particles"])))
             module = settings.plugin_properties.get("PythonModule")
             if module:
-                origin = _module_origin(module)
-                if origin:
-                    say("%s: %s runs the Python module %s" % (name, what, origin))
+                # Imported in ddsim, from models/ first where the configurations
+                # are written out (scripts/ddsim_steer_models.py), else as DDML's
+                local = python_module_file(module) if model["model_configs"] else None
+                origin = local or _module_origin(module)
+                if not origin:
+                    problems.append("%s: %s runs the Python module %s, which isn't %son "
+                                    "PYTHONPATH" % (name, what, module,
+                                                    "in models/ or " if model["model_configs"]
+                                                    else ""))
+                elif local and module not in own_code:
+                    # A preset's module, which one of models/ would stand in for
+                    # without the description saying so
+                    problems.append("%s: %s runs the Python module %s, which ddsim would take "
+                                    "from %s, ahead of DDML's; name it in the configuration's "
+                                    "plugin_properties (PythonModule) to run it, so that the "
+                                    "logs record it, or rename it" % (name, what, module, local))
                 else:
-                    problems.append("%s: %s runs the Python module %s, which isn't on "
-                                    "PYTHONPATH" % (name, what, module))
+                    say("%s: %s runs the Python module %s" % (name, what, origin))
             model_path = settings.plugin_properties.get("ModelPath")
             if isinstance(model_path, str) and model_path:
                 # As the plugin opens it, from DDML's scripts/ folder

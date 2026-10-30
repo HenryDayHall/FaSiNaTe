@@ -43,9 +43,12 @@ sample of ILD's MC production). A measurement says which simulator and scenarios
 settings of each observable in it, the reconstructions it was measured from,
 with their ddsim seeds and events, the inputs those were simulated from, with
 their sha256 (derived_from), the software they were made with, from the logs
-of those simulations and reconstructions (stack), a model's description from
-models/ (model: its presets or DDML model configurations, detector and
-weights with their md5 sum), and whether it is up to date
+of those simulations and reconstructions (stack: for a model, also the sha256
+of its description and of its own Python code as each simulation started), a
+model's description from models/ as it is now (model: its presets or DDML
+model configurations, detector and weights with their md5 sum, and the
+sha256 of the description and of its own Python code, as
+ddml_bench/models.py makes them), and whether it is up to date
 with this configuration, as the observables stage decides; the essential
 record's stack is what all of them should share (Key4hep, DDML, ILDConfig,
 the patches, the reconstruction's arguments and the detector), with a
@@ -229,8 +232,10 @@ def read_log(path):
     Key4hep release, the DDML commit (simulations), the ILDConfig commit and
     the patches (reconstructions), the seed, the detector, the models'
     presets or DDML model configurations (--ml-config, as one string,
-    ddml_configs.canonical()) 
-    and the reconstruction's arguments (but --usingParticleGun, which
+    ddml_configs.canonical()), the sha256 of a model's description
+    (description_sha256) and its own Python code (python: <module>:<sha256>
+    of each module, or none; models.python_summary()), as the simulation
+    started, and the reconstruction's arguments (but --usingParticleGun, which
     the stage gives the particle guns' scenarios and not the physics
     samples').
     {} without a log."""
@@ -253,6 +258,10 @@ def read_log(path):
         found["ildconfig"] = header["ILDConfig"].split(",")[0].strip()
     if "patches" in header:
         found["patches"] = header["patches"].split(" (")[0].strip()
+    if "model" in header:
+        found["description_sha256"] = header["model"].split(",")[0].strip()
+    if "python" in header:
+        found["python"] = header["python"].split(",")[0].strip()
     if header.get("seed", "").isdigit():
         found["seed"] = int(header["seed"])
     command = header.get("command", "")
@@ -497,8 +506,10 @@ def _plan_in(data_dir):
 def described_models():
     """{model: what of models/<model>.yaml decides its showers}, for the
     measurements of the models: the presets or DDML model configurations, the
-    detector and the weights (with their md5 sum), which fetching published
-    measurements checks."""
+    detector, the weights (with their md5 sum), and the sha256 of the
+    description (description_sha256) and of the model's own Python code
+    (python: {module: {path, sha256}}), which fetching published measurements
+    checks."""
     try:
         from .models import load_models
         models = load_models()
@@ -509,7 +520,9 @@ def described_models():
     return dict((m["name"], {"config": m["config"], "presets": list(m["presets"]),
                              "model_configs": list(m["model_configs"]),
                              "compact_file": m["compact_file"], "weights": m["weights"],
-                             "weights_md5": m["weights_md5"]}) for m in models)
+                             "weights_md5": m["weights_md5"],
+                             "description_sha256": m["description_sha256"],
+                             "python": m["python"]}) for m in models)
 
 
 def repository_commit():

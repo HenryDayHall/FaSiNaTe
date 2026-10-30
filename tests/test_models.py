@@ -1,15 +1,20 @@
 """The models: their descriptions (models/*.yaml), with DDML's presets or DDML
 model configurations written out (ddml_bench/ddml_configs.py), the particles
-DDML gives them and their closure tests; the steering file that runs the
-configurations in ddsim (scripts/ddsim_steer_models.py), through the fake
-ddsim, which runs it as ddsim does; the models stage's check of them; and the
-closure tests in the plots."""
+DDML gives them, their closure tests and the sha256 sums of what they are; the
+steering file that runs the configurations in ddsim
+(scripts/ddsim_steer_models.py), through the fake ddsim, which runs it as
+ddsim does; the models' own inference code in models/, on a stand-in for
+PyTorch; the models stage's check of them; and the closure tests in the
+plots."""
 
 import csv
+import hashlib
+import importlib.util
 import json
 import os
 import subprocess
 import sys
+import types
 
 import numpy as np
 import pytest
@@ -70,6 +75,14 @@ def test_every_model_in_the_repository_is_described_whole():
             if "plugin_properties" in entry and "ModelPath" in entry["plugin_properties"]:
                 # Relative to DDML's scripts/ folder, where ddsim runs
                 assert entry["plugin_properties"]["ModelPath"] == "../" + model["weights"]
+        assert len(model["description_sha256"]) == 64, model["name"]
+        # Its own inference code, a module of models/ named after it
+        assert sorted(model["python"]) == (["caloclouds3_rescaled"]
+                                           if model["name"] == "caloclouds3_rescaled" else [])
+        for module, code in model["python"].items():
+            assert code["path"] == "models/%s.py" % module
+            with open(os.path.join(REPO, code["path"]), "rb") as stream:
+                assert code["sha256"] == hashlib.sha256(stream.read()).hexdigest()
     # The models with closure tests (caloclouds3_libtorch, gan_onnx) are set
     # aside in unused_models/ for now
     closures = dict((m["name"], m["closure"]) for m in described if m["closure"])
@@ -157,6 +170,38 @@ def test_what_is_wrong_with_a_description_is_said(tmp_path, monkeypatch, ddml, s
         os.path.relpath(str(tmp_path / "models" / "model.yaml"), models.REPO_DIR) + ": ")
 
 
+def test_what_a_model_is_by_the_sha256_of_its_description_and_own_code(tmp_path, monkeypatch):
+    model = describe(tmp_path, monkeypatch, energy_rescale=1.5)
+    path = tmp_path / "models" / "model.yaml"
+    data = yaml.safe_load(path.read_text())
+    # Not by the description's comments, layout, label or plot style...
+    path.write_text("# Said otherwise\n" + yaml.safe_dump(
+        dict(data, name="Another label", plot={"color": "#000000", "linestyle": ":"}),
+        default_flow_style=True))
+    assert models.load_model("model")["description_sha256"] == model["description_sha256"]
+    assert models.description_sha256_now(model) == model["description_sha256"]
+    # ... but by anything else, e.g. what the model's own code reads from it
+    path.write_text(yaml.safe_dump(dict(data, energy_rescale=1.25)))
+    assert models.load_model("model")["description_sha256"] != model["description_sha256"]
+    assert models.description_sha256_now(dict(model, config="nowhere.yaml")) is None
+
+    # Its own Python code: the modules of models/ its configurations run, not
+    # DDML's
+    assert model["python"] == {} and models.python_summary({}) == "none"
+    code = tmp_path / "models" / "mine.py"
+    code.write_text("def run_inference(inputs):\n    return inputs[0]\n")
+    model = describe(tmp_path, monkeypatch, ddml={"model_configs": [
+        {"preset": "CC3_BARREL_PY_INTERFACE", "plugin_properties": {"PythonModule": "mine"}},
+        {"preset": "CC3_ENDCAP_PY_INTERFACE",
+         "plugin_properties": {"PythonModule": "cc3_sf_2a_wrapper"}}]})
+    sha256 = hashlib.sha256(code.read_bytes()).hexdigest()
+    assert model["python"] == {"mine": {"path": os.path.relpath(str(code), models.REPO_DIR),
+                                        "sha256": sha256}}
+    assert models.python_summary(model["python"]) == "mine:" + sha256
+    assert models.python_module_file("mine") == str(code)
+    assert models.python_module_file("../mine") is None
+
+
 # ---------------------------------------------------------------------------
 # DDML's ModelConfigs, made with DDML's Python package (the fake one, with
 # DDML's presets as DDML declares them)
@@ -213,8 +258,11 @@ def run_fake_ddsim(tmp_path, *options):
     events.write_text('{"run": 1}\n{"event": 0, "particles": []}\n')
     (tmp_path / "ILD.xml").write_text("<lccdd/>\n")
     out = tmp_path / ".out.root"
+    if out.exists():
+        out.unlink()
     env = dict(os.environ, DDML_SOURCE_DIR=source, PYTHONPATH=os.pathsep.join(
-        [os.path.join(FAKES, "python"), os.path.join(source, "python")]))
+        [os.path.join(FAKES, "python"), os.path.join(source, "python"),
+         os.path.join(source, "python", "examples")]))
     result = subprocess.run(
         [sys.executable, os.path.join(FAKES, "bin", "ddsim"), "--steeringFile",
          os.path.join(REPO, "scripts", "ddsim_steer_models.py"),
@@ -252,6 +300,131 @@ def test_the_steering_file_sets_ddmls_up_with_the_configurations(tmp_path):
     assert status != 0 and "DDML has no preset NOPE" in output
 
 
+def test_the_steering_file_runs_the_models_own_code_from_models(tmp_path):
+    """A configuration's embedded-Python plugin imports the module it names
+    from models/, first on ddsim's Python path, and DDML's own from DDML."""
+    status, output, simulated = run_fake_ddsim(
+        tmp_path, "--ml-config", ddml_configs.option(
+            {"preset": "CC3_BARREL_PY_INTERFACE",
+             "plugin_properties": {"PythonModule": "caloclouds3_rescaled"}}),
+        "--ml-config", ddml_configs.option({"preset": "CC3_ENDCAP_PY_INTERFACE"}))
+    assert status == 0, output
+    own, ddmls = simulated["models"]
+    assert own["plugin_properties"] == {"PythonModule": "caloclouds3_rescaled",
+                                        "EntryPoint": "run_inference"}
+    assert os.path.realpath(own["python_module"]) == os.path.realpath(
+        os.path.join(REPO, "models", "caloclouds3_rescaled.py"))
+    assert os.path.realpath(ddmls["python_module"]) == os.path.realpath(
+        os.path.join(FAKES, "ddml", "python", "examples", "cc3_sf_2a_wrapper.py"))
+    # A module that is nowhere stops ddsim, as DDML's plugin does
+    status, output, _ = run_fake_ddsim(tmp_path, "--ml-config", ddml_configs.option(
+        {"preset": "CC3_BARREL_PY_INTERFACE", "plugin_properties": {"PythonModule": "nowhere"}}))
+    assert status != 0 and "No module named 'nowhere'" in output, output
+
+
+# ---------------------------------------------------------------------------
+# The models' own inference code (models/caloclouds3_rescaled.py), as DDML's
+# embedded-Python plugin runs it, on a stand-in for PyTorch whose model gives a
+# made-up output
+
+
+class FakeTensor(object):
+    def __init__(self, array):
+        self.array = array
+
+    def detach(self):
+        return self
+
+    def cpu(self):
+        return self
+
+    def numpy(self):
+        return self.array
+
+
+def fake_torch(output, seen):
+    """A stand-in for PyTorch, whose TorchScript model gives a copy of output,
+    noting in seen the weights it loads and what it is given."""
+    torch = types.ModuleType("torch")
+    torch.set_num_threads = lambda threads: None
+    torch.from_numpy = FakeTensor
+    torch.inference_mode = lambda: (lambda function: function)
+
+    class Model(object):
+        def eval(self):
+            return self
+
+        def to(self, device):
+            seen["device"] = device
+            return self
+
+        def __call__(self, *tensors):
+            seen["inputs"] = [tensor.array for tensor in tensors]
+            return FakeTensor(output.copy())
+
+    def load(path):
+        seen["weights"] = path
+        return Model()
+
+    torch.jit = types.SimpleNamespace(load=load)
+    return torch
+
+
+def import_own_code(monkeypatch, module, output, seen, ddml="/sw/DDML"):
+    """A module of models/, imported as the plugin imports it, with the fake
+    PyTorch and DDML's build in ddml ($DDML_SOURCE_DIR; unset if None)."""
+    monkeypatch.setitem(sys.modules, "torch", fake_torch(output, seen))
+    if ddml is None:
+        monkeypatch.delenv("DDML_SOURCE_DIR", raising=False)
+    else:
+        monkeypatch.setenv("DDML_SOURCE_DIR", ddml)
+    spec = importlib.util.spec_from_file_location(
+        module + "_under_test", os.path.join(REPO, "models", module + ".py"))
+    imported = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(imported)
+    return imported
+
+
+def caloclouds_output():
+    """An output as CaloClouds3 gives it, in a batch of one: the number of
+    points in each of the 30 layers (two in the first, one in the fourth),
+    then each point as (x, y, layer, energy), then what DDML doesn't read."""
+    counts = np.zeros(30, dtype=np.float32)
+    counts[0], counts[3] = 2, 1
+    points = np.array([[1.5, -2.0, 0, 0.25], [0.5, 0.5, 0, 1.0], [-3.0, 4.0, 3, 2.5]],
+                      dtype=np.float32)
+    return np.concatenate([counts, points.ravel(), np.zeros(8, dtype=np.float32)])[None, :]
+
+
+def test_caloclouds3_rescaled_rescales_the_energy_of_every_point(monkeypatch):
+    with open(os.path.join(REPO, "models", "caloclouds3_rescaled.yaml")) as stream:
+        described = yaml.safe_load(stream)
+    output, seen = caloclouds_output(), {}
+    rescaled = import_own_code(monkeypatch, "caloclouds3_rescaled", output, seen)
+    # The weights of its description, in DDML's build, whose md5 sum is checked
+    assert seen["weights"] == os.path.join("/sw/DDML", described["ddml"]["weights"])
+    assert seen["device"] == "cpu"
+
+    inputs = [np.array([[value]], dtype=np.float32) for value in (50.0, 90.0, 85.0)]
+    out = rescaled.run_inference(inputs)
+    assert [a.tolist() for a in seen["inputs"]] == [[[50.0]], [[90.0]], [[85.0]]]
+    assert out.dtype == np.float32 and out.shape == (output.size,)
+    flat = output.ravel()
+    # The energy of every point, by the description's factor...
+    energies = np.zeros(out.size, dtype=bool)
+    energies[30 + 3::4] = True
+    assert np.allclose(out[energies], flat[energies] * described["energy_rescale"],
+                       rtol=1e-6, atol=0)
+    assert out[[33, 37, 41]].tolist() != flat[[33, 37, 41]].tolist()
+    # ... and nothing else: the points in each layer, where they are
+    assert out[~energies].tolist() == flat[~energies].tolist()
+
+
+def test_caloclouds3_rescaled_needs_ddmls_build(monkeypatch):
+    with pytest.raises(RuntimeError, match="DDML_SOURCE_DIR isn't set"):
+        import_own_code(monkeypatch, "caloclouds3_rescaled", caloclouds_output(), {}, ddml=None)
+
+
 # ---------------------------------------------------------------------------
 # In the pipeline
 
@@ -270,6 +443,7 @@ def test_every_model_of_the_repository_runs_in_ddsim(bench):
         ddml = described["ddml"]
         assert "%s: weights %s, md5 checked" % (model, os.path.join(bench.ddml, ddml["weights"])) \
             in output
+        own = os.path.join(bench.repo, "models", model + ".py")
         for name in INPUTS:
             path = bench.path("sim_output", "single_photon", model, name + "_n2.root")
             with open(path) as stream:
@@ -292,9 +466,23 @@ def test_every_model_of_the_repository_runs_in_ddsim(bench):
                     assert config["plugin_properties"][key] == value
                 if "correct_angles" in entry:
                     assert config["correct_angles"] == entry["correct_angles"]
-            # The plugin loads the weights whose md5 sum was checked
-            if model != "caloclouds3":
+            # The plugin loads the weights whose md5 sum was checked, or its
+            # Python module does: DDML's, or the model's own from models/
+            if config["python_module"] is None:
                 assert config["plugin_properties"]["ModelPath"] == "../" + ddml["weights"]
+            elif os.path.isfile(own):
+                assert os.path.realpath(config["python_module"]) == os.path.realpath(own)
+            else:
+                assert config["python_module"].startswith(os.path.join(bench.ddml, "python"))
+            # The log says what the model is, as ddsim started
+            assert "# model     %s, of models/%s.yaml as read" % (
+                models.description_sha256(described), model) in log, log
+            if os.path.isfile(own):
+                with open(own, "rb") as stream:
+                    sha256 = hashlib.sha256(stream.read()).hexdigest()
+                assert "# python    %s:%s, from models/%s.py\n" % (model, sha256, model) in log
+            else:
+                assert "# python    none, the model runs no module of models/\n" in log
 
 
 def test_the_environment_check_finds_what_a_model_gets_wrong(bench):
@@ -310,12 +498,30 @@ def test_the_environment_check_finds_what_a_model_gets_wrong(bench):
                                               "      applicable_particles: [e-]\n"))
     bench.add_model("no_preset", text.replace("    - preset: CC3_BARREL\n",
                                               "    - preset: CC3_NOPE\n"))
+    # Python modules: one that is nowhere, and one of models/ that would stand
+    # in for a preset's own without the description naming it
+    own = open(os.path.join(REPO, "models", "caloclouds3_rescaled.yaml")).read()
+    assert "        PythonModule: caloclouds3_rescaled\n" in own
+    bench.add_model("no_module", own.replace("PythonModule: caloclouds3_rescaled",
+                                             "PythonModule: nowhere"))
+    bench.add_model("unnamed_module", own.replace(
+        "      plugin_properties:\n        PythonModule: caloclouds3_rescaled\n", ""))
+    with open(os.path.join(bench.repo, "models", "cc3_sf_2a_wrapper.py"), "w") as stream:
+        stream.write("def run_inference(inputs):\n    return inputs[0]\n")
     # Given other particles on purpose, and saying so
     bench.add_model("par04_vae_onnx", folder="unused_models")
     bench.run("generate_input.sh", "single_photon")
     status, output = bench.run("simulate_models.sh", "--dry-run", "-n", "1", "-s",
                                "single_photon", check=False)
     assert status == 1, output
+    assert "no_module: model configuration 1 runs the Python module nowhere, which isn't in " \
+        "models/ or on PYTHONPATH" in output, output
+    assert ("unnamed_module: model configuration 1 runs the Python module cc3_sf_2a_wrapper, "
+            "which ddsim would take from %s, ahead of DDML's" % os.path.join(
+                bench.repo, "models", "cc3_sf_2a_wrapper.py")) in output, output
+    # but a model with presets runs DDML's own, as DDML's steering file does
+    assert "caloclouds3: preset CC3_BARREL_PY_INTERFACE runs the Python module %s" % (
+        os.path.join(bench.ddml, "python", "examples", "cc3_sf_2a_wrapper.py")) in output
     weights = os.path.join(bench.ddml, "models", "CC3_SF_2A.pt")
     assert ("other_weights: model configuration 1 loads %s, but the weights "
             "models/other_weights.yaml checks are %s" % (

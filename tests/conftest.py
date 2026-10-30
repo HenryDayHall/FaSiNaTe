@@ -281,11 +281,13 @@ class Bench(object):
         """Put the repository's <folder>/<name>.yaml (models/ unless said, or
         unused_models/ for a model set aside), or text, in the copy's models/,
         with fake weights in the fake DDML build, whose md5 sum it is then
-        given."""
+        given, and the modules of <folder> that its DDML model configurations
+        run (its own inference code: plugin_properties PythonModule)."""
         if text is None:
             with open(os.path.join(REPO, folder, name + ".yaml")) as stream:
                 text = stream.read()
-        weights = (yaml.safe_load(text).get("ddml") or {}).get("weights")
+        ddml = yaml.safe_load(text).get("ddml") or {}
+        weights = ddml.get("weights")
         if weights:
             path = os.path.join(self.ddml, weights)
             if not os.path.exists(path):
@@ -293,6 +295,12 @@ class Bench(object):
             md5 = hashlib.md5(open(path, "rb").read()).hexdigest()
             text = re.sub(r'weights_md5: "[0-9a-f]{32}"', 'weights_md5: "%s"' % md5, text)
         _write(os.path.join(self.repo, "models", name + ".yaml"), text)
+        for entry in ddml.get("model_configs") or []:
+            module = ((entry.get("plugin_properties") or {}).get("PythonModule")
+                      if isinstance(entry, dict) else None)
+            source = os.path.join(REPO, folder, "%s.py" % module) if module else None
+            if source and os.path.isfile(source):
+                shutil.copy2(source, os.path.join(self.repo, "models", module + ".py"))
 
     def setting(self, name):
         """A setting from scripts/fasinate_config.py --shell, by its variable."""
