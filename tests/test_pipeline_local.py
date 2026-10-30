@@ -75,6 +75,12 @@ def test_pipeline_runs_every_stage(bench):
                    "energy_resolution__single_photon", "intrinsic_angle_theta_all__single_photon",
                    "intrinsic_angle_phi_top4__single_photon", "photon_separation_20GeV__di_photon"):
         assert os.path.isfile(bench.path("observables", "plots", figure + ".png")), figure
+    # and every figure in the dashboard, with a menu entry for the model
+    with open(bench.path("observables", "plots", "dashboard.html"), encoding="utf-8") as stream:
+        page = stream.read()
+    assert page.count('<figure class="fsn-card"') == len(
+        [name for name in bench.files("observables", "plots") if name.endswith(".png")])
+    assert '<label class="fsn-model" title="caloclouds3"' in page
     # The two energies fix the straight line of the linearity, but not the
     # three parameters of the resolution's fit
     fits = read_metrics(bench.path("observables", "plots", "fits.csv"))

@@ -64,10 +64,15 @@ the spread over the seeds; the metric compares the numbers of good pi0s in the
 bins, seed by seed, as the separation's does (seed_histograms(),
 seed_metric()).
 
+Every figure is also drawn as SVG for the dashboard, dashboard.html next to
+the figures (ddml_bench/dashboard.py), with each model's parts marked with its
+name (mark()), so that its menu can hide them; --format svg keeps the SVG
+files, and --no-dashboard leaves the dashboard out.
+
 
   python3 -m ddml_bench.plot [--dir DIR] [--out DIR] [--events N]
                              [--format pdf,png] [--reference NAME]
-                             [--no-closure] [SIMULATOR ...]
+                             [--no-closure] [--no-dashboard] [SIMULATOR ...]
 
 (plot_observables.sh runs it.) The figures go to <dir>/plots (or --out), one per
 observable, profile and scenario, named <observable>_<profile>__<scenario>.<format>
@@ -84,12 +89,15 @@ residuals and separations, so it also works on .npz files copied to a laptop.
 """
 
 import argparse
+import contextlib
 import csv
 import json
 import os
 import sys
+from urllib.parse import quote
 
-from . import measure
+from . import dashboard, measure
+from .dashboard import DATA, KEY, MARK, TARGET
 from .layout import GEANT4, OBSERVABLES_DIR, PLOTS_DIR, SEP, figure_base, measurement_files
 
 REFERENCE = GEANT4
@@ -266,8 +274,8 @@ def drawable(values, log_y):
 
 def stairs_band(ax, edges, low, high, color, alpha):
     import numpy as np
-    ax.fill_between(edges, np.append(low, low[-1]), np.append(high, high[-1]),
-                    step="post", color=color, alpha=alpha, linewidth=0)
+    return ax.fill_between(edges, np.append(low, low[-1]), np.append(high, high[-1]),
+                           step="post", color=color, alpha=alpha, linewidth=0)
 
 
 def plot_profile(observable, scenario, profile, curves, reference, metric_name, out_base,
@@ -320,15 +328,18 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
     fig, axes = new_figure(with_ratio)
     top = axes[0][0]
     results = []
+    # The legend's entries: (handle, label, simulator; None for the reference)
+    entries = []
 
     if ref is not None:
         _, _, mean, err, n = ref
         mean, err = mean[keep] / scale, err[keep] / scale
-        top.stairs(drawable(mean, log_y), edges, fill=True, color=REFERENCE_FILL,
-                   label=ref[0].label, zorder=1)
+        filled = top.stairs(drawable(mean, log_y), edges, fill=True, color=REFERENCE_FILL,
+                            label=ref[0].label, zorder=1)
         top.stairs(drawable(mean, log_y), edges, color=REFERENCE_EDGE, linewidth=1,
                    baseline=None, zorder=2)
         stairs_band(top, edges, mean - err, mean + err, REFERENCE_EDGE, 0.25)
+        entries.append((filled, ref[0].label, None))
     for simulator, _, mean, err, n in curves:
         if simulator is reference:
             continue
@@ -343,10 +354,12 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
             if given:
                 label = "%s (%s)" % (label, given)
         mean, err = mean / scale, err / scale
-        top.stairs(drawable(mean, log_y), edges, color=simulator.color,
-                   linestyle=simulator.linestyle, linewidth=1.6, label=label,
-                   baseline=None, zorder=3)
-        stairs_band(top, edges, mean - err, mean + err, simulator.color, 0.2)
+        line = top.stairs(drawable(mean, log_y), edges, color=simulator.color,
+                          linestyle=simulator.linestyle, linewidth=1.6, label=label,
+                          baseline=None, zorder=3)
+        mark(simulator, DATA, line,
+             stairs_band(top, edges, mean - err, mean + err, simulator.color, 0.2))
+        entries.append((line, label, simulator))
 
     if log_y:
         top.set_yscale("log")
@@ -368,7 +381,7 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
         note = "%s, %d events%s" % (scenario, n_ref, " (Geant4)" if ref is not None else "")
     top.text(0.02, 0.97 if room else 0.03, note, transform=top.transAxes, fontsize=8,
              color=MUTED, va="top" if room else "bottom")
-    top.legend(frameon=False, fontsize=8, loc="upper right", labelcolor=INK)
+    legend(top, entries, fontsize=8, loc="upper right")
 
     if with_ratio:
         bottom = axes[1][0]
@@ -387,9 +400,10 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
                 continue
             dev = (mean[keep] / safe - 1) * 100
             band = err[keep] / safe * 100
-            bottom.stairs(dev, edges, color=simulator.color, baseline=None,
-                          linestyle=simulator.linestyle, linewidth=1.4)
-            stairs_band(bottom, edges, dev - band, dev + band, simulator.color, 0.2)
+            mark(simulator, DATA,
+                 bottom.stairs(dev, edges, color=simulator.color, baseline=None,
+                               linestyle=simulator.linestyle, linewidth=1.4),
+                 stairs_band(bottom, edges, dev - band, dev + band, simulator.color, 0.2))
             deviations.append(np.abs(dev[measured & np.isfinite(dev)]))
         spread = np.concatenate(deviations) if deviations else np.array([])
         limit = np.percentile(spread, 100 if every_deviation else 95) * 1.3 if spread.size else 10
@@ -432,8 +446,129 @@ def finish(fig, axes, out_base, formats):
     fig.tight_layout()
     fig.subplots_adjust(hspace=0.08)
     for fmt in formats:
-        fig.savefig("%s.%s" % (out_base, fmt), dpi=200)
+        if fmt != "svg":
+            fig.savefig("%s.%s" % (out_base, fmt), dpi=200)
+    # The SVG last, as it adds the legend's click targets (invisible)
+    if "svg" in formats or collector is not None:
+        svg = svg_of(fig)
+        if "svg" in formats:
+            with open(out_base + ".svg", "wb") as stream:
+                stream.write(svg)
+        if collector is not None:
+            collector.add(out_base, svg)
     plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# The marks the dashboard (ddml_bench/dashboard.py) goes by: each model's parts
+# of a figure are marked with its name, so that its menu can hide them
+
+# Gathers the figures for the dashboard while main() draws them (collecting())
+collector = None
+
+
+@contextlib.contextmanager
+def collecting(into):
+    """Give every figure drawn meanwhile, and its simulators, to into (a
+    dashboard.Collector, or None for nothing)."""
+    global collector
+    before, collector = collector, into
+    try:
+        yield into
+    finally:
+        collector = before
+
+
+def mark(simulator, role, *artists):
+    """Mark the artists (and those in containers, e.g. of errorbar() or bar())
+    as drawing a simulator, in a role: DATA, its curves, bands, points and fits,
+    which the dashboard hides with it, or KEY, its legend entry, which it
+    dims. In the SVG, each is a group with the id <MARK>.<role>.<simulator>.<n>
+    (numbered by svg_of())."""
+    from matplotlib.artist import Artist
+    gid = "%s.%s.%s" % (MARK, role, quote(simulator.name, safe=""))
+
+    def walk(item):
+        if isinstance(item, Artist):
+            item.set_gid(gid)
+        elif isinstance(item, (tuple, list)):
+            for child in item:
+                walk(child)
+        # a bar()'s error bars aren't among its patches
+        if getattr(item, "errorbar", None) is not None:
+            walk(item.errorbar)
+
+    walk(artists)
+    if collector is not None:
+        collector.simulator(simulator)
+
+
+def legend(ax, entries, **options):
+    """The legend of the axes, from entries, [(handle, label, simulator, None
+    for the reference)], each entry marked as its simulator's KEY."""
+    drawn = ax.legend([handle for handle, _, _ in entries], [label for _, label, _ in entries],
+                      frameon=False, labelcolor=INK, **options)
+    for (_, _, simulator), text, handle in zip(entries, drawn.get_texts(), legend_handles(drawn)):
+        if simulator is not None:
+            mark(simulator, KEY, text, handle)
+    return drawn
+
+
+def legend_handles(drawn):
+    """The legend's handles, in the order of its entries (legendHandles before
+    matplotlib 3.7)."""
+    handles = getattr(drawn, "legend_handles", None)
+    return handles if handles is not None else drawn.legendHandles
+
+
+def legend_targets(fig):
+    """An invisible rectangle over each marked legend entry, its handle and
+    text, marked as its simulator's TARGET: what the dashboard's clicks land on
+    (the outlines of the text's letters alone are hard to hit). Added only for
+    the SVG, after the other formats are saved."""
+    from matplotlib.patches import Rectangle
+    from matplotlib.transforms import Bbox
+    prefix = "%s.%s." % (MARK, KEY)
+    entries = [(text, handle) for ax in fig.axes if ax.get_legend() is not None
+               for text, handle in zip(ax.get_legend().get_texts(),
+                                       legend_handles(ax.get_legend()))
+               if (text.get_gid() or "").startswith(prefix)]
+    if not entries:
+        return
+    try:
+        fig.draw_without_rendering()  # where the legends go (matplotlib 3.6)
+    except AttributeError:
+        fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    to_figure = fig.transFigure.inverted()
+    for text, handle in entries:
+        box = Bbox.union([text.get_window_extent(renderer),
+                          handle.get_window_extent(renderer)]).padded(1.5 * fig.dpi / 72)
+        (x0, y0), (x1, y1) = to_figure.transform(box.get_points())
+        fig.add_artist(Rectangle((x0, y0), x1 - x0, y1 - y0, transform=fig.transFigure,
+                                 facecolor="white", alpha=0, linewidth=0, zorder=10,
+                                 gid="%s.%s.%s" % (MARK, TARGET, text.get_gid()[len(prefix):])))
+
+
+def svg_of(fig):
+    """The figure as SVG (bytes), with the legend's click targets and each mark
+    numbered, so that ids are unique; text as outlines (so that it looks the
+    same everywhere), and the ids matplotlib makes up for what the figure's
+    parts share (clip paths, markers, letters) the same for the same thing in
+    every figure, so the dashboard keeps one of each."""
+    import io
+    import matplotlib
+    legend_targets(fig)
+    count = 0
+    for artist in fig.findobj():
+        gid = artist.get_gid()
+        if gid and gid.startswith(MARK + "."):
+            count += 1
+            artist.set_gid("%s.%d" % (gid, count))
+    stream = io.BytesIO()
+    with matplotlib.rc_context({"svg.fonttype": "path", "svg.hashsalt": MARK}):
+        fig.savefig(stream, format="svg", metadata={"Date": None})
+    return stream.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -699,12 +834,13 @@ def plot_energy_figure(spec, scenario, entries, reference, metric_name, out_base
                            MARKERS[models % len(MARKERS)], 5.5, 4 + models))
             models += 1
 
-    handles, labels, results, fits = [], [], [], []
+    keyed, results, fits = [], [], []
     for (simulator, points), (color, linestyle, marker, size, layer) in zip(entries, styles):
+        model = simulator is not reference
         x, y, err = column(points, "energy"), column(points, value), column(points, value + "_err")
-        top.errorbar(x, y, yerr=err, fmt=marker, color=color, markersize=size,
-                     markeredgecolor="white", markeredgewidth=0.8, elinewidth=1.0, capsize=0,
-                     zorder=layer)
+        drawn = [top.errorbar(x, y, yerr=err, fmt=marker, color=color, markersize=size,
+                              markeredgecolor="white", markeredgewidth=0.8, elinewidth=1.0,
+                              capsize=0, zorder=layer)]
         label = simulator.label
         if ref is not None and simulator is not reference and metric is not None:
             pairs = aligned(ref, points)
@@ -721,15 +857,18 @@ def plot_energy_figure(spec, scenario, entries, reference, metric_name, out_base
         else:
             params, uncertainties, chi2, ndf = fit
             line = np.linspace(x.min(), x.max(), 200)
-            top.plot(line, fit_terms(figure, line) @ params, color=color, linestyle=linestyle,
-                     linewidth=1.2 if simulator is reference else 1.4, zorder=layer - 0.5)
+            drawn += top.plot(line, fit_terms(figure, line) @ params, color=color,
+                              linestyle=linestyle, linewidth=1.2 if simulator is reference else 1.4,
+                              zorder=layer - 0.5)
             label += ": " + fit_text(terms, params)
             fits += [(simulator, (name, float(p), float(u), chi2, ndf))
                      for name, p, u in zip(parameters, params, uncertainties)]
-        handles.append(Line2D([], [], color=color, linestyle=linestyle if fit else "none",
-                              linewidth=1.4, marker=marker, markersize=size,
-                              markeredgecolor="white", markeredgewidth=0.8))
-        labels.append(label)
+        if model:
+            mark(simulator, DATA, drawn)
+        keyed.append((Line2D([], [], color=color, linestyle=linestyle if fit else "none",
+                             linewidth=1.4, marker=marker, markersize=size,
+                             markeredgecolor="white", markeredgewidth=0.8),
+                      label, simulator if model else None))
 
     highest = max(float(np.max(column(points, value) + column(points, value + "_err")))
                   for _, points in entries)
@@ -743,8 +882,7 @@ def plot_energy_figure(spec, scenario, entries, reference, metric_name, out_base
             min(counts), max(counts)), " (Geant4)" if ref is not None else ""),
         transform=top.transAxes, fontsize=8, color=MUTED, va="bottom",
         ha="left" if left else "right")
-    top.legend(handles, labels, frameon=False, fontsize=7.5, labelcolor=INK,
-               loc="upper right" if left else "upper left")
+    legend(top, keyed, fontsize=7.5, loc="upper right" if left else "upper left")
 
     if with_ratio:
         bottom = axes[1][0]
@@ -766,11 +904,12 @@ def plot_energy_figure(spec, scenario, entries, reference, metric_name, out_base
             band = np.array([p[value + "_err"] for _, p in pairs]) / base * 100
             energy = [p["energy"] for _, p in pairs]
             # The line apart from the points, so the error bars stay solid
-            bottom.plot(energy, dev, color=color, linestyle=linestyle, linewidth=1.0,
-                        zorder=layer - 0.5)
-            bottom.errorbar(energy, dev, yerr=band, fmt=marker, color=color,
-                            markersize=size - 1, markeredgecolor="white",
-                            markeredgewidth=0.8, elinewidth=1.0, capsize=0, zorder=layer)
+            mark(simulator, DATA,
+                 bottom.plot(energy, dev, color=color, linestyle=linestyle, linewidth=1.0,
+                             zorder=layer - 0.5),
+                 bottom.errorbar(energy, dev, yerr=band, fmt=marker, color=color,
+                                 markersize=size - 1, markeredgecolor="white",
+                                 markeredgewidth=0.8, elinewidth=1.0, capsize=0, zorder=layer))
             spread.append(np.abs(dev) + band)
         spread = np.concatenate(spread)
         spread = spread[np.isfinite(spread)]
@@ -1245,16 +1384,20 @@ def plot_pi0_categories(observable, scenario, entries, reference, out, suffix, f
     # Geant4 first, then the models in their order
     ordered = sorted(entries, key=lambda entry: entry[0] is not reference)
     width = 0.8 / len(ordered)
-    results = []
+    results, keyed = [], []
     for place, (simulator, points) in enumerate(ordered):
         shift = (place - (len(ordered) - 1) / 2) * width
         is_ref = simulator is reference
         color = REFERENCE_EDGE if is_ref else simulator.color
         mean = np.array([points["mean"][key] for key in keys])
         error = np.array([points["error"][key] for key in keys])
-        top.bar(x + shift, mean, width, color=REFERENCE_FILL if is_ref else color,
-                edgecolor=color, linewidth=1, alpha=1 if is_ref else 0.85, label=simulator.label,
-                yerr=error, error_kw={"ecolor": INK, "elinewidth": 1, "capsize": 2})
+        bars = top.bar(x + shift, mean, width, color=REFERENCE_FILL if is_ref else color,
+                       edgecolor=color, linewidth=1, alpha=1 if is_ref else 0.85,
+                       label=simulator.label, yerr=error,
+                       error_kw={"ecolor": INK, "elinewidth": 1, "capsize": 2})
+        keyed.append((bars, simulator.label, None if is_ref else simulator))
+        if not is_ref:
+            mark(simulator, DATA, bars)
         if not with_ratio:
             continue
         if is_ref:
@@ -1270,9 +1413,10 @@ def plot_pi0_categories(observable, scenario, entries, reference, out, suffix, f
         with np.errstate(divide="ignore", invalid="ignore"):
             dev = (mean / safe - 1) * 100
             band = error / safe * 100
-        axes[1][0].errorbar(x + shift, dev, yerr=band, fmt="o", color=color, markersize=4,
-                            markeredgecolor="white", markeredgewidth=0.6, elinewidth=1,
-                            capsize=0)
+        mark(simulator, DATA,
+             axes[1][0].errorbar(x + shift, dev, yerr=band, fmt="o", color=color, markersize=4,
+                                 markeredgecolor="white", markeredgewidth=0.6, elinewidth=1,
+                                 capsize=0))
         for key, value, uncertainty in zip(keys, dev, band):
             if np.isfinite(value):
                 results.append((simulator, "%s_%s" % (PI0_CATEGORY_FIGURE, key), "dev%",
@@ -1282,7 +1426,7 @@ def plot_pi0_categories(observable, scenario, entries, reference, out, suffix, f
                                           if np.isfinite(points["error"][key]) else 0))
                   for _, points in entries for key in keys)
     top.set_ylim(0, 1.3 * highest if highest > 0 else 1)
-    top.legend(frameon=False, fontsize=7.5, labelcolor=INK, loc="upper right")
+    legend(top, keyed, fontsize=7.5, loc="upper right")
     shown = ref if ref is not None else entries[0][1]
     events = sorted(set(shown["events"].values()))
     top.text(0.02, 0.97, "%s\n%s events × %d seed%s%s\nerrors: %s" % (
@@ -1447,6 +1591,8 @@ def draw(folder, out, suffix, formats, observables, wanted=(), reference_name=RE
         simulators.insert(0, reference)
 
     os.makedirs(out, exist_ok=True)
+    if collector is not None:
+        collector.section(out, reference)
     groups, event_groups = [], []
     for simulator in simulators:
         for key in simulator.profiles():
@@ -1476,6 +1622,8 @@ def draw(folder, out, suffix, formats, observables, wanted=(), reference_name=RE
             curves.append((simulator, e, mean, err, n))
         if not curves:
             continue
+        if collector is not None:
+            collector.context(observable, scenario)
         base = figure_base(out, observable, profile, scenario, suffix)
         results = plot_profile(observable, scenario, profile, curves,
                                reference if any(c[0] is reference for c in curves) else None,
@@ -1493,6 +1641,8 @@ def draw(folder, out, suffix, formats, observables, wanted=(), reference_name=RE
             continue
         measured = [simulator for simulator in simulators
                     if (observable, scenario) in simulator.per_event()]
+        if collector is not None:
+            collector.context(observable, scenario)
         results, fits = EVENT_FIGURES[observable](observable, scenario, measured, reference,
                                                   observables.get(observable) or {}, out,
                                                   suffix, formats)
@@ -1655,6 +1805,9 @@ def main(argv=None):
                         help="the simulator the others are compared to (default: geant4)")
     parser.add_argument("--no-closure", action="store_true",
                         help="leave out the closure tests (closure in models/*.yaml)")
+    parser.add_argument("--no-dashboard", action="store_true",
+                        help="don't write %s.html, every figure in one page with a menu to "
+                             "show or hide each model" % dashboard.NAME)
     args = parser.parse_args(argv)
 
     folder, observables = load_settings() if not args.dir else (args.dir, load_settings()[1])
@@ -1663,12 +1816,19 @@ def main(argv=None):
     suffix = "" if args.events is None else "_n%d" % args.events
     out = args.out or os.path.join(folder, PLOTS_DIR)
     formats = [f.strip() for f in args.format.split(",") if f.strip()]
-    if not draw(folder, out, suffix, formats, observables, args.simulators, args.reference):
-        say("no measurements (*%s.npz) in %s; make them with "
-            "./observables_from_reconstruction.sh" % (suffix, folder))
-        return 1
-    if not args.no_closure:
-        closures(folder, out, suffix, formats, observables, args.simulators)
+    gathered = None if args.no_dashboard else dashboard.Collector(out)
+    with collecting(gathered):
+        if not draw(folder, out, suffix, formats, observables, args.simulators, args.reference):
+            say("no measurements (*%s.npz) in %s; make them with "
+                "./observables_from_reconstruction.sh" % (suffix, folder))
+            return 1
+        if not args.no_closure:
+            closures(folder, out, suffix, formats, observables, args.simulators)
+    if gathered is not None and gathered.figures:
+        path = dashboard.write(gathered, dashboard.path(out, suffix), folder=folder,
+                               events=args.events, reference_colors=(REFERENCE_FILL,
+                                                                     REFERENCE_EDGE))
+        say("every figure, with a menu to show or hide each model: %s" % path)
     return 0
 
 

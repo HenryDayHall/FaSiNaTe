@@ -25,6 +25,7 @@
 #       --reference S  compare the others with the simulator S instead of
 #                      Geant4
 #       --no-closure   leave out the closure tests
+#       --no-dashboard don't write dashboard.html
 #   -h, --help         show this help
 #
 # Each figure is <observable>_<profile>__<scenario>.<format>, e.g.
@@ -35,8 +36,10 @@
 # (closure in models/<model>.yaml: the same model through another DDML
 # backend) is also drawn against that one alone, in closure/<model>/, and
 # closure.csv says for each scenario whether the two measured the same,
-# number for number. It runs with this shell's python3 if that has numpy and
-# matplotlib, and otherwise in the environment from setup.sh.
+# number for number. dashboard.html has every figure in one page, with a menu
+# to show or hide each model in all of them, or in one by clicking its legend
+# entry. It runs with this shell's python3 if that has numpy and matplotlib,
+# and otherwise in the environment from setup.sh.
 
 if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
     echo "plot_observables.sh exits when something fails, so run it instead of sourcing it" >&2
@@ -76,6 +79,7 @@ while (($#)); do
             shift 2
             ;;
         --no-closure) args+=(--no-closure); shift ;;
+        --no-dashboard) args+=(--no-dashboard); shift ;;
         -h | --help) usage; exit 0 ;;
         -*) die "unknown option '$1' (see --help)" ;;
         *) args+=("$1"); shift ;;

@@ -64,7 +64,7 @@ flowchart TD
 | 3 | `simulate_models.sh` | scenario inputs, `models/*.yaml` | `sim_output/<scenario>/<model>/*.root` |
 | 4 | `reconstruct_simulation.sh` | everything in `sim_output/` | `rec_output/<scenario>/<simulator>/*_REC.edm4hep.root` |
 | 5 | `observables_from_reconstruction.sh` | finished reconstructions | `observables/<simulator>.npz` |
-| 6 | `plot_observables.sh` | `observables/*.npz` | `observables/plots/*.{pdf,png}`, `metrics.csv`, `fits.csv` |
+| 6 | `plot_observables.sh` | `observables/*.npz` | `observables/plots/*.{pdf,png}`, `dashboard.html`, `metrics.csv`, `fits.csv` |
 
 Stages 2 and 3 are independent of each other; a "simulator" below means either Geant4 or one of the models. [`pipeline.sh`](#the-whole-pipeline-at-once) runs all six stages in one go, and on a slurm cluster [`slurm_pipeline.sh`](#the-whole-pipeline-at-once) runs them as jobs of one file each.
 
@@ -305,6 +305,7 @@ The cellID encoding is read from the reconstructed file, or failing that from th
 ./plot_observables.sh caloclouds3                         # just this model against Geant4
 ./plot_observables.sh -d copied/observables -o figures    # e.g. on a laptop, from copied .npz files
 ./plot_observables.sh --format pdf                        # default is pdf,png
+./plot_observables.sh --no-dashboard                      # without dashboard.html
 ```
 
 Each figure, `<observable>_<profile>__<scenario>.<format>` (e.g. `radial_profile_r30__single_photon.png`, shown [at the top](#fasinate)), puts every simulator on the same axes: Geant4 as a grey filled histogram, each model as a line with its uncertainty band, and each model's relative deviation from Geant4 underneath. The legend gives each model's distance from Geant4 using the observable's `metric` (the Jensen–Shannon divergence for the profiles), and all metrics are collected in `metrics.csv`, with an `uncertainty` column for those that have one. The `.npz` files hold the energy per ring of the radial profiles, which is divided by the rings' areas only when drawn; the metric compares the fractions of the energy in the bins, and the relative deviations are ratios, so neither depends on that division.
@@ -327,6 +328,27 @@ A model that is the [closure test](#closure-tests) of another is also drawn agai
 
 Plotting only needs numpy and matplotlib: it uses your own `python3` if it has them, and the `setup.sh` environment otherwise, so the `.npz` files can be copied elsewhere and plotted there.
 
+#### The dashboard
+
+Every run of the plots also writes `dashboard.html` (`dashboard_n<N>.html` for the first *N* events): every figure, the closure tests' too, in one page with a menu of the models. Untick a model to hide it in every figure, or click its entry in a figure's legend to hide or show it in that figure alone (the figure's *Reset* puts it back as the menu has it); *only* next to a model shows it alone. The menu also picks a scenario or an observable, and how many figures go in a row. Geant4, as the reference, is always shown. The figures are the same as the PNG and PDF files, so the axes stay as drawn with every model: hiding one doesn't zoom in on the others. Opened on its own, the page keeps what it hides in its address (`dashboard.html#hide=par04_vae_onnx&scenario=single_photon`), to come back to or to send.
+
+The page is a single file with nothing to fetch, so it works wherever it is opened:
+
+- **In a notebook** on Maxwell's JupyterHub (as in [`Display_outputs.ipynb`](Display_outputs.ipynb)):
+
+  ```python
+  from ddml_bench.dashboard import show
+  show()              # the plots in paths.data_dir; show(events=3) for dashboard_n3.html
+  ```
+
+  The menu works in the output of a cell you ran; after opening the notebook again, run the cell again.
+- **From JupyterHub's file browser**: open `dashboard.html`, then click *Trust HTML* in the viewer's toolbar.
+- **Through ssh**, in your own browser: on Maxwell, `python3 -m http.server 8765 --bind 127.0.0.1` in the plots folder; on your computer, `ssh -L 8765:localhost:8765 <the same login node>`, then open `http://localhost:8765/dashboard.html`.
+- **Copied**: `scp` it anywhere and open it; it needs nothing else.
+- **As a GitHub artifact**: upload it on its own with `actions/upload-artifact@v7` and `archive: false`, and it opens in the browser from the run's page (the CI uploads the dashboard of its pipeline test this way).
+
+The page is made from SVG copies of the figures, in which each model's curves, bands, points, fits and legend entry are marked with its name ([`ddml_bench/dashboard.py`](ddml_bench/dashboard.py)); `--format svg` keeps those copies too. With ten simulators it takes about 70 kB per figure.
+
 ## Where the data goes
 
 Everything is written under `paths.data_dir`:
@@ -343,7 +365,7 @@ Everything is written under `paths.data_dir`:
 │   └── <scenario>/<simulator>/    # stage 4: <input>_REC.edm4hep.root, _AIDA.root, _PfoAnalysis.root, .log
 ├── observables/
 │   ├── <simulator>.npz            # stage 5
-│   └── plots/                     # stage 6: figures, metrics.csv and fits.csv
+│   └── plots/                     # stage 6: figures, dashboard.html, metrics.csv and fits.csv
 └── slurm/
     └── pipeline_<time>/           # submissions of slurm_pipeline.sh (slurm.log_dir)
 ```
