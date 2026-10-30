@@ -55,14 +55,17 @@ each scenario, whether all the two measured is the same, number for number,
 as it should be where both simulated the same events with the same seeds and
 closure.identical says so (closures()).
 
-The pi0s of the tau decays (the observable pi0) give two figures, as the
-paper's figure 11 does, of the good pi0 candidates (both photons those of one
-MC pi0): the invariant mass of their two photons, and their reconstructed
-energy less the MC pi0's, each as the fraction of the good pi0s per GeV. Each
-simulator's curve is the mean over the ddsim seeds of each seed's, and its band
-the spread over the seeds; the metric compares the numbers of good pi0s in the
-bins, seed by seed, as the separation's does (seed_histograms(),
-seed_metric()).
+The pi0s of the tau decays (the observable pi0) give four figures of the good
+pi0 candidates (both photons those of one MC pi0): as the paper's figure 11
+does, the invariant mass of their two photons, and their reconstructed energy
+less the MC pi0's, each as the fraction of the good pi0s per GeV; and as its
+figure 12 does, theta and phi of their direction (the candidate's momentum)
+less those of the MC pi0's, each as the fraction of the good pi0s per degree.
+Each simulator's curve is the mean over the ddsim seeds of each seed's, and
+its band the spread over the seeds; the metric compares the numbers of good
+pi0s in the bins, seed by seed, as the separation's does (seed_histograms(),
+seed_metric()). A fifth figure, as the paper's figure 10, counts the
+candidates of each category of the reconstruction, and the MC pi0s missed.
 
 Every figure is also drawn as SVG for the dashboard, dashboard.html next to
 the figures (ddml_bench/dashboard.py), with each model's parts marked with its
@@ -79,8 +82,9 @@ observable, profile and scenario, named <observable>_<profile>__<scenario>.<form
 (energy_linearity__<scenario> and energy_resolution__<scenario> for the
 energy, intrinsic_angle_<angle>_<hits>__<scenario> for the intrinsic angles,
 e.g. intrinsic_angle_theta_top4__single_photon,
-photon_separation_<E>GeV__<scenario> for the separation, and pi0_mass__<scenario>
-and pi0_energy__<scenario> for the pi0s), with the metrics in
+photon_separation_<E>GeV__<scenario> for the separation, and pi0_mass__<scenario>,
+pi0_energy__<scenario>, pi0_theta__<scenario>, pi0_phi__<scenario> and
+pi0_categories__<scenario> for the pi0s), with the metrics in
 metrics.csv (and their uncertainties, for those that have one) and the fitted
 parameters of the energy figures, with their uncertainties, chi^2 and degrees
 of freedom, in fits.csv. It needs numpy and matplotlib, and PyYAML only to
@@ -1247,14 +1251,22 @@ def separation_figures(observable, scenario, simulators, reference, settings, ou
 
 # ---------------------------------------------------------------------------
 # The pi0s of the tau decays: the invariant mass of the good pi0 candidates'
-# two photons, and their reconstructed energy less their MC pi0s' (the
-# observable pi0, ddml_bench/measure.py), as in the paper's figure 11
+# two photons, and their reconstructed energy less their MC pi0s', as in the
+# paper's figure 11; theta and phi of their direction less their MC pi0s', as
+# in its figure 12 (the observable pi0, ddml_bench/measure.py)
 
-PI0_LABELS = {
-    "mass": r"Reconstructed $\pi^0$ mass $M_{\gamma\gamma}$ [GeV]",
-    "energy": r"$E_{\pi^0}^\mathrm{reco} - E_{\pi^0}^\mathrm{MC}$ [GeV]",
-}
-PI0_YLABEL = r"Fraction of good $\pi^0$s per GeV"
+# The figures of the good pi0s, in the order drawn: of each, what it draws
+# (good_pi0s() gives it), its axis label, and its y axis label
+PI0_FIGURES = (
+    ("mass", r"Reconstructed $\pi^0$ mass $M_{\gamma\gamma}$ [GeV]",
+     r"Fraction of good $\pi^0$s per GeV"),
+    ("energy", r"$E_{\pi^0}^\mathrm{reco} - E_{\pi^0}^\mathrm{MC}$ [GeV]",
+     r"Fraction of good $\pi^0$s per GeV"),
+    ("theta", r"$\theta_{\pi^0}^\mathrm{reco} - \theta_{\pi^0}^\mathrm{MC}$" + " [°]",
+     r"Fraction of good $\pi^0$s per degree"),
+    ("phi", r"$\phi_{\pi^0}^\mathrm{reco} - \phi_{\pi^0}^\mathrm{MC}$" + " [°]",
+     r"Fraction of good $\pi^0$s per degree"),
+)
 # The categories of the pi0 reconstruction (the paper's figure 10), in the
 # order drawn: the key pi0_categories() gives each, and its label
 PI0_CATEGORIES = (("n_reco", "nRecoPi0"), ("n_fake", "nFake"), ("n_good", "nGood"),
@@ -1303,17 +1315,26 @@ def seed_histograms(values, seeds, edges):
 
 def good_pi0s(simulator, observable, scenario, energy):
     """{figure: [good pi0]} of what the figures draw of a simulator's good pi0
-    candidates (measure.GOOD): the invariant mass of their two photons, and
-    their reconstructed energy (energy: the stored item, the fitted energy or
-    the sum of the photons') less the MC pi0's; and the ddsim seed of each."""
+    candidates (measure.GOOD): the invariant mass of their two photons; their
+    reconstructed energy (energy: the stored item, the fitted energy or the
+    sum of the photons') less the MC pi0's; and theta and phi of their
+    momentum less those of the MC pi0's, in degrees (phi's from -180 to 180,
+    measure.azimuth_residual()); and the ddsim seed of each."""
     import numpy as np
     stored = simulator.stored(observable, scenario)
     counts = np.asarray(stored["n_candidates"], dtype=np.int64)
     seeds = np.repeat(event_seeds(simulator, scenario, len(counts)), counts)
     good = np.asarray(stored["match"]) == measure.GOOD
-    return ({"mass": np.asarray(stored["mass"])[good],
-             "energy": (np.asarray(stored[energy]) - np.asarray(stored["true_energy"]))[good]},
+
+    def item(name):
+        return np.asarray(stored[name], dtype=float)
+
+    return ({"mass": item("mass")[good],
+             "energy": (item(energy) - item("true_energy"))[good],
+             "theta": (item("theta") - item("true_theta"))[good],
+             "phi": measure.azimuth_residual(item("phi"), item("true_phi"))[good]},
             seeds[good])
+
 
 def pi0_categories(simulator, observable, scenario):
     """({category: [event]}, [event's ddsim seed]) of the reconstruction of a
@@ -1454,19 +1475,23 @@ def plot_pi0_categories(observable, scenario, entries, reference, out, suffix, f
 
 def pi0_figures(observable, scenario, simulators, reference, settings, out, suffix, formats):
     """The figures of the pi0s of a scenario, of the simulators that measured
-    them, as the paper's figure 11: of the good candidates, the invariant mass
-    of their two photons, pi0_mass__<scenario>, and their reconstructed energy
+    them (PI0_FIGURES, from good_pi0s()). As the paper's figure 11, of the
+    good candidates: the invariant mass of their two photons,
+    pi0_mass__<scenario>, and their reconstructed energy
     (reconstructed_energy: fitted, or photons) less the MC pi0s',
-    pi0_energy__<scenario>; each as the fraction of the good pi0s per GeV,
-    the mean over the ddsim seeds with the spread over them as the band
-    (seed_histograms()), drawn as the profiles are, with each model's relative
-    deviation from Geant4 below. The legend gives each model's metric (by
-    default jensen_shannon) of the numbers of good pi0s in the bins from
-    Geant4's, seed by seed: the mean, with the spread over the seeds
-    (seed_metric()). Then, as the paper's figure 10, the categories of the
-    reconstruction (pi0_categories()) of every simulator,
-    pi0_categories__<scenario> (plot_pi0_categories()). Returns ([(simulator,
-    figure, metric, value, uncertainty)], [])."""
+    pi0_energy__<scenario>, each as the fraction of the good pi0s per GeV. As
+    its figure 12: theta and phi of their direction less the MC pi0s',
+    pi0_theta__<scenario> and pi0_phi__<scenario>, as the fraction per
+    degree. Each is the mean over the ddsim seeds with the spread over them as
+    the band (seed_histograms()), drawn as the profiles are, with each model's
+    relative deviation from Geant4 below, in the bins of the settings
+    (measure.pi0_binning()). The legend gives each model's metric (by default
+    jensen_shannon) of the numbers of good pi0s in the bins from Geant4's,
+    seed by seed: the mean, with the spread over the seeds (seed_metric()).
+    Then, as the paper's figure 10, the categories of the reconstruction
+    (pi0_categories()) of every simulator, pi0_categories__<scenario>
+    (plot_pi0_categories()). Returns ([(simulator, figure, metric, value,
+    uncertainty)], [])."""
     import numpy as np
     settings = settings or {}
     try:
@@ -1494,7 +1519,7 @@ def pi0_figures(observable, scenario, simulators, reference, settings, out, suff
         measured.append((simulator, values, seeds))
 
     results = []
-    for figure in ("mass", "energy"):
+    for figure, xlabel, ylabel in PI0_FIGURES:
         first, last, n_bins = binning[figure]
         edges = np.linspace(first, last, n_bins + 1)
         entries = [(simulator, seed_histograms(values[figure], seeds, edges))
@@ -1528,8 +1553,8 @@ def pi0_figures(observable, scenario, simulators, reference, settings, out, suff
             note += "\n%.2g%% outside the bins" % (100 * shown["outside"])
         base = figure_base(out, observable, figure, scenario, suffix)
         plot_profile(observable, scenario, figure, curves, reference if ref is not None else None,
-                     None, base, formats, xlabel=PI0_LABELS[figure], ylabel=PI0_YLABEL,
-                     note=note, trim=False, room=True, metric_texts=texts)
+                     None, base, formats, xlabel=xlabel, ylabel=ylabel, note=note, trim=False,
+                     room=True, metric_texts=texts)
         say("%s: %s" % (", ".join(c[0].label for c in curves),
                         ", ".join("%s.%s" % (os.path.basename(base), f) for f in formats)))
 

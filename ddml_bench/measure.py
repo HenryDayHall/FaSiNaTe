@@ -343,6 +343,12 @@ def polar_angles(vectors):
             np.degrees(np.arctan2(vectors[:, 1], vectors[:, 0])))
 
 
+def azimuth_residual(phi, phi_true):
+    """phi less phi_true, in degrees, from -180 to 180: the shorter way round,
+    so that 179 less -179 is -2, not 358."""
+    return (phi - phi_true + 180) % 360 - 180
+
+
 def angle_residuals(axes, direction):
     """theta and phi of each axis less those of the direction, in degrees, phi's
     from -180 to 180; the axis taken along the direction (a principal axis has
@@ -351,7 +357,7 @@ def angle_residuals(axes, direction):
     axes = np.where((np.einsum("ij,ij->i", axes, direction) < 0)[:, None], -axes, axes)
     theta, phi = polar_angles(axes)
     theta_true, phi_true = polar_angles(direction)
-    return theta - theta_true, (phi - phi_true + 180) % 360 - 180
+    return theta - theta_true, azimuth_residual(phi, phi_true)
 
 
 def measure_angles(observable, settings, branches, start, stop, primary, hits):
@@ -510,11 +516,17 @@ PI0_CANDIDATE_ITEMS = ("mass", "energy", "photon_energy", "theta", "phi", "match
 # A candidate's match: neither photon correct, only one, or both, of one MC pi0
 FAKE, CONFUSED, GOOD = 0, 1, 2
 PI0_MATCHES = {FAKE: "fake", CONFUSED: "confused", GOOD: "good"}
-# The bins of the figures when the settings don't say (GeV): the mass from 90
-# to 180 MeV in bins of 5 MeV, around GammaGammaCandidateFinder's window of
-# 40 MeV either side of the pi0's mass, and the energy less the MC pi0's from
-# -6 to 6 GeV in bins of 250 MeV
-PI0_BINNING = {"mass": (0.09, 0.18, 18), "energy": (-6.0, 6.0, 48)}
+# The bins of the figures when the settings don't say: the mass from 90 to
+# 180 MeV in bins of 5 MeV, around GammaGammaCandidateFinder's window of 40 MeV
+# either side of the pi0's mass; the energy less the MC pi0's from -6 to 6 GeV
+# in bins of 250 MeV; and theta and phi of the direction less the MC pi0's
+# from -0.3 to 0.3 degrees in bins of 0.015 degrees (an ECAL cell, 5 mm wide
+# and 1.8 m from the beam, is 0.16 degrees across; the directions, from the
+# centres of the photons' clusters, are finer than that)
+PI0_BINNING = {"mass": (0.09, 0.18, 18), "energy": (-6.0, 6.0, 48),
+               "theta": (-0.3, 0.3, 40), "phi": (-0.3, 0.3, 40)}
+# The units of each figure's bins
+PI0_UNITS = {"mass": "GeV", "energy": "GeV", "theta": "degrees", "phi": "degrees"}
 # A candidate's reconstructed energy in the figures: its own, from the fit, or
 # the sum of its two photons'
 RECONSTRUCTED_ENERGIES = {"fitted": "energy", "photons": "photon_energy"}
@@ -537,10 +549,12 @@ def _collection_name(observable, settings, key, optional=False):
 
 
 def pi0_binning(observable, settings):
-    """{"mass": (first, last, bins), "energy": (...)}: how the figures bin the
-    mass of the good pi0s and their energy less the MC pi0s', from the first
-    to the last of mass_range and energy_range (GeV) in mass_bins and
-    energy_bins bins (PI0_BINNING where not given)."""
+    """{"mass": (first, last, bins), "energy": (...), "theta": (...), "phi":
+    (...)}: how the figures bin the mass of the good pi0s, their energy less
+    the MC pi0s', and theta and phi of their direction less the MC pi0s', from
+    the first to the last of <figure>_range (mass_range, energy_range: GeV;
+    theta_range, phi_range: degrees) in <figure>_bins bins (PI0_BINNING where
+    not given)."""
     binning = {}
     for figure, default in PI0_BINNING.items():
         given = settings.get(figure + "_range")
@@ -555,7 +569,8 @@ def pi0_binning(observable, settings):
         if not all(isinstance(v, (int, float)) and not isinstance(v, bool)
                    for v in (first, last)) or not first < last:
             raise ObservableError("observables.%s.%s_range should be [first, last], the lowest "
-                                  "and highest edges of the bins in GeV" % (observable, figure))
+                                  "and highest edges of the bins in %s"
+                                  % (observable, figure, PI0_UNITS[figure]))
         if not isinstance(bins, int) or isinstance(bins, bool) or bins < 1:
             raise ObservableError("observables.%s.%s_bins should be a number of bins, at least 1"
                                   % (observable, figure))
@@ -850,7 +865,7 @@ def event_items(name, settings):
 DRAWING = {"intrinsic_angle": ("max_residual", "n_bins"),
            "photon_separation": ("max_separation", "n_bins"),
            "pi0": ("reconstructed_energy", "mass_range", "mass_bins", "energy_range",
-                   "energy_bins")}
+                   "energy_bins", "theta_range", "theta_bins", "phi_range", "phi_bins")}
 
 
 def observable_settings(name, settings):

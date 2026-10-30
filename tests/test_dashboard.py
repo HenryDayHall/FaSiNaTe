@@ -97,8 +97,9 @@ def test_every_part_of_a_model_is_marked_in_every_kind_of_figure(figures, tmp_pa
     geant4 = pi0_simulator("geant4", "Geant4", GEANT4.color, "-", 1.0, 1)
     model = pi0_simulator("model", "Model", MODEL.color, "--", 0.98, 2)
     plot.pi0_figures("pi0", "tau_pairs", [geant4, model], geant4, {}, str(tmp_path), "", [])
-    # radial, 2 energy, 4 angle, 1 separation, and the pi0 mass, energy and categories
-    assert len(figures) == 11
+    # radial, 2 energy, 4 angle, 1 separation, and the pi0 mass, energy, theta, phi and
+    # categories
+    assert len(figures) == 13
     for fig in figures:
         # Nothing drawn in the model's colour is left out, so the menu hides all of it
         assert unmarked(fig, MODEL.color) == []
