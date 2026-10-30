@@ -398,12 +398,19 @@ def test_inputs_made_elsewhere_are_simulated_each_with_its_own_seed(bench):
                            - data["pi0__tau_pairs__true_theta"][good]) < 1).all()
     rows = [row for row in read_metrics(bench.path("observables", "plots", "metrics.csv"))
             if row["observable"] == "pi0"]
+    js = [row for row in rows if row["metric"] == "JS"]
     assert sorted((row["scenario"], row["profile"], row["simulator"], row["metric"])
-                  for row in rows) == [("tau_pairs", "energy", "caloclouds3", "JS"),
-                                       ("tau_pairs", "mass", "caloclouds3", "JS")]
+                  for row in js) == [("tau_pairs", "energy", "caloclouds3", "JS"),
+                                     ("tau_pairs", "mass", "caloclouds3", "JS")]
     # from the two seeds, paired, so with their spread
-    assert all(float(row["uncertainty"]) > 0 for row in rows), rows
-    for figure in ("pi0_mass__tau_pairs", "pi0_energy__tau_pairs"):
+    assert all(float(row["uncertainty"]) > 0 for row in js), js
+    # and the rest, the model's relative deviation from Geant4 in each category
+    # of the reconstruction (the paper's figure 10)
+    categories = {"categories_" + key for key in ("n_reco", "n_fake", "n_good", "n_confused",
+                                                  "n_missed")}
+    assert rows != js and all(row["metric"] == "dev%" and row["profile"] in categories
+                              for row in rows if row not in js), rows
+    for figure in ("pi0_mass__tau_pairs", "pi0_energy__tau_pairs", "pi0_categories__tau_pairs"):
         assert os.path.isfile(bench.path("observables", "plots", figure + ".png")), figure
 
     # Nothing makes the inputs made elsewhere, even forced
