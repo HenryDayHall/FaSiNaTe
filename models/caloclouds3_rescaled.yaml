@@ -8,7 +8,7 @@
 # the benchmark paper, "A First Full Physics Benchmark for Highly Granular
 # Calorimeter Surrogates".
 
-name: CaloClouds3
+name: CaloClouds3 (rescaled)
 
 # Each shower is a set of points (x, y, layer, energy), as many as the shower
 # needs, rather than energies on a fixed grid of cells. DDML deposits each
