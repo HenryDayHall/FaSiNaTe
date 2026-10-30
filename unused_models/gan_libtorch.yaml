@@ -1,0 +1,78 @@
+# GAN: DDML's example generative adversarial network of photon showers in the
+# ILD Si-W ECal at normal incidence, on a regular grid, conditioned on the
+# energy only, through DDML's LibTorch backend (weights: DDML's
+# models/francisca_gan_jit.pt, the TorchScript of the network in
+# models/francisca_gan.onnx, which models/gan_onnx.yaml runs). DDML has no
+# preset for it, so its DDML model configuration is written out below.
+#
+# simulate_models.sh simulates the benchmark scenarios with every model in this
+# folder; the file name (gan_libtorch) names the model and its output folders.
+#
+# DDML doesn't say how it was trained. Its grid and conditioning are those of
+# the GAN of "Getting High" (arXiv:2005.05334), trained on photons of 10 to 100
+# GeV at normal incidence.
+
+name: GAN (LibTorch)
+
+# The energy of each cell of a fixed grid, 30 layers of 30 x 30 cells of 5 x 5
+# mm^2, which DDML centres where the photon enters and deposits cell by cell
+# in the real detector.
+representation: regular_grid
+
+# Factors fixed when the model was trained. The model has no input for them, so
+# it is only valid where they hold.
+fixed_at_training:
+  detector:
+    # The ILD Si-W ECal: 30 layers of silicon, 5 x 5 mm^2 cells.
+    # simulate_models.sh simulates in this detector, as for the other models:
+    # the path is relative to k4geo ($k4geo_DIR) unless absolute.
+    name: ILD
+    calorimeter: EcalBarrel
+    compact_file: ILD/compact/ILD_l5_o1_v02/ILD_l5_o1_v02.xml
+  particle:
+    name: gamma  # Geant4's name, which DDML uses
+    pdg: 22
+  # Normal incidence: the model has no input for the angle
+  direction: normal
+
+# Factors given to the model as context for each shower.
+context:
+  energy:
+    unit: GeV
+    # Not documented in DDML; the GAN of arXiv:2005.05334 was trained on 10 to
+    # 100 GeV
+    training_range: null
+
+# How simulate_models.sh runs the model with the DDML build from
+# scripts/build_ddml.sh (DDML's python-inference branch).
+ddml:
+  # A DDML model configuration written out (ddml_bench/ddml_configs.py), as
+  # DDML's earlier steering file set the GAN up: its plugin compiled against
+  # LibTorch, with its own grid (RegularGridGANModel; the 100 numbers of the
+  # latent vector are drawn from Geant4's random numbers, so ddsim's seed sets
+  # them), loading ../models/francisca_gan_jit.pt (relative to DDML's scripts/
+  # folder, where ddsim runs), for photons above 10 GeV entering the ECal
+  # barrel. As the model knows only normal incidence, DDML places each layer of
+  # its shower where the photon's line of flight crosses it (correct_angles).
+  # Its plugin has no trigger of its own leaving out the ends of the barrel and
+  # the joins between its staves.
+  model_configs:
+    - plugin: RegularGridGANPolyhedraBarrelTorchModel/BarrelModelTorch
+      geometry: ILD_BARREL
+      plugin_properties:
+        ModelPath: ../models/francisca_gan_jit.pt
+        OptimizeFlag: 1
+        IntraOpNumThreads: 1
+      applicable_particles: [gamma]
+      triggers: {gamma: 10}
+      correct_angles: true
+  # The weights, in the DDML repository, and their md5 sum, which
+  # simulate_models.sh checks, as it checks that ModelPath is this file.
+  weights: models/francisca_gan_jit.pt
+  weights_md5: "fbf6f647165f032af50a30e5e8ce9832"
+
+# How plot_observables.sh draws this model: a colour and a line style
+# (matplotlib's: here a dash pattern, offset and lengths) of its own.
+plot:
+  color: "#0095aa"
+  linestyle: [0, [8, 2]]

@@ -7,7 +7,7 @@ import os
 import shutil
 import tarfile
 
-from ddml_bench import manifest
+from ddml_bench import ddml_configs, manifest, process
 
 from conftest import TAU_INPUTS
 from test_pipeline_local import DI_PHOTON_INPUT, DI_PHOTON_SIMULATIONS, INPUTS
@@ -200,6 +200,23 @@ def test_the_headers_of_the_logs(tmp_path):
         "key4hep": "2026-04-08", "ddml": "263256cca31b37335cd2aae34b81e899bd2a5851", "seed": 7,
         "steering": "ddsim_steer.py", "compact": "ILD/compact/ILD_l5_o1_v02/ILD_l5_o1_v02.xml",
         "presets": "CC3_BARREL_PY_INTERFACE"}
+    # A model with DDML model configurations written out: them, as one string
+    configs = [{"preset": "CC3_BARREL", "plugin_properties": {"ModelPath": "../models/a.pt"}},
+               {"plugin": "P/B", "geometry": "ILD_BARREL", "applicable_particles": ["gamma"],
+                "triggers": {"gamma": 10}}]
+    log.write_text(
+        "# ddml-bench models: caloclouds3_libtorch on di_photon\n"
+        "# DDML      263256cca31b37335cd2aae34b81e899bd2a5851, installed in /sw/DDML/install\n"
+        "# command   (in /sw/DDML/scripts) " + process.quote(
+            ["ddsim", "--steeringFile", "/repo/scripts/ddsim_steer_models.py", "--compactFile",
+             "/k/ILD/compact/ILD_l5_o1_v02/ILD_l5_o1_v02.xml"]
+            + [arg for c in configs for arg in ("--ml-config", ddml_configs.option(c))]
+            + ["--inputFiles", "/d/p22.slcio", "--outputFile", "/d/.x.root",
+               "--numberOfEvents=-1", "--random.seed=2"]) + "\n")
+    assert manifest.read_log(str(log)) == {
+        "ddml": "263256cca31b37335cd2aae34b81e899bd2a5851", "steering": "ddsim_steer_models.py",
+        "compact": "ILD/compact/ILD_l5_o1_v02/ILD_l5_o1_v02.xml",
+        "model_configs": ddml_configs.canonical(configs)}
     log.write_text(
         "# reconstruct_simulation.sh: geant4 on single_photon\n"
         "# Key4hep   2026-04-08\n"

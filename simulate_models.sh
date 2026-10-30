@@ -2,7 +2,10 @@
 # Simulate the benchmark scenarios with every model described in models/, or
 # the ones named, running ddsim with DDML as in DDML's README: with the DDML
 # build from scripts/build_ddml.sh, in the environment that setup.sh gives,
-# inside the container unless container.enabled is false.
+# inside the container unless container.enabled is false. A model with DDML
+# presets runs with them (--ml-model); one with DDML model configurations
+# written out (ddml.model_configs) runs scripts/ddsim_steer_models.py, which
+# runs DDML's steering file with those (--ml-config) in place of presets.
 #
 # Usage: ./simulate_models.sh [options] [MODEL ...]
 #
@@ -30,9 +33,11 @@
 # renamed once ddsim succeeds, so an output is always complete. Each model is
 # simulated in the detector it was trained for
 # (fixed_at_training.detector.compact_file). Before simulating, the
-# environment is checked: the DDML libraries, the ddml Python package and each
-# preset's plugin come from the configured build, and the weights match their
-# md5 sum. Make the scenarios' inputs first with ./generate_input.sh.
+# environment is checked: the DDML libraries, the ddml Python package and the
+# plugin of each preset or configuration come from the configured build, each
+# gives the model the particles it is for, the weights match their md5 sum,
+# and the plugins load those weights. Make the scenarios' inputs first with
+# ./generate_input.sh.
 #
 # Run it from the repository root, or submit it from there with sbatch. The
 # environment is checked where the models run, so --dry-run also builds DDML

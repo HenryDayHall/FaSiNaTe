@@ -1,0 +1,78 @@
+# BIB-AE with one angle: the Bounded-Information-Bottleneck autoencoder of
+# photon showers in the ILD Si-W ECal of "New Angles on Fast Calorimeter Shower
+# Simulation" (arXiv:2303.18150), on a regular grid, conditioned on the energy
+# and the polar angle of incidence, through DDML's LibTorch backend (weights:
+# DDML's models/BIBAE_Full_PP_cut.pt). DDML has no preset for it, so its DDML
+# model configuration is written out below.
+#
+# simulate_models.sh simulates the benchmark scenarios with every model in this
+# folder; the file name (bibae_one_angle) names the model and its output
+# folders.
+
+name: BIB-AE (one angle)
+
+# The energy of each cell of a fixed grid, 30 layers of 30 x 60 cells of 5 x 5
+# mm^2, which DDML places where the photon enters and deposits cell by cell in
+# the real detector.
+representation: regular_grid
+
+# Factors fixed when the model was trained. The model has no input for them, so
+# it is only valid where they hold.
+fixed_at_training:
+  detector:
+    # The ILD Si-W ECal as in the paper: 30 layers of silicon, 5 x 5 mm^2
+    # cells. simulate_models.sh simulates in this detector, as for the other
+    # models: the path is relative to k4geo ($k4geo_DIR) unless absolute.
+    name: ILD
+    calorimeter: EcalBarrel
+    compact_file: ILD/compact/ILD_l5_o1_v02/ILD_l5_o1_v02.xml
+  particle:
+    name: gamma  # Geant4's name, which DDML uses
+    pdg: 22
+
+# Factors given to the model as context for each shower.
+context:
+  energy:
+    unit: GeV
+    training_range: [10, 100]
+  direction:
+    # The angle between the photon's direction and the face of the ECal, 90
+    # degrees at normal incidence, as DDML passes it (90 degrees less the angle
+    # from the normal to the layers). The other angle was fixed in training.
+    unit: deg
+    training_range:
+      frame: local
+      theta: [30, 90]
+
+# How simulate_models.sh runs the model with the DDML build from
+# scripts/build_ddml.sh (DDML's python-inference branch).
+ddml:
+  # A DDML model configuration written out (ddml_bench/ddml_configs.py), as
+  # DDML's earlier steering file set the one-angle BIB-AE up: its plugin
+  # compiled against LibTorch, loading ../models/BIBAE_Full_PP_cut.pt (relative
+  # to DDML's scripts/ folder, where ddsim runs), for photons above 10 GeV
+  # entering the ECal barrel, as the presets of the other models. Unlike their
+  # plugins, this one has no trigger of its own leaving out the ends of the
+  # barrel and the joins between its staves.
+  model_configs:
+    - plugin: RegularGridBIBAEPolyhedraBarrelTorchModel/BarrelModelTorch
+      geometry: ILD_BARREL
+      plugin_properties:
+        ModelPath: ../models/BIBAE_Full_PP_cut.pt
+        OptimizeFlag: 1
+        IntraOpNumThreads: 1
+      applicable_particles: [gamma]
+      triggers: {gamma: 10}
+      # The model is conditioned on the angle itself
+      correct_angles: false
+  # The weights, relative to the DDML clone (building DDML downloads them), and
+  # their md5 sum, which simulate_models.sh checks, as it checks that ModelPath
+  # is this file.
+  weights: models/BIBAE_Full_PP_cut.pt
+  weights_md5: "e676eb45523078674beee86d1a9de82a"
+
+# How plot_observables.sh draws this model: a colour and a line style
+# (matplotlib's: here a dash pattern, offset and lengths) of its own.
+plot:
+  color: "#a8329e"
+  linestyle: [0, [5, 1, 1, 1, 1, 1]]

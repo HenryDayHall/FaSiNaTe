@@ -3,12 +3,21 @@
 Each model has a description, models/<name>.yaml (see models/caloclouds3.yaml
 for a commented one); its file name names the model in commands and folders.
 This is the one place that reads them.
+
+How DDML runs a model is either DDML's presets (ddml.presets: names from
+python/ddml/configs.py in DDML, which ddsim takes with --ml-model), or DDML
+model configurations written out (ddml.model_configs, each a preset to start
+from and the fields of DDML's ModelConfig to set; ddml_bench/ddml_configs.py),
+for a model DDML has no preset for. A model can be another's closure test
+(closure): the same model, e.g. the same weights through another of DDML's
+inference backends, which the plots then compare with it directly.
 """
 
 import os
 import re
 
 from .config import REPO_DIR
+from .ddml_configs import ModelConfigError, check as check_model_config
 from .layout import GEANT4, LayoutError, check_name
 
 MODELS_DIR = os.path.join(REPO_DIR, "models")
@@ -37,8 +46,12 @@ def model_names():
 
 def load_model(name):
     """What the pipeline needs from models/<name>.yaml, after checking it:
-    name, config (the description's path), label, compact_file, particle,
-    presets, weights, weights_md5, color and linestyle."""
+    name, config (the description's path), label, compact_file, particle (the
+    one it was trained on), particles (those DDML gives it), presets or
+    model_configs (the other empty), weights, weights_md5, closure (None, or
+    {of: the model it is a closure test of, identical: whether the events
+    should be identical where both have the same seeds}), color and
+    linestyle."""
     names = model_names()
     path = os.path.join(MODELS_DIR, name + ".yaml")
     source = os.path.relpath(path, REPO_DIR)
@@ -89,24 +102,68 @@ def load_model(name):
     get("representation", text, "how the model represents a shower, e.g. point_cloud")
     get("fixed_at_training", section, "the factors fixed when the model was trained")
     get("context", section, "the factors given to the model for each shower")
+    get("ddml", section, "how DDML runs the model: its presets or model_configs, and weights")
+    particle = get("fixed_at_training.particle.name", text,
+                   "the Geant4 name of the particle the model was trained on")
+    particles = get("ddml.particles", names_list,
+                    "the particles DDML gives the model, by their Geant4 names (by default "
+                    "the one it was trained on)", required=False)
     model = {
         "name": name,
         "config": source,
         "label": str(data.get("name") or name),
         "compact_file": get("fixed_at_training.detector.compact_file", text,
                             "the detector's compact file, relative to k4geo"),
-        "particle": get("fixed_at_training.particle.name", text,
-                        "the Geant4 name of the particle the model was trained on"),
+        "particle": particle,
+        "particles": sorted(set(particles)) if particles else [particle],
         "presets": get("ddml.presets", names_list,
-                       "a list of DDML presets (from python/ddml/configs.py in DDML)"),
+                       "a list of DDML presets (from python/ddml/configs.py in DDML)",
+                       required=False) or [],
+        "model_configs": [],
         "weights": get("ddml.weights", text,
                        "the path of the weights in the DDML clone", required=False),
         "weights_md5": get("ddml.weights_md5",
                            lambda v: isinstance(v, str) and bool(_MD5.match(v)),
                            "an md5 sum: 32 hex digits, in quotes", required=False),
+        "closure": None,
     }
     if model["weights_md5"] and not model["weights"]:
         raise ModelError("%s: ddml.weights_md5 is set, but not ddml.weights" % source)
+
+    # How DDML runs it: its presets, or DDML model configurations written out
+    configs = get("ddml.model_configs", lambda v: isinstance(v, list) and bool(v),
+                  "a list of DDML model configurations: each a DDML preset's name, or a "
+                  "preset to start from and the fields of DDML's ModelConfig to set (see "
+                  "ddml_bench/ddml_configs.py)", required=False)
+    if bool(model["presets"]) == bool(configs):
+        raise ModelError("%s: ddml should have %s: presets, DDML's own (passed to ddsim with "
+                         "--ml-model), or model_configs, DDML model configurations written out "
+                         "(see ddml_bench/ddml_configs.py)"
+                         % (source, "one of these, not both" if configs else "one of these"))
+    for number, entry in enumerate(configs or [], 1):
+        try:
+            model["model_configs"].append(check_model_config(
+                entry, "%s: ddml.model_configs, entry %d" % (source, number)))
+        except ModelConfigError as error:
+            raise ModelError(str(error))
+
+    # The model it is the closure test of
+    closure = data.get("closure")
+    if closure is not None:
+        if not isinstance(closure, dict) or set(closure) - {"of", "identical"} \
+                or not isinstance(closure.get("of"), str):
+            raise ModelError("%s: closure should be {of: the model this is the same as, e.g. "
+                             "through another DDML backend, identical: true or false}" % source)
+        twin = closure["of"]
+        if twin == name or twin == GEANT4 or twin not in names:
+            raise ModelError("%s: closure.of should be another model in models/ (%s), not %r"
+                             % (source, ", ".join(n for n in names if n != name) or "none", twin))
+        identical = closure.get("identical", False)
+        if not isinstance(identical, bool):
+            raise ModelError("%s: closure.identical should be true or false: whether the "
+                             "events of the two should be identical where they are simulated "
+                             "with the same seeds" % source)
+        model["closure"] = {"of": twin, "identical": identical}
 
     # How the plots draw it; models without a style get the next fallback one
     plot = data.get("plot") or {}

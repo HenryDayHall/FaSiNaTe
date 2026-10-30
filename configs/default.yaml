@@ -41,6 +41,15 @@ ddml:
   embedded_python: true
   # Download DDML's reference models while building (needs HTTPS access to CERN).
   download_models: true
+  # With download_models, also these models of DDML's that its build doesn't
+  # download (they have a models/<file>.md5 in DDML but aren't in the list of
+  # its models/CMakeLists.txt), each fetched into DDML's models/ folder from
+  # models_url by that md5 sum, and checked against it, as DDML's own are.
+  # L2LFlowsx9.pt is ConvL2LFlows (models/l2lflows.yaml), which DDML's list
+  # has had commented out since it was added.
+  extra_models: [L2LFlowsx9.pt]
+  # Where DDML's models are, by their md5 sums (DDML's ExternalData template)
+  models_url: "https://key4hep.web.cern.ch:443/MLFastShowerModels/{md5}"
   # Extra CMake arguments, e.g. [-DCMAKE_BUILD_TYPE=Release]
   cmake_args: []
 

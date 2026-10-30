@@ -6,10 +6,14 @@ build that setup.sh sets up, from its scripts/ folder (presets can give model
 paths relative to it), on one thread. A scenario with simulation_seeds has
 each input simulated once with each seed (ddsim's --random.seed), or with
 one_seed_per_input once with its own seed, each a task of its own; otherwise
-ddsim chooses a seed. The models run with their presets
-(--ml-model). Geant4, the reference, runs scripts/ddsim_steer_geant4.py, which
-runs DDML's steering file without DDML's fast simulation, so that every other
-setting (physics list, crossing angle, filters, ...) is the same.
+ddsim chooses a seed.
+A model with presets runs with them (--ml-model); one with DDML model
+configurations written out (ddml.model_configs) runs scripts/ddsim_steer_models.py,
+which runs DDML's steering file with the configurations made from its --ml-config options
+(ddml_bench/ddml_configs.py) in place of presets. Geant4, the reference, runs
+scripts/ddsim_steer_geant4.py, which runs DDML's steering file without DDML's
+fast simulation. So every other setting (physics list, crossing angle,
+filters, ...) is the same for every simulator.
 
 ddsim writes to a hidden file next to the output, renamed once ddsim
 succeeds, so an output that exists is complete; its log goes next to it.
@@ -24,11 +28,13 @@ import socket
 import sys
 import time
 
-from .. import process
+from .. import ddml_configs, process
 from ..config import REPO_DIR
 from .base import Stage, StageError, compact_problems, resolve_compact
 
 GEANT4_STEERING = os.path.join(REPO_DIR, "scripts", "ddsim_steer_geant4.py")
+# For the models with DDML model configurations written out, not presets
+MODELS_STEERING = os.path.join(REPO_DIR, "scripts", "ddsim_steer_models.py")
 # A line of a .components file, as DD4hep's plugin service reads it
 _COMPONENT = re.compile(r"^\s*(?:(v[0-9]+)::)?([^:]+):(.*\S)\s*$")
 
@@ -214,21 +220,28 @@ class Models(Simulate):
 
     def params(self, simulator, layout, scenario, path, events, seed):
         params = Simulate.params(self, simulator, layout, scenario, path, events, seed)
-        params.update(presets=list(simulator["presets"]), model=simulator)
+        params.update(presets=list(simulator["presets"]),
+                      model_configs=list(simulator["model_configs"]), model=simulator)
         return params
 
     def command(self, task, compact, partial):
         params = task["params"]
-        presets = []
-        for preset in params["presets"]:
-            presets += ["--ml-model", preset]
-        # DDML's README names ddsim_steer_cc3.py, but that only exists on DDML's
-        # henry-all-showers branch, and imports get_presets_from_args, which DDML
-        # has since replaced; apart from the particle gun, which an input file
-        # overrides, it matches ddsim_steer.py
-        return (["ddsim", "--steeringFile",
-                 os.path.join(os.environ["DDML_SOURCE_DIR"], "scripts", "ddsim_steer.py"),
-                 "--compactFile", compact] + presets
+        if params.get("model_configs"):
+            # DDML's steering file with these configurations instead of presets
+            steering = MODELS_STEERING
+            options = []
+            for entry in params["model_configs"]:
+                options += [ddml_configs.OPTION, ddml_configs.option(entry)]
+        else:
+            # DDML's README names ddsim_steer_cc3.py, but that only exists on
+            # DDML's henry-all-showers branch, and imports get_presets_from_args,
+            # which DDML has since replaced; apart from the particle gun, which
+            # an input file overrides, it matches ddsim_steer.py
+            steering = os.path.join(os.environ["DDML_SOURCE_DIR"], "scripts", "ddsim_steer.py")
+            options = []
+            for preset in params["presets"]:
+                options += ["--ml-model", preset]
+        return (["ddsim", "--steeringFile", steering, "--compactFile", compact] + options
                 + ["--inputFiles", task["inputs"][0], "--outputFile", partial,
                    "--numberOfEvents=%d" % params["events"]] + self.seed_args(params))
 
@@ -352,17 +365,35 @@ def check_models(models):
     for model in models:
         name = model["name"]
         problems += compact_problems([model["compact_file"]], name)
+        # What DDML is to run: (what, its ModelConfig), for each preset, or each
+        # configuration as the steering file makes it (ddml_bench/ddml_configs.py)
+        configs = []
         for preset in model["presets"]:
             settings = getattr(presets, preset, None)
             if preset.startswith("_") or not isinstance(settings, model_config):
                 problems.append("%s: DDML has no preset %s (see %s)" % (
                     name, preset, os.path.join(source, "python", "ddml", "configs.py")))
                 continue
+            configs.append(("preset %s" % preset, settings))
+        if model["model_configs"]:
+            try:
+                built = ddml_configs.build(model["model_configs"])
+            except Exception as error:  # ModelConfigError, or no g4units
+                problems.append("%s: can't make its DDML model configurations (%s): %s"
+                                % (name, model["config"], error))
+                built = []
+            for number, settings in enumerate(built, 1):
+                configs.append(("model configuration %d" % number, settings))
+                say("%s: model configuration %d: %s" % (name, number,
+                                                       ddml_configs.describe(settings)))
+
+        loads = []  # (what, the file its ModelPath names)
+        for what, settings in configs:
             plugin = settings.plugin.split("/")[0]
             if plugin not in factories:
-                problems.append("%s: preset %s needs the plugin %s, which no .components file "
-                                "on LD_LIBRARY_PATH declares; was DDML built with the inference "
-                                "backend it needs?" % (name, preset, plugin))
+                problems.append("%s: %s needs the plugin %s, which no .components file on "
+                                "LD_LIBRARY_PATH declares; was DDML built with the inference "
+                                "backend it needs?" % (name, what, plugin))
             else:
                 directory, library = factories[plugin]
                 loaded = _first_on_library_path(library)
@@ -373,31 +404,51 @@ def check_models(models):
                                         name, plugin, loaded or os.path.join(directory, library),
                                         lib_dir))
                 else:
-                    say("%s: preset %s runs %s from %s" % (name, preset, plugin, loaded))
+                    say("%s: %s runs %s from %s" % (name, what, plugin, loaded))
             particles = sorted(settings.applicable_particles)
-            if particles != [model["particle"]]:
-                problems.append("%s: preset %s gives %s to the model, but %s says it was "
-                                "trained on %s" % (name, preset, ", ".join(particles) or "nothing",
-                                                   model["config"], model["particle"]))
+            if particles != model["particles"]:
+                problems.append("%s: %s gives %s to the model, but %s says %s" % (
+                    name, what, ", ".join(particles) or "nothing", model["config"],
+                    "it was trained on %s" % model["particle"]
+                    if model["particles"] == [model["particle"]]
+                    else "DDML gives it %s (ddml.particles)" % ", ".join(model["particles"])))
             module = settings.plugin_properties.get("PythonModule")
             if module:
                 origin = _module_origin(module)
                 if origin:
-                    say("%s: preset %s runs the Python module %s" % (name, preset, origin))
+                    say("%s: %s runs the Python module %s" % (name, what, origin))
                 else:
-                    problems.append("%s: preset %s runs the Python module %s, which isn't on "
-                                    "PYTHONPATH" % (name, preset, module))
+                    problems.append("%s: %s runs the Python module %s, which isn't on "
+                                    "PYTHONPATH" % (name, what, module))
+            model_path = settings.plugin_properties.get("ModelPath")
+            if isinstance(model_path, str) and model_path:
+                # As the plugin opens it, from DDML's scripts/ folder
+                loads.append((what, os.path.normpath(os.path.join(source, "scripts",
+                                                                  model_path))))
+        if model["particles"] != [model["particle"]]:
+            say("%s: trained on %s, but DDML gives it %s (ddml.particles in %s)" % (
+                name, model["particle"], ", ".join(model["particles"]), model["config"]))
 
-        if model["weights"]:
-            weights = os.path.join(source, model["weights"])
+        weights = os.path.join(source, model["weights"]) if model["weights"] else None
+        if weights:
             md5 = _md5(weights) if model["weights_md5"] and os.path.isfile(weights) else None
             if not os.path.isfile(weights):
                 problems.append("%s: weights not found: %s (building DDML downloads them when "
-                                "ddml.download_models is true)" % (name, weights))
+                                "ddml.download_models is true, those DDML's build doesn't when "
+                                "they are in ddml.extra_models; scripts/build_ddml.sh --clean "
+                                "builds again)" % (name, weights))
             elif md5 and md5 != model["weights_md5"]:
                 problems.append("%s: the md5 sum of %s is %s, not %s as in %s; if these weights "
                                 "are intended, update weights_md5 there" % (
                                     name, weights, md5, model["weights_md5"], model["config"]))
             else:
                 say("%s: weights %s%s" % (name, weights, ", md5 checked" if md5 else ""))
+        # The weights whose md5 sum is checked should be what the plugins load
+        for what, path in loads:
+            if weights and not _same_path(path, weights):
+                problems.append("%s: %s loads %s, but the weights %s checks are %s; make "
+                                "ModelPath and ddml.weights the same file" % (
+                                    name, what, path, model["config"], weights))
+            elif not os.path.isfile(path):
+                problems.append("%s: %s loads %s, which isn't there" % (name, what, path))
     return problems

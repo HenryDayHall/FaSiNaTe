@@ -6,7 +6,8 @@ is configured by test.yaml: a small single_photon scenario of two energies and
 a small di_photon one of one energy simulated with two seeds, the tau_pairs
 scenario disabled (Bench.with_tau_pairs() enables it, with inputs of its own),
 a data folder of its own, no container, ILDConfig cloned from a local
-repository and no patches. Its "DDML build" is a folder with the files setup.sh and the
+repository and no patches.
+Its "DDML build" is a folder with the files setup.sh and the
 stages' environment checks look for, and an env file that puts the fakes in
 tests/fakes on PATH and PYTHONPATH: ddsim, k4run, DDML's Python package and
 pyLCIO, and slurm's sbatch and squeue. So every script runs as it does on the
@@ -17,22 +18,40 @@ programs at the ends faked.
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 
 import pytest
+import yaml
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FAKES = os.path.join(REPO, "tests", "fakes")
 sys.path.insert(0, REPO)
 
-# What the copy of the repository has
-COPIED = ["ddml_bench", "scripts", "configs", "models", "ILD_Particle_Gun.py",
+# What the copy of the repository has (and of models/, only BENCH_MODELS)
+COPIED = ["ddml_bench", "scripts", "configs", "ILD_Particle_Gun.py",
           "ILD_Di_Photon_Gun.py", "setup.sh",
           "pipeline.sh", "slurm_pipeline.sh", "slurm_simulate_geant4.sh", "generate_input.sh",
           "simulate_geant4.sh", "simulate_models.sh", "reconstruct_simulation.sh",
           "observables_from_reconstruction.sh", "plot_observables.sh"]
+BENCH_MODELS = ["caloclouds3"]
+# The plugins DDML declares (src/MLModelActions.cc), with every backend built
+DDML_PLUGINS = [
+    "RegularGridGANPolyhedraBarrelONNXModel", "RegularGridGANEndcapONNXModel",
+    "Par04ExampleVAEPolyhedraBarrelONNXModel", "Par04ExampleVAEEndcapONNXModel",
+    "RegularGridGANPolyhedraBarrelTorchModel", "RegularGridGANEndcapTorchModel",
+    "RegularGridBIBAEPolyhedraBarrelTorchModel", "RegularGridBIBAEEndcapTorchModel",
+    "RegularGridTwoAngleBIBAEModelPolyhedraBarrelTorchModel",
+    "RegularGridTwoAngleBIBAEModelEndcapTorchModel",
+    "CaloCloudsTwoAngleModelPolyhedraBarrelTorchModel", "CaloCloudsTwoAngleModelEndcapTorchModel",
+    "L2LFlowsModelPolyhedraBarrelTorchModel", "L2LFlowsModelEndcapTorchModel",
+    "CaloCloudsTwoAngleModelPolyhedraBarrelPyEmbeddedModel",
+    "CaloCloudsTwoAngleModelEndcapPyEmbeddedModel",
+    "LoadHDF5RegularGridTwoAngleBIBAEModelPolyhedraBarrel",
+    "LoadHDF5RegularGridTwoAngleBIBAEModelEndcap",
+    "LoadHDF5PionCloudsPCHadronModelPolyhedraBarrel", "LoadHDF5PionCloudsPCHadronModelEndcap"]
 COMPACT = "ILD/compact/ILD_l5_o1_v02/ILD_l5_o1_v02.xml"
 CELL_ID_ENCODING = "system:5,module:3,stave:4,tower:4,layer:6,wafer:6,slice:4,cellX:32:-16,cellY:-16"
 GIT = ["git", "-c", "user.name=tests", "-c", "user.email=tests@example.org",
@@ -201,7 +220,7 @@ class Bench(object):
         self.data = os.path.join(tmp, "data")
         self.bin = os.path.join(tmp, "bin")
         self.slurm_state = os.path.join(tmp, "fake-slurm")
-        ddml = os.path.join(self.software, "DDML")
+        self.ddml = ddml = os.path.join(self.software, "DDML")
 
         # The repository, without anyone's local settings
         os.makedirs(self.repo)
@@ -214,19 +233,15 @@ class Bench(object):
             else:
                 shutil.copy2(source, target)
 
-        # The fake DDML build, its weights, and the detector
+        # The fake DDML build, the models with their weights, and the detector
         shutil.copytree(os.path.join(FAKES, "ddml"), ddml)
-        weights = os.path.join(ddml, "models", "CC3_SF_2A.pt")
-        _write(weights, "fake weights\n")
-        md5 = hashlib.md5(open(weights, "rb").read()).hexdigest()
-        model = os.path.join(self.repo, "models", "caloclouds3.yaml")
-        text = open(model).read()
-        _write(model, text.replace('weights_md5: "2ad56d91577686071a20278825d48c7e"',
-                                   'weights_md5: "%s"' % md5))
+        os.makedirs(os.path.join(self.repo, "models"))
+        for name in BENCH_MODELS:
+            self.add_model(name)
         _write(os.path.join(ddml, "install", "bin", "thisDDML.sh"), "# fake\n")
         _write(os.path.join(ddml, "install", "lib", "libDDML.so"), "fake\n")
         _write(os.path.join(ddml, "install", "lib", "libDDML.components"),
-               "v2::libDDML.so:CaloCloudsTwoAngleModelPolyhedraBarrelPyEmbeddedModel\n")
+               "".join("v2::libDDML.so:%s\n" % plugin for plugin in DDML_PLUGINS))
         _write(os.path.join(tmp, "k4geo", COMPACT), "<lccdd/>\n")
 
         # ILDConfig, as a repository to clone
@@ -261,6 +276,23 @@ class Bench(object):
         env_file = os.path.join(self.software, "env", "ddml.sh")
         _write(env_file, ENV_FILE.format(stamp=stamp, ddml=ddml, tmp=tmp, bin=self.bin,
                                          python=os.path.join(FAKES, "python")))
+
+    def add_model(self, name, text=None, folder="models"):
+        """Put the repository's <folder>/<name>.yaml (models/ unless said, or
+        unused_models/ for a model set aside), or text, in the copy's models/,
+        with fake weights in the fake DDML build, whose md5 sum it is then
+        given."""
+        if text is None:
+            with open(os.path.join(REPO, folder, name + ".yaml")) as stream:
+                text = stream.read()
+        weights = (yaml.safe_load(text).get("ddml") or {}).get("weights")
+        if weights:
+            path = os.path.join(self.ddml, weights)
+            if not os.path.exists(path):
+                _write(path, "fake weights: %s\n" % weights)
+            md5 = hashlib.md5(open(path, "rb").read()).hexdigest()
+            text = re.sub(r'weights_md5: "[0-9a-f]{32}"', 'weights_md5: "%s"' % md5, text)
+        _write(os.path.join(self.repo, "models", name + ".yaml"), text)
 
     def setting(self, name):
         """A setting from scripts/fasinate_config.py --shell, by its variable."""
@@ -340,9 +372,11 @@ def bench(tmp_path):
 @pytest.fixture
 def config_env(bench, monkeypatch):
     """This process configured as the bench is (for the graph and layout tests,
-    which run the harness in-process)."""
+    which run the harness in-process), its models too."""
+    from ddml_bench import models
     for key in list(os.environ):
         if key.startswith(("FASINATE_", "DDML_")) or key == "KEY4HEP_STACK":
             monkeypatch.delenv(key)
     monkeypatch.setenv("FASINATE_CONFIG", bench.config)
+    monkeypatch.setattr(models, "MODELS_DIR", os.path.join(bench.repo, "models"))
     return bench
