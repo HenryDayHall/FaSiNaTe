@@ -7,10 +7,12 @@ energy per event in each bin (for a radial profile, per unit area: divided by
 the area of the bin's ring around the shower axis; see DENSITIES), Geant4 as a
 grey filled histogram and each model as a line in its own colour and line
 style, each with its statistical uncertainty as a band, and below, each model's
-relative deviation from Geant4. The legend gives each model's distance from
-Geant4, by the metric of the observable in the configuration (jensen_shannon:
-the Jensen-Shannon divergence, natural logarithm, of the fractions of the
-energy in the bins; l1: the mean absolute difference).
+relative deviation from Geant4, its band the uncertainties of the model and of
+Geant4 combined (relative_deviation(); every figure's deviations are drawn
+so). The legend gives each model's distance from Geant4, by the metric of the
+observable in the configuration (jensen_shannon: the Jensen-Shannon
+divergence, natural logarithm, of the fractions of the energy in the bins; l1:
+the mean absolute difference).
 
 The reconstructed energy of each event (the observable energy) gives two
 figures, the energy linearity and resolution of the benchmark paper. The events
@@ -282,6 +284,25 @@ def stairs_band(ax, edges, low, high, color, alpha):
                            step="post", color=color, alpha=alpha, linewidth=0)
 
 
+def relative_deviation(mean, error, reference_mean, reference_error):
+    """A model's relative deviation from the reference, in %: (mean /
+    reference_mean - 1) * 100, with the uncertainties of both combined as
+    its uncertainty, those of a ratio of independent values: 100 *
+    sqrt((error / reference_mean)^2 + (mean * reference_error /
+    reference_mean^2)^2). The ratio panels draw it as the model's one band,
+    or error bar, rather than the reference's and the model's apart. NaN
+    where the reference isn't above 0 (and the uncertainty, where either
+    isn't known)."""
+    import numpy as np
+    mean, error = np.asarray(mean, dtype=float), np.asarray(error, dtype=float)
+    reference_mean = np.asarray(reference_mean, dtype=float)
+    reference_error = np.asarray(reference_error, dtype=float)
+    safe = np.where(reference_mean > 0, reference_mean, np.nan)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = mean / safe
+        return (ratio - 1) * 100, 100 * np.hypot(error, ratio * reference_error) / safe
+
+
 def plot_profile(observable, scenario, profile, curves, reference, metric_name, out_base,
                  formats, xlabel=None, note=None, trim=True, room=False, ylabel=None,
                  guide=None, metric_texts=None, every_deviation=False):
@@ -292,9 +313,10 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
     top left (for distributions peaked in the middle); guide is a value to
     draw a line at, across the axes. With metric_name None, the metric is the
     caller's: metric_texts, [(simulator, text)], gives what each simulator's
-    label says of it. The axis of the deviations from Geant4 shows the 95% of
-    them in the bins it measures well, or with every_deviation all of them
-    (for a few bins, all measured well)."""
+    label says of it. Each model's deviation from Geant4 below has one band,
+    the uncertainties of both combined (relative_deviation()). The axis of the
+    deviations shows the 95% of them in the bins Geant4 measures well, or
+    with every_deviation all of them (for a few bins, all measured well)."""
     import numpy as np
 
     default_xlabel, log_y = STYLES.get(observable, (profile, False))
@@ -391,8 +413,6 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
         bottom = axes[1][0]
         r_mean, r_err = ref[2][keep], ref[3][keep]
         valid = r_mean > 0
-        safe = np.where(valid, r_mean, np.nan)
-        stairs_band(bottom, edges, -r_err / safe * 100, r_err / safe * 100, REFERENCE_EDGE, 0.3)
         bottom.axhline(0, color=REFERENCE_EDGE, linewidth=1)
         # The deviations' axis is set by the bins Geant4 measures to 10% or
         # better, if there are any, so that sparse tails don't set it
@@ -402,8 +422,7 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
         for simulator, _, mean, err, _ in curves:
             if simulator is reference:
                 continue
-            dev = (mean[keep] / safe - 1) * 100
-            band = err[keep] / safe * 100
+            dev, band = relative_deviation(mean[keep], err[keep], r_mean, r_err)
             mark(simulator, DATA,
                  bottom.stairs(dev, edges, color=simulator.color, baseline=None,
                                linestyle=simulator.linestyle, linewidth=1.4),
@@ -808,7 +827,8 @@ def plot_energy(observable, scenario, measured, reference, metric_name, out, suf
 def plot_energy_figure(spec, scenario, entries, reference, metric_name, out_base, formats):
     """One figure of the energy (a spec of ENERGY_FIGURES): every simulator's
     points against the true energy, each with its uncertainty and the function
-    fitted to them, and below, each model's relative deviation from Geant4.
+    fitted to them, and below, each model's relative deviation from Geant4,
+    its error bars the uncertainties of both combined (relative_deviation()).
     Returns ([(simulator, metric, value)], [(simulator, (parameter, value,
     uncertainty, chi^2, degrees of freedom))])."""
     from matplotlib.lines import Line2D
@@ -890,22 +910,16 @@ def plot_energy_figure(spec, scenario, entries, reference, metric_name, out_base
 
     if with_ratio:
         bottom = axes[1][0]
-        r_x, r_y, r_err = column(ref, "energy"), column(ref, value), column(ref, value + "_err")
-        r_band = np.where(r_y > 0, r_err / np.where(r_y > 0, r_y, 1) * 100, np.nan)
-        if len(r_x) > 1:
-            bottom.fill_between(r_x, -r_band, r_band, color=REFERENCE_EDGE, alpha=0.3,
-                                linewidth=0)
-        else:
-            bottom.errorbar(r_x, [0], yerr=r_band, fmt="none", ecolor=REFERENCE_EDGE)
         bottom.axhline(0, color=REFERENCE_EDGE, linewidth=1)
-        spread = [r_band]
+        spread = []
         for (simulator, points), (color, linestyle, marker, size, layer) in zip(entries, styles):
             pairs = aligned(ref, points) if simulator is not reference else []
             if not pairs:
                 continue
-            base = np.array([r[value] for r, _ in pairs])
-            dev = (np.array([p[value] for _, p in pairs]) / base - 1) * 100
-            band = np.array([p[value + "_err"] for _, p in pairs]) / base * 100
+            # The error bars are the model's and Geant4's uncertainties combined
+            dev, band = relative_deviation(
+                [p[value] for _, p in pairs], [p[value + "_err"] for _, p in pairs],
+                [r[value] for r, _ in pairs], [r[value + "_err"] for r, _ in pairs])
             energy = [p["energy"] for _, p in pairs]
             # The line apart from the points, so the error bars stay solid
             mark(simulator, DATA,
@@ -915,7 +929,7 @@ def plot_energy_figure(spec, scenario, entries, reference, metric_name, out_base
                                  markersize=size - 1, markeredgecolor="white",
                                  markeredgewidth=0.8, elinewidth=1.0, capsize=0, zorder=layer))
             spread.append(np.abs(dev) + band)
-        spread = np.concatenate(spread)
+        spread = np.concatenate(spread) if spread else np.zeros(0)
         spread = spread[np.isfinite(spread)]
         limit = float(np.clip(1.25 * spread.max(), 2, 100)) if spread.size else 10.0
         bottom.set_ylim(-limit, limit)
@@ -1392,9 +1406,10 @@ def plot_pi0_categories(observable, scenario, entries, reference, out, suffix, f
     of each category (PI0_CATEGORIES) a bar of each simulator, its mean over
     the seeds with their spread as the error, Geant4 first; below, each
     model's relative deviation from Geant4 in each category, its error the
-    model's spread, with Geant4's as the band. Returns [(simulator,
+    spreads of both combined (relative_deviation()). Returns [(simulator,
     figure, metric, value, uncertainty)]: of each model and category the
-    relative deviation in %, figure categories_<category>."""
+    relative deviation in %, with that combined uncertainty, figure
+    categories_<category>."""
     import numpy as np
     ref = next((points for simulator, points in entries if simulator is reference), None)
     with_ratio = ref is not None and len(entries) > 1
@@ -1402,6 +1417,9 @@ def plot_pi0_categories(observable, scenario, entries, reference, out, suffix, f
     top = axes[0][0]
     keys = [key for key, _ in PI0_CATEGORIES]
     x = np.arange(len(keys))
+    if with_ratio:
+        r_mean = np.array([ref["mean"][key] for key in keys])
+        r_err = np.array([ref["error"][key] for key in keys])
     # Geant4 first, then the models in their order
     ordered = sorted(entries, key=lambda entry: entry[0] is not reference)
     width = 0.8 / len(ordered)
@@ -1419,21 +1437,9 @@ def plot_pi0_categories(observable, scenario, entries, reference, out, suffix, f
         keyed.append((bars, simulator.label, None if is_ref else simulator))
         if not is_ref:
             mark(simulator, DATA, bars)
-        if not with_ratio:
+        if is_ref or not with_ratio:
             continue
-        if is_ref:
-            r_mean = np.array([ref["mean"][key] for key in keys])
-            r_err = np.array([ref["error"][key] for key in keys])
-            safe = np.where(r_mean > 0, r_mean, np.nan)
-            for i in x:
-                band = r_err[i] / safe[i] * 100
-                if np.isfinite(band):
-                    axes[1][0].fill_between([i - 0.4, i + 0.4], -band, band,
-                                            color=REFERENCE_EDGE, alpha=0.3, linewidth=0)
-            continue
-        with np.errstate(divide="ignore", invalid="ignore"):
-            dev = (mean / safe - 1) * 100
-            band = error / safe * 100
+        dev, band = relative_deviation(mean, error, r_mean, r_err)
         mark(simulator, DATA,
              axes[1][0].errorbar(x + shift, dev, yerr=band, fmt="o", color=color, markersize=4,
                                  markeredgecolor="white", markeredgewidth=0.6, elinewidth=1,
