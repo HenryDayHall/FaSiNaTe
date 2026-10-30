@@ -1103,14 +1103,14 @@ def separation_figures(observable, scenario, simulators, reference, settings, ou
 PI0_LABELS = {
     "mass": r"Reconstructed $\pi^0$ mass $M_{\gamma\gamma}$ [GeV]",
     "energy": r"$E_{\pi^0}^\mathrm{reco} - E_{\pi^0}^\mathrm{MC}$ [GeV]",
-    "reco_categories": r"Reconstructed $\pi^0$ categories",
 }
-PI0_YLABEL = {"mass": r"Fraction of good $\pi^0$s per GeV",
-              "energy": r"Fraction of good $\pi^0$s per GeV",
-              "reco_categories": r"Fraction of $\pi^0$s",
-}
-
-
+PI0_YLABEL = r"Fraction of good $\pi^0$s per GeV"
+# The categories of the pi0 reconstruction (the paper's figure 10), in the
+# order drawn: the key pi0_categories() gives each, and its label
+PI0_CATEGORIES = (("n_reco", "nRecoPi0"), ("n_fake", "nFake"), ("n_good", "nGood"),
+                  ("n_confused", "nConfused"), ("n_missed", "nMissed"))
+PI0_CATEGORY_FIGURE = "categories"
+PI0_CATEGORY_YLABEL = r"$\pi^0$s per seed"
 
 
 def seed_histograms(values, seeds, edges):
@@ -1165,21 +1165,136 @@ def good_pi0s(simulator, observable, scenario, energy):
              "energy": (np.asarray(stored[energy]) - np.asarray(stored["true_energy"]))[good]},
             seeds[good])
 
-def pi0_reconstruction_categories(simulator, observable, scenario):
+def pi0_categories(simulator, observable, scenario):
+    """({category: [event]}, [event's ddsim seed]) of the reconstruction of a
+    simulator's pi0s, as the paper's figure 10: of each event its candidates
+    (n_reco), those good (measure.GOOD), confused (measure.CONFUSED) and fake
+    (the rest, so n_fake = n_reco - n_good - n_confused), and its MC pi0s
+    that no good or confused candidate is of (n_missed). Candidates can share
+    photons, so a confused candidate can be of an MC pi0 that another is
+    good of: an MC pi0 is counted found once, however many are of it."""
     import numpy as np
     stored = simulator.stored(observable, scenario)
     n_reco = np.asarray(stored["n_candidates"], dtype=np.int64)
+    n_true = np.asarray(stored["n_true"], dtype=np.int64)
     n_events = len(n_reco)
     event = np.repeat(np.arange(n_events), n_reco)
     match = np.asarray(stored["match"])
     n_good = np.bincount(event[match == measure.GOOD], minlength=n_events)
     n_confused = np.bincount(event[match == measure.CONFUSED], minlength=n_events)
-    n_fake = n_reco - n_good - n_confused
-    n_true = np.asarray(stored["n_true"], dtype=np.int64)
-    n_missed = n_true - n_good - n_confused
-    seeds = event_seeds(simulator, scenario, n_events)
-    return ({"n_reco": n_reco, "n_good": n_good, "n_confused": n_confused, "n_fake": n_fake,
-             "n_missed": n_missed}, seeds)
+    # The MC pi0s found: each (event, true_index) of a good or confused candidate once
+    found = (match == measure.GOOD) | (match == measure.CONFUSED)
+    pairs = np.unique(np.stack([event[found],
+                                np.asarray(stored["true_index"], dtype=np.int64)[found]]),
+                      axis=1) if found.any() else np.zeros((2, 0), dtype=np.int64)
+    n_found = np.bincount(pairs[0], minlength=n_events)
+    return ({"n_reco": n_reco, "n_fake": n_reco - n_good - n_confused, "n_good": n_good,
+             "n_confused": n_confused, "n_missed": n_true - n_found},
+            event_seeds(simulator, scenario, n_events))
+
+
+def category_totals(categories, seeds):
+    """Of each category, its total over the events of each ddsim seed: a dict
+    of "seeds", in order; "totals", {category: [seed's total]}; "mean" and
+    "error", {category: the mean over the seeds, and their standard deviation
+    (the sample's, ddof 1; with one seed the Poisson uncertainty)}; "spread",
+    whether the error is the spread over the seeds; and "events", {seed: its
+    events}."""
+    import numpy as np
+    seeds = np.asarray(seeds)
+    order = sorted(set(int(s) for s in seeds))
+    totals = {key: np.array([float(np.sum(values[seeds == seed])) for seed in order])
+              for key, values in categories.items()}
+    mean, error = {}, {}
+    for key, values in totals.items():
+        mean[key] = float(values.mean()) if order else float("nan")
+        error[key] = (float(values.std(ddof=1)) if len(order) > 1 else
+                      float(np.sqrt(values[0])) if order else float("nan"))
+    return {"seeds": order, "totals": totals, "mean": mean, "error": error,
+            "spread": len(order) > 1,
+            "events": {seed: int(np.sum(seeds == seed)) for seed in order}}
+
+
+def plot_pi0_categories(observable, scenario, entries, reference, out, suffix, formats):
+    """The figure of the categories of the pi0 reconstruction,
+    pi0_categories__<scenario>, from entries, [(simulator, category_totals())]:
+    of each category (PI0_CATEGORIES) a bar of each simulator, its mean over
+    the seeds with their spread as the error, Geant4 first; below, each
+    model's relative deviation from Geant4 in each category, its error the
+    model's spread, with Geant4's as the band. Returns [(simulator,
+    figure, metric, value, uncertainty)]: of each model and category the
+    relative deviation in %, figure categories_<category>."""
+    import numpy as np
+    ref = next((points for simulator, points in entries if simulator is reference), None)
+    with_ratio = ref is not None and len(entries) > 1
+    fig, axes = new_figure(with_ratio)
+    top = axes[0][0]
+    keys = [key for key, _ in PI0_CATEGORIES]
+    x = np.arange(len(keys))
+    # Geant4 first, then the models in their order
+    ordered = sorted(entries, key=lambda entry: entry[0] is not reference)
+    width = 0.8 / len(ordered)
+    results = []
+    for place, (simulator, points) in enumerate(ordered):
+        shift = (place - (len(ordered) - 1) / 2) * width
+        is_ref = simulator is reference
+        color = REFERENCE_EDGE if is_ref else simulator.color
+        mean = np.array([points["mean"][key] for key in keys])
+        error = np.array([points["error"][key] for key in keys])
+        top.bar(x + shift, mean, width, color=REFERENCE_FILL if is_ref else color,
+                edgecolor=color, linewidth=1, alpha=1 if is_ref else 0.85, label=simulator.label,
+                yerr=error, error_kw={"ecolor": INK, "elinewidth": 1, "capsize": 2})
+        if not with_ratio:
+            continue
+        if is_ref:
+            r_mean = np.array([ref["mean"][key] for key in keys])
+            r_err = np.array([ref["error"][key] for key in keys])
+            safe = np.where(r_mean > 0, r_mean, np.nan)
+            for i in x:
+                band = r_err[i] / safe[i] * 100
+                if np.isfinite(band):
+                    axes[1][0].fill_between([i - 0.4, i + 0.4], -band, band,
+                                            color=REFERENCE_EDGE, alpha=0.3, linewidth=0)
+            continue
+        with np.errstate(divide="ignore", invalid="ignore"):
+            dev = (mean / safe - 1) * 100
+            band = error / safe * 100
+        axes[1][0].errorbar(x + shift, dev, yerr=band, fmt="o", color=color, markersize=4,
+                            markeredgecolor="white", markeredgewidth=0.6, elinewidth=1,
+                            capsize=0)
+        for key, value, uncertainty in zip(keys, dev, band):
+            if np.isfinite(value):
+                results.append((simulator, "%s_%s" % (PI0_CATEGORY_FIGURE, key), "dev%",
+                                float(value), float(uncertainty)))
+    top.set_ylabel(PI0_CATEGORY_YLABEL, color=INK)
+    highest = max((points["mean"][key] + (points["error"][key]
+                                          if np.isfinite(points["error"][key]) else 0))
+                  for _, points in entries for key in keys)
+    top.set_ylim(0, 1.3 * highest if highest > 0 else 1)
+    top.legend(frameon=False, fontsize=7.5, labelcolor=INK, loc="upper right")
+    shown = ref if ref is not None else entries[0][1]
+    events = sorted(set(shown["events"].values()))
+    top.text(0.02, 0.97, "%s\n%s events × %d seed%s%s\nerrors: %s" % (
+        scenario, events[0] if len(events) == 1 else "%d–%d" % (events[0], events[-1]),
+        len(shown["seeds"]), "" if len(shown["seeds"]) == 1 else "s",
+        " (%s)" % reference.label if ref is not None else "",
+        "seed spread" if shown["spread"] else "statistical"),
+        transform=top.transAxes, fontsize=8, color=MUTED, va="top", ha="left")
+    bottom = axes[-1][0]
+    bottom.set_xticks(x)
+    bottom.set_xticklabels([label for _, label in PI0_CATEGORIES], color=INK)
+    bottom.set_xlim(-0.5, len(keys) - 0.5)
+    if with_ratio:
+        bottom.axhline(0, color=REFERENCE_EDGE, linewidth=1)
+        spread = [abs(r[3]) + r[4] for r in results if np.isfinite(r[4])]
+        limit = float(np.clip(1.25 * max(spread), 2, 100)) if spread else 10.0
+        bottom.set_ylim(-limit, limit)
+        bottom.set_ylabel("Rel. dev. [%]", color=INK)
+    base = figure_base(out, observable, PI0_CATEGORY_FIGURE, scenario, suffix)
+    finish(fig, axes, base, formats)
+    say("%s: %s" % (", ".join(simulator.label for simulator, _ in ordered),
+                    ", ".join("%s.%s" % (os.path.basename(base), f) for f in formats)))
+    return results
 
 
 def pi0_figures(observable, scenario, simulators, reference, settings, out, suffix, formats):
@@ -1193,8 +1308,10 @@ def pi0_figures(observable, scenario, simulators, reference, settings, out, suff
     deviation from Geant4 below. The legend gives each model's metric (by
     default jensen_shannon) of the numbers of good pi0s in the bins from
     Geant4's, seed by seed: the mean, with the spread over the seeds
-    (seed_metric()). Returns ([(simulator, figure, metric, value,
-    uncertainty)], [])."""
+    (seed_metric()). Then, as the paper's figure 10, the categories of the
+    reconstruction (pi0_categories()) of every simulator,
+    pi0_categories__<scenario> (plot_pi0_categories()). Returns ([(simulator,
+    figure, metric, value, uncertainty)], [])."""
     import numpy as np
     settings = settings or {}
     try:
@@ -1256,10 +1373,27 @@ def pi0_figures(observable, scenario, simulators, reference, settings, out, suff
             note += "\n%.2g%% outside the bins" % (100 * shown["outside"])
         base = figure_base(out, observable, figure, scenario, suffix)
         plot_profile(observable, scenario, figure, curves, reference if ref is not None else None,
-                     None, base, formats, xlabel=PI0_LABELS[figure], ylabel=PI0_YLABEL[figure],
+                     None, base, formats, xlabel=PI0_LABELS[figure], ylabel=PI0_YLABEL,
                      note=note, trim=False, room=True, metric_texts=texts)
         say("%s: %s" % (", ".join(c[0].label for c in curves),
                         ", ".join("%s.%s" % (os.path.basename(base), f) for f in formats)))
+
+    # The categories of the reconstruction, of every simulator that measured
+    # the pi0s (one without a good pi0 too)
+    entries = [(simulator, category_totals(*pi0_categories(simulator, observable, scenario)))
+               for simulator in simulators]
+    entries = [(simulator, points) for simulator, points in entries if points["seeds"]]
+    if entries:
+        ref = next((points for simulator, points in entries if simulator is reference), None)
+        for simulator, points in entries:
+            if ref is not None and simulator is not reference \
+                    and sorted(points["events"].values()) != sorted(ref["events"].values()):
+                say("%s, %s: its seeds have %s events and %s's %s, so its totals of the pi0 "
+                    "categories aren't of the same events" % (
+                        simulator.name, scenario, sorted(points["events"].values()),
+                        reference.name, sorted(ref["events"].values())))
+        results += plot_pi0_categories(observable, scenario, entries, reference, out, suffix,
+                                       formats)
     return results, []
 
 

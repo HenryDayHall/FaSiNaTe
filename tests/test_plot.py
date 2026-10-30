@@ -510,7 +510,9 @@ def pi0_simulator(name, label, color, linestyle, scale, seed, seeds=(1, 2, 3), n
     k = int(counts.sum())
     match = rng.choice([measure.GOOD, measure.CONFUSED, measure.FAKE], k, p=[0.8, 0.15, 0.05])
     true = rng.uniform(10, 80, k)
-    stored = {"n_candidates": counts, "match": match,
+    slot = np.concatenate([rng.permutation(2)[:c] for c in counts]) if k else np.zeros(0, int)
+    stored = {"n_candidates": counts, "match": match, "n_true": np.full(len(counts), 2),
+              "true_index": np.where(match != measure.FAKE, slot, -1),
               "mass": rng.normal(0.135 * np.sqrt(scale), 0.011, k),
               "energy": rng.normal(true * scale, 0.8),
               "photon_energy": rng.normal(true * scale - 0.5, 1.0),
@@ -528,10 +530,13 @@ def test_the_pi0_figures_draw_the_good_pi0s_over_the_seeds(figures, tmp_path):
                 "energy_bins": 32, "reconstructed_energy": "photons"}
     results, fits = plot.pi0_figures("pi0", "tau_pairs", [geant4, model], geant4, settings,
                                      str(tmp_path), "", ["png"])
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["pi0_energy__tau_pairs.png",
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["pi0_categories__tau_pairs.png",
+                                                          "pi0_energy__tau_pairs.png",
                                                           "pi0_mass__tau_pairs.png"]
-    assert fits == [] and [result[:3] for result in results] == [(model, "mass", "JS"),
-                                                                 (model, "energy", "JS")]
+    assert fits == [] and [result[:3] for result in results[:2]] == [(model, "mass", "JS"),
+                                                                     (model, "energy", "JS")]
+    assert [result[1] for result in results[2:]] == [
+        "categories_" + key for key, _ in plot.PI0_CATEGORIES]
     for figure, (_, name, _, value, spread), (first, last, n_bins) in zip(
             figures, results, ((0.09, 0.18, 18), (-4.0, 4.0, 32))):
         edges = np.linspace(first, last, n_bins + 1)
@@ -574,4 +579,41 @@ def test_a_simulator_without_good_pi0s_is_left_out(figures, tmp_path):
     stored["match"][:] = measure.CONFUSED
     results, _ = plot.pi0_figures("pi0", "tau_pairs", [model], None, {}, str(tmp_path), "",
                                   ["png"])
-    assert results == [] and figures == [] and not list(tmp_path.iterdir())
+    # Only the categories are drawn, and without Geant4 there's no deviation
+    assert results == [] and len(figures) == 1
+    assert [p.name for p in tmp_path.iterdir()] == ["pi0_categories__tau_pairs.png"]
+
+
+def categorised(n_candidates, match, true_index, n_true, seeds=None):
+    stored = {"n_candidates": np.array(n_candidates), "match": np.array(match),
+              "true_index": np.array(true_index), "n_true": np.array(n_true)}
+    data = {} if seeds is None else {"tau_pairs__n_events": np.array([len(n_true) // len(seeds)]
+                                                                     * len(seeds)),
+                                     "tau_pairs__seeds": np.array(seeds)}
+    return types.SimpleNamespace(data=data, stored=lambda observable, scenario: stored)
+
+
+def test_the_pi0_categories_are_counted_per_event():
+    G, C, F = measure.GOOD, measure.CONFUSED, measure.FAKE
+    # Event 0: one good. Event 1: none of its 2. Event 2: a good, a confused
+    # of the same MC pi0 (they share a photon) and a fake; its other pi0 missed.
+    # Event 3: two confused of its two pi0s.
+    simulator = categorised([1, 0, 3, 2], [G, G, C, F, C, C], [0, 1, 1, -1, 0, 1], [1, 2, 2, 2])
+    categories, seeds = plot.pi0_categories(simulator, "pi0", "tau_pairs")
+    expected = {"n_reco": [1, 0, 3, 2], "n_good": [1, 0, 1, 0], "n_confused": [0, 0, 1, 2],
+                "n_fake": [0, 0, 1, 0], "n_missed": [0, 2, 1, 0]}
+    for key, values in expected.items():
+        np.testing.assert_array_equal(categories[key], values, err_msg=key)
+    np.testing.assert_array_equal(seeds, [-1] * 4)
+
+
+def test_the_pi0_category_totals_are_per_seed():
+    G, C, F = measure.GOOD, measure.CONFUSED, measure.FAKE
+    simulator = categorised([1, 2, 1, 0], [G, G, F, C], [0, 0, -1, 0], [1, 1, 1, 1], seeds=[7, 9])
+    points = plot.category_totals(*plot.pi0_categories(simulator, "pi0", "tau_pairs"))
+    assert points["seeds"] == [7, 9] and points["events"] == {7: 2, 9: 2} and points["spread"]
+    np.testing.assert_array_equal(points["totals"]["n_reco"], [3, 1])
+    np.testing.assert_array_equal(points["totals"]["n_fake"], [1, 0])
+    assert points["mean"]["n_good"] == 1.0 and points["error"]["n_good"] == pytest.approx(
+        np.std([2, 0], ddof=1))
+    np.testing.assert_array_equal(points["totals"]["n_missed"], [0, 1])
