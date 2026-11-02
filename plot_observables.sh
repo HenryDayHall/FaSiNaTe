@@ -9,8 +9,9 @@
 # line) and resolution (sigma90/mu90, fitted with a + b/sqrt(E) + c/E), from
 # the central 90% of the events at each energy. The intrinsic angles give the
 # distributions of the residuals, reconstructed - true, of theta and phi of
-# the showers' axes, from the PCA of all their hits and of the most energetic
-# 4%, binned as observables.intrinsic_angle says (max_residual, n_bins).
+# the showers' axes, from the PCA of all their hits in the bounding box and of
+# the most energetic 4% of those, binned as observables.intrinsic_angle says
+# (max_residual, n_bins).
 #
 # Usage: ./plot_observables.sh [options] [SIMULATOR ...]
 #

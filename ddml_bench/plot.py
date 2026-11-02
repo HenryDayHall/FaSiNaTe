@@ -37,7 +37,9 @@ of the fractions in the bins. The bins are from -max_residual to max_residual
 degrees, n_bins of them, in the observable's settings in the configuration
 (only drawing them, so changing them needs no measuring again); showers
 outside them still count among all the showers, and those without an axis
-(fewer than two hits) don't.
+(fewer than two hits) don't. The text in the corner says which PCA, and the
+side of the bounding box its hits were taken from, if any, as the .npz file
+records the settings it was measured with.
 
 The di-photon separation (the observable photon_separation) gives a figure
 for each energy of the photons, as in the benchmark paper: the mean number of
@@ -965,6 +967,19 @@ def hits_text(name):
     return "all hits" if name == "all" else "the top %s%% of hits" % name[len("top"):]
 
 
+def measured_box(simulator, observable, scenario):
+    """The side (mm) of the bounding box a simulator's intrinsic angles were
+    measured in, by the settings its .npz file records (measure.bounding_box());
+    None for every hit, or if the file doesn't say."""
+    data = getattr(simulator, "data", None) or {}
+    stored = data.get(SEP.join((observable, scenario, "settings")))
+    try:
+        side = json.loads(str(stored)).get("bounding_box") if stored is not None else None
+    except (ValueError, AttributeError):
+        return None
+    return float(side) if isinstance(side, (int, float)) and not isinstance(side, bool) else None
+
+
 def residual_histogram(residuals, edges):
     """The fraction of the showers with an axis (a finite residual) in each
     bin and its statistical uncertainty, the number of them, and the fraction
@@ -995,6 +1010,14 @@ def angle_figures(observable, scenario, simulators, reference, settings, out, su
             say("%s, so the residuals are drawn from %g to %g degrees in %d bins"
                 % ((error,) + default))
     stored = [(simulator, simulator.stored(observable, scenario)) for simulator in simulators]
+    # The bounding box each simulator's hits were taken from
+    boxes = dict((simulator.name, measured_box(simulator, observable, scenario))
+                 for simulator, _ in stored)
+    if len(set(boxes.values())) > 1:
+        say("%s: the intrinsic angles weren't all measured in the same bounding box (%s), so "
+            "the figures compare showers cut differently" % (scenario, ", ".join(
+                "%s: %s" % (name, "none" if side is None else "%g mm" % side)
+                for name, side in sorted(boxes.items()))))
     # The PCAs, in the order they were measured in
     selections = []
     for _, values in stored:
@@ -1016,9 +1039,10 @@ def angle_figures(observable, scenario, simulators, reference, settings, out, su
                 without = int(np.sum(~np.isfinite(values[what])))
                 if without:
                     say("%s, %s: %d of %d showers have no axis from the PCA of %s (fewer "
-                        "than two hits), so they're left out" % (
+                        "than two hits%s), so they're left out" % (
                             simulator.name, scenario, without, len(values[what]),
-                            hits_text(selection)))
+                            hits_text(selection),
+                            "" if boxes[simulator.name] is None else " in the bounding box"))
                 histogram = residual_histogram(values[what], edges)
                 if histogram is None:
                     continue
@@ -1034,8 +1058,10 @@ def angle_figures(observable, scenario, simulators, reference, settings, out, su
             # The text in the corner is of Geant4, if it is there
             ref = reference if any(c[0] is reference for c in curves) else None
             shown = next((i for i, c in enumerate(curves) if c[0] is ref), 0)
-            note = "%s, PCA of %s\n%d showers%s" % (
-                scenario, hits_text(selection), curves[shown][4],
+            side = boxes[curves[shown][0].name]
+            note = "%s, PCA of %s%s\n%d showers%s" % (
+                scenario, hits_text(selection),
+                "" if side is None else "\nin a box of side %g mm" % side, curves[shown][4],
                 " (%s)" % ref.label if ref is not None else "")
             if outside[shown] > 0:
                 note += "\n%.2g%% beyond \u00b1%g\u00b0" % (100 * outside[shown], last)

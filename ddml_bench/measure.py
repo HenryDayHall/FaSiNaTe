@@ -29,12 +29,15 @@ The observables known (the keys of `observables` in the configuration):
                         direction: the residuals, reconstructed - true. The
                         axis is the first principal component of an
                         energy-weighted principal component analysis (PCA) of
-                        the reconstructed hits (principal_axes()), once for
-                        each fraction of them in hit_fractions, the most
-                        energetic first: all of them, and the top 4%, which
-                        leaves out the peripheral hits that tilt the axis
-                        (most_energetic()). The figures histogram the residuals
-                        (ddml_bench/plot.py)
+                        the reconstructed hits (principal_axes()) in the
+                        bounding box, if there is one: a box about the
+                        incident particle's line of flight, centred on it in
+                        every layer (in_bounding_box()). There is a PCA for
+                        each fraction of those hits in hit_fractions, the
+                        most energetic first: all of them, and the top 4%,
+                        which leaves out the peripheral hits that tilt the
+                        axis (most_energetic()). The figures histogram the
+                        residuals (ddml_bench/plot.py)
   photon_separation     of an event of two incident photons (a di-photon
                         scenario): their separation on the front face of the
                         ECAL barrel, the distance between the points where their
@@ -68,7 +71,8 @@ file's events in turn. Keys, with "__" between the parts:
   intrinsic_angle__<scenario>__dphi_<hits>          from the PCA of those hits, less the
                                                     incident particle's, degrees (phi's
                                                     from -180 to 180); NaN for a shower
-                                                    without an axis (fewer than 2 hits)
+                                                    without an axis (fewer than 2 hits,
+                                                    in the bounding box if there is one)
   intrinsic_angle__<scenario>__theta_true           [event] theta and phi of the incident
   intrinsic_angle__<scenario>__phi_true             particle's direction, degrees
   intrinsic_angle__<scenario>__settings             the settings, as JSON
@@ -100,7 +104,9 @@ have been in this data folder (the .npz files of the references can be
 fetched rather than made): only those that are there are checked for being
 newer. (Files measured before the paths were recorded relative to
 paths.data_dir, with full paths, still count, from any data folder.) Settings
-that only change the figures (see DRAWING) don't count.
+that only change the figures (see DRAWING) don't count, nor do settings added
+since a measurement was made, at the value that measures as before (see
+ADDED_SETTINGS: e.g. bounding_box null, every hit).
 """
 
 import json
@@ -266,6 +272,20 @@ def residual_binning(observable, settings):
                 for (name, _), limit, bins in zip(selections, limits, n_bins))
 
 
+def bounding_box(observable, settings):
+    """The side (mm) of the bounding box, the box about each shower that its
+    hits must be in to go into the PCAs (in_bounding_box()): bounding_box in
+    the settings, or None for every hit (null, or not given)."""
+    side = settings.get("bounding_box")
+    if side is None:
+        return None
+    if isinstance(side, bool) or not isinstance(side, (int, float)) or not side > 0:
+        raise ObservableError("observables.%s.bounding_box should be the side, in mm, of the box "
+                              "about each shower that its hits must be in (e.g. 800), or null "
+                              "for all of them" % observable)
+    return float(side)
+
+
 def check_angles(observable, settings):
     """The settings of the intrinsic angle."""
     collections = settings.get("hit_collections")
@@ -274,6 +294,7 @@ def check_angles(observable, settings):
         raise ObservableError("observables.%s needs hit_collections, a list of the collections "
                               "of reconstructed calorimeter hits, e.g. [EcalBarrelCollectionRec]"
                               % observable)
+    bounding_box(observable, settings)
     residual_binning(observable, settings)  # and hit_fractions with it
 
 
@@ -301,6 +322,32 @@ def most_energetic(event, energy, n_events, fraction):
     # (less a little, so that a product that should be whole isn't rounded up past it)
     keep = np.maximum(np.ceil(fraction * counts - 1e-9), 2)
     return rank < keep[event]
+
+
+def in_bounding_box(event, position, vertex, direction, side):
+    """Which of the hits (the index of each one's event, and its position
+    [hit, xyz], mm) are in their event's bounding box, about the line of
+    flight of its incident particle (from its vertex, along its direction:
+    [event, xyz]). The layers of the ECAL barrel's top stave are planes of
+    constant y, and in each the box is a square of that side, its edges along
+    x and z, centred on where the line of flight crosses the layer: each layer
+    shifted along the shower's axis, so that the axis is at its centre (as
+    CaloClouds3's preprocessing shifts them). In depth it reaches half the side
+    in front of the vertex (on the ECAL's face) and half the side behind it.
+    A hit on an edge is in it; of a particle not heading across the layers (a
+    direction without y), no hit is."""
+    import numpy as np
+    half = side / 2
+    with np.errstate(divide="ignore", invalid="ignore"):
+        # How far the line of flight goes in x and in z for each mm in y
+        slope = direction[:, [0, 2]] / direction[:, [1]]
+        depth = position[:, 1] - vertex[event, 1]
+        inside = np.abs(depth) <= half
+        # x, then z, to keep the memory a chunk's hits need low
+        for i, c in enumerate((0, 2)):
+            across = position[:, c] - vertex[event, c] - depth * slope[event, i]
+            inside &= np.abs(across) <= half
+    return inside
 
 
 def principal_axes(event, energy, position, n_events):
@@ -362,10 +409,11 @@ def angle_residuals(axes, direction):
 
 def measure_angles(observable, settings, branches, start, stop, primary, hits):
     """The residuals of the intrinsic angles of each event, from each PCA of
-    hit_selections() of the hits of hit_collections, and the incident
-    particle's theta and phi."""
+    hit_selections() of the hits of hit_collections in the bounding box (if
+    the settings give one, bounding_box()), and the incident particle's theta
+    and phi."""
     import numpy as np
-    direction = primary[1]
+    vertex, direction, _, has = primary
     n_events = stop - start
     parts = [hit for hit in hits if hit[0] in settings["hit_collections"]]
     event = np.concatenate([p[1] for p in parts] + [np.zeros(0, dtype=np.int64)])
@@ -374,6 +422,19 @@ def measure_angles(observable, settings, branches, start, stop, primary, hits):
     # Hits without energy have no weight in a PCA, so they aren't counted
     with_energy = energy > 0
     event, energy, position = event[with_energy], energy[with_energy], position[with_energy]
+    side = bounding_box(observable, settings)
+    if side is not None:
+        inside = in_bounding_box(event, position, vertex, direction, side)
+        # A shower with none of its hits in its box (as when its particle
+        # starts far from where it enters the calorimeter) has no axis
+        with_hits = has & (np.bincount(event, minlength=n_events) > 0)
+        emptied = with_hits & (np.bincount(event[inside], minlength=n_events) == 0)
+        if emptied.any():
+            say("    warning: %d of the %d showers with hits have none in the bounding box (%g mm "
+                "about the incident particle's line of flight), so they have no axis; does the "
+                "particle start on the ECAL's front face, heading into the top stave, as the "
+                "particle gun's do?" % (emptied.sum(), with_hits.sum(), side))
+        event, energy, position = event[inside], energy[inside], position[inside]
     values = dict(zip(("theta_true", "phi_true"), polar_angles(direction)))
     for name, fraction in hit_selections(observable, settings):
         chosen = most_energetic(event, energy, n_events, fraction)
@@ -860,6 +921,13 @@ def event_items(name, settings):
     return tuple(PER_EVENT[name][1](name, settings))
 
 
+# The settings an observable gained after it was first measured, each with the
+# value that measures it as before: with that value, the setting is left out
+# of the settings a measurement records, so measurements made before it was
+# there (here, or published) stay up to date
+ADDED_SETTINGS = {"intrinsic_angle": {"bounding_box": None}}
+
+
 # The settings of each observable that only change its figures, not what is
 # measured, so changing them only needs plotting again (./plot_observables.sh)
 DRAWING = {"intrinsic_angle": ("max_residual", "n_bins"),
@@ -870,9 +938,12 @@ DRAWING = {"intrinsic_angle": ("max_residual", "n_bins"),
 
 def observable_settings(name, settings):
     """The settings that decide an observable's numbers (not how it is
-    compared, or drawn)."""
+    compared, or drawn), without those added since that measure as before
+    (ADDED_SETTINGS)."""
     drawn = ("metric",) + DRAWING.get(name, ())
-    return {k: v for k, v in sorted(settings.items()) if k not in drawn}
+    before = ADDED_SETTINGS.get(name, {})
+    return {k: v for k, v in sorted(settings.items())
+            if k not in drawn and not (k in before and v == before[k])}
 
 
 def check_observables(config):
