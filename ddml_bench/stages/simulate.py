@@ -461,7 +461,15 @@ def check_models(models):
             say("%s: trained on %s, but DDML gives it %s (ddml.particles in %s)" % (
                 name, model["particle"], ", ".join(model["particles"]), model["config"]))
 
-        weights = os.path.join(source, model["weights"]) if model["weights"] else None
+        weights = None
+        if model["weights"]:
+            if model["weights_in"] == "ddml":
+                weights = os.path.join(source, model["weights"])
+            elif model["weights_in"] == "fasinate":
+                weights = os.path.join(REPO_DIR, model["weights"])
+            else:
+                raise ValueError(f"weights_in {model['weights_in']} not supported")
+
         if weights:
             md5 = _md5(weights) if model["weights_md5"] and os.path.isfile(weights) else None
             if not os.path.isfile(weights):

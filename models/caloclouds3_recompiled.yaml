@@ -1,0 +1,81 @@
+# CaloClouds3 (CC3), recompiled: regenerated the pt file from weights
+#
+# simulate_models.sh simulates the benchmark scenarios with every model in this
+# folder; the file name (caloclouds3_recompiled) names the model and its output
+# folders, and the inference code is the module of the same name.
+#
+# The training details are from the CaloClouds3 paper, arXiv:2511.01460, and
+# the benchmark paper, "A First Full Physics Benchmark for Highly Granular
+# Calorimeter Surrogates".
+
+name: CaloClouds3 (recompiled)
+
+# Each shower is a set of points (x, y, layer, energy), as many as the shower
+# needs, rather than energies on a fixed grid of cells. DDML deposits each
+# point in the cell of the real detector it falls in.
+representation: point_cloud
+
+# Factors fixed when the model was trained. The model has no input for them, so
+# it is only valid where they hold.
+fixed_at_training:
+  detector:
+    name: ILD_l5_o1_v02
+    calorimeter: EcalBarrel
+    # The training showers were simulated in a regularised copy of this ECal
+    # barrel (the cells of every layer on one grid, without the supports and
+    # gaps that break up the real layers). simulate_models.sh simulates in this
+    # detector: the path is relative to k4geo ($k4geo_DIR) unless absolute.
+    compact_file: ILD/compact/ILD_l5_o1_v02/ILD_l5_o1_v02.xml
+  particle:
+    name: gamma  # Geant4's name, which DDML uses
+    pdg: 22
+
+# Factors given to the model as context for each shower.
+context:
+  energy:
+    unit: GeV
+    training_range: [1, 127]
+  direction:
+    # DDML passes the polar and azimuthal angles of the incident direction at
+    # the calorimeter face, in the local frame (theta' measured from z', the
+    # normal to the layers), and the model conditions on the matching unit
+    # vector.
+    unit: deg
+    training_range:
+      # The training photons came from the interaction point into the top stave
+      # of the barrel, covering these angles in the global ILD frame, so up to
+      # about 60 degrees from the normal to the layers.
+      frame: global
+      theta: [30, 150]
+      phi: [80, 110]
+
+# How simulate_models.sh runs the model with the DDML build from
+# scripts/build_ddml.sh (DDML's python-inference branch).
+ddml:
+  # A DDML model configuration written out (ddml_bench/ddml_configs.py): DDML's
+  # preset CC3_BARREL_PY_INTERFACE, which gives photons above 10 GeV entering
+  # the ECal barrel to DDML's embedded-Python plugin, except near the ends of
+  # the barrel and the joins between its staves (Geant4 simulates everything
+  # else), with the plugin running models/caloclouds3_recompiled.py in place of
+  # DDML's python/examples/cc3_sf_2a_wrapper.py. scripts/ddsim_steer_models.py,
+  # which runs the configurations, puts models/ first on ddsim's Python path,
+  # so the plugin imports the module from there.
+  model_configs:
+    - preset: CC3_BARREL_PY_INTERFACE
+      plugin_properties:
+        PythonModule: caloclouds3_recompiled
+  # for this model, the weights live here in FaSiNaTe
+  weights_in: fasinate
+  # The weights the module loads (it reads them from here)
+  # from FaSiNaTe's weights folder, and their md5 sum, which
+  # simulate_models.sh checks
+  weights: models/weights/CC3_recompiled.pt
+  weights_md5: "e71fa7f29318f774bd447ad0611f597d"
+
+# How plot_observables.sh draws this model: a colour and a line style
+# (matplotlib's: here a dash pattern, offset and lengths)
+# Every model needs a line style of its own, as well as a colour, so the
+# curves can be told apart without colour.
+plot:
+  color: "#ff5917"
+  linestyle: [0, [1, 5]]
