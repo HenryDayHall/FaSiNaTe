@@ -307,16 +307,19 @@ observables:
   intrinsic_angle:
     scenarios: [single_photon]
     hit_collections: [EcalBarrelCollectionRec]
-    # Of those, only the hits in a box about the shower go into the PCAs: a
-    # cube with sides of this many mm, centred on the photon's vertex (where
-    # the particle gun starts it, on the ECAL's front face), its edges along
-    # the global axes (those of the top stave: x across it, y its normal, z
-    # the beam). Like the 800 mm box of the paper's optimal shower generators,
-    # it leaves out hits far from the shower, such as those of backscatter
-    # reaching the other side of the detector, which the models (putting their
-    # hits in boxes of their own about the shower) don't make, and which can
-    # tilt the axis of all the hits a long way. null uses every hit. Unlike
-    # the bins below, changing it means measuring again.
+    # Of those, only the hits in a box about the shower go into the PCAs, with
+    # sides of this many mm. In each layer of the top stave (a plane of
+    # constant y) the box is a square, its edges along x and z, centred on
+    # where the photon's line of flight crosses the layer: each layer is
+    # shifted along the shower's axis, so that the axis is at its centre. In
+    # depth it reaches half a side in front of the photon's vertex (where the
+    # particle gun starts it, on the ECAL's front face) and half a side
+    # behind: all of the ECAL's layers. Like the 800 mm box of the paper's
+    # optimal shower generators, it leaves out hits far from the shower, such
+    # as those of backscatter reaching the other side of the detector, which
+    # the models (putting their hits in boxes of their own about the shower)
+    # don't make, and which can tilt the axis of all the hits a long way. null
+    # uses every hit. Unlike the bins below, changing it means measuring again.
     bounding_box: 800
     # One PCA for each fraction of the hits in the box, the most energetic
     # first: all of them, and the top 4% (rounded up, but at least 2 hits),

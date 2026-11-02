@@ -30,13 +30,14 @@ The observables known (the keys of `observables` in the configuration):
                         axis is the first principal component of an
                         energy-weighted principal component analysis (PCA) of
                         the reconstructed hits (principal_axes()) in the
-                        bounding box, if there is one: a cube about the
-                        incident particle's vertex (in_bounding_box()). There
-                        is a PCA for each fraction of those hits in
-                        hit_fractions, the most energetic first: all of them,
-                        and the top 4%, which leaves out the peripheral hits
-                        that tilt the axis (most_energetic()). The figures
-                        histogram the residuals (ddml_bench/plot.py)
+                        bounding box, if there is one: a box about the
+                        incident particle's line of flight, centred on it in
+                        every layer (in_bounding_box()). There is a PCA for
+                        each fraction of those hits in hit_fractions, the
+                        most energetic first: all of them, and the top 4%,
+                        which leaves out the peripheral hits that tilt the
+                        axis (most_energetic()). The figures histogram the
+                        residuals (ddml_bench/plot.py)
   photon_separation     of an event of two incident photons (a di-photon
                         scenario): their separation on the front face of the
                         ECAL barrel, the distance between the points where their
@@ -272,7 +273,7 @@ def residual_binning(observable, settings):
 
 
 def bounding_box(observable, settings):
-    """The side (mm) of the bounding box, the cube about each shower that its
+    """The side (mm) of the bounding box, the box about each shower that its
     hits must be in to go into the PCAs (in_bounding_box()): bounding_box in
     the settings, or None for every hit (null, or not given)."""
     side = settings.get("bounding_box")
@@ -323,15 +324,29 @@ def most_energetic(event, energy, n_events, fraction):
     return rank < keep[event]
 
 
-def in_bounding_box(event, position, vertex, side):
+def in_bounding_box(event, position, vertex, direction, side):
     """Which of the hits (the index of each one's event, and its position
-    [hit, xyz], mm) are in their event's bounding box: the cube of that side
-    centred on the event's incident particle's vertex ([event, xyz]), its edges
-    along the global axes x, y and z. A hit on a face is in it."""
+    [hit, xyz], mm) are in their event's bounding box, about the line of
+    flight of its incident particle (from its vertex, along its direction:
+    [event, xyz]). The layers of the ECAL barrel's top stave are planes of
+    constant y, and in each the box is a square of that side, its edges along
+    x and z, centred on where the line of flight crosses the layer: each layer
+    shifted along the shower's axis, so that the axis is at its centre (as
+    CaloClouds3's preprocessing shifts them). In depth it reaches half the side
+    in front of the vertex (on the ECAL's face) and half the side behind it.
+    A hit on an edge is in it; of a particle not heading across the layers (a
+    direction without y), no hit is."""
     import numpy as np
-    inside = np.ones(len(event), dtype=bool)
-    for c in range(3):  # an axis at a time, to keep the memory a chunk's hits need low
-        inside &= np.abs(position[:, c] - vertex[event, c]) <= side / 2
+    half = side / 2
+    with np.errstate(divide="ignore", invalid="ignore"):
+        # How far the line of flight goes in x and in z for each mm in y
+        slope = direction[:, [0, 2]] / direction[:, [1]]
+        depth = position[:, 1] - vertex[event, 1]
+        inside = np.abs(depth) <= half
+        # x, then z, to keep the memory a chunk's hits need low
+        for i, c in enumerate((0, 2)):
+            across = position[:, c] - vertex[event, c] - depth * slope[event, i]
+            inside &= np.abs(across) <= half
     return inside
 
 
@@ -403,15 +418,16 @@ def measure_angles(observable, settings, branches, start, stop, primary, hits):
     event, energy, position = event[with_energy], energy[with_energy], position[with_energy]
     side = bounding_box(observable, settings)
     if side is not None:
-        inside = in_bounding_box(event, position, vertex, side)
+        inside = in_bounding_box(event, position, vertex, direction, side)
         # A shower with none of its hits in its box (as when its particle
         # starts far from where it enters the calorimeter) has no axis
         with_hits = has & (np.bincount(event, minlength=n_events) > 0)
         emptied = with_hits & (np.bincount(event[inside], minlength=n_events) == 0)
         if emptied.any():
             say("    warning: %d of the %d showers with hits have none in the bounding box (%g mm "
-                "about the incident particle's vertex), so they have no axis; is the vertex on "
-                "the calorimeter's face?" % (emptied.sum(), with_hits.sum(), side))
+                "about the incident particle's line of flight), so they have no axis; does the "
+                "particle start on the ECAL's front face, heading into the top stave, as the "
+                "particle gun's do?" % (emptied.sum(), with_hits.sum(), side))
         event, energy, position = event[inside], energy[inside], position[inside]
     values = dict(zip(("theta_true", "phi_true"), polar_angles(direction)))
     for name, fraction in hit_selections(observable, settings):

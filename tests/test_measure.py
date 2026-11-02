@@ -383,26 +383,60 @@ def test_the_intrinsic_angles_are_stored_per_event(showers, tmp_path):
         assert np.isnan(data[key + what][3])
 
 
-def test_the_bounding_box_is_a_cube_about_each_events_vertex():
+def test_the_bounding_box_is_centred_on_the_line_of_flight_in_every_layer():
+    """In each layer, a plane of constant y, the box is a square centred on
+    where the photon's line of flight crosses it; in depth it reaches half its
+    side either side of the vertex."""
     vertex = np.array([[0.0, 1800.0, -50.0], [100.0, 1800.0, 0.0]])
+    # The first photon heads straight across the layers, the second slanted,
+    # going 0.5 mm in x and -1.5 mm in z for each mm in y
+    direction = np.array([[0.0, 1.0, 0.0], np.array([0.5, 1.0, -1.5]) / np.sqrt(3.5)])
     hits = [(0, (400.0, 2200.0, -450.0)),  # on a corner of the first event's box: in it
-            (0, (400.5, 1800.0, -50.0)),   # beyond its face in x,
-            (0, (0.0, 1399.5, -50.0)),     # in front of it in y,
-            (0, (0.0, 1800.0, 350.5)),     # beyond it in z
+            (0, (400.5, 1800.0, -50.0)),   # beyond its edge in x,
+            (0, (0.0, 1399.5, -50.0)),     # too far in front of the vertex,
+            (0, (0.0, 1800.0, 350.5)),     # beyond its edge in z
             (0, (450.0, 1800.0, -50.0)),   # in the second event's box, not its own
-            (1, (450.0, 1800.0, 0.0))]     # in its own
+            (1, (450.0, 1800.0, 0.0)),     # in its own
+            # 300 mm deep: on the line of flight, 450 mm from the vertex in z,
+            (1, (250.0, 2100.0, -450.0)),
+            (1, (250.0, 2100.0, -60.0)),   # 390 mm from the line in z: in,
+            (1, (100.0, 2100.0, 0.0))]     # 450 mm from it, though at the vertex's z
     event = np.array([e for e, _ in hits])
     position = np.array([p for _, p in hits])
-    np.testing.assert_array_equal(measure.in_bounding_box(event, position, vertex, 800.0),
-                                  [True, False, False, False, False, True])
+    np.testing.assert_array_equal(
+        measure.in_bounding_box(event, position, vertex, direction, 800.0),
+        [True, False, False, False, False, True, True, True, False])
+    # A particle not heading across the layers has no hit in its box
+    assert not measure.in_bounding_box(event[:1], position[:1], vertex,
+                                       np.array([[1.0, 0.0, 0.0]] * 2), 800.0).any()
+
+
+def test_the_bounding_box_keeps_the_hits_either_side_of_the_axis_alike(tmp_path):
+    """Each layer of the box is shifted along the shower's axis: two soft hits
+    in the last layer, either side of the axis and 390 mm from it, are both in
+    the box, though one is further than half its side from the vertex in x
+    (which a box about the vertex would leave out, tilting the axis)."""
+    theta, phi = ANGLES[0]  # the most slanted
+    line = direction(theta, phi)
+    start = line * 1804.7 / line[1]
+    # Across the line of flight, in a layer
+    across = np.array([line[2], 0.0, -line[0]]) / np.hypot(line[2], line[0])
+    centre = start + 190 / line[1] * line  # where the line crosses the layer 190 mm deep
+    pair = [centre + 390 * across, centre - 390 * across]
+    assert abs(pair[0] - start)[0] > 400 and (abs(pair[1] - start) < 400).all()
+    path = write_showers(str(tmp_path / "photons_REC.edm4hep.root"),
+                         [(1, 50 * line, shower(theta, phi) + [(1e-4, hit) for hit in pair])])
+    data = measured(configured_angles(bounding_box=800), path, str(tmp_path / "geant4.npz"))
+    for what in ("dtheta_all", "dphi_all", "dtheta_top4", "dphi_top4"):
+        np.testing.assert_allclose(data["intrinsic_angle__s__" + what], 0, atol=1e-9)
 
 
 def test_the_bounding_box_leaves_out_the_hits_far_from_the_shower(tmp_path):
     """As the 800 mm box of the paper's optimal shower generators does: only
-    the hits in a cube about the photon's vertex go into the PCAs, so a soft
-    hit on the other side of the detector (e.g. from backscatter) doesn't tilt
-    the axis of all the hits, and an energetic one off the shower isn't among
-    the top 4% of those left."""
+    the hits in a box about the photon's line of flight go into the PCAs, so a
+    soft hit on the other side of the detector (e.g. from backscatter) doesn't
+    tilt the axis of all the hits, and an energetic one off the shower isn't
+    among the top 4% of those left."""
     theta, phi = ANGLES[1]
     line = direction(theta, phi)
     start = line * 1804.7 / line[1]
@@ -424,8 +458,9 @@ def test_the_bounding_box_leaves_out_the_hits_far_from_the_shower(tmp_path):
 
 
 def test_a_shower_with_none_of_its_hits_in_its_box_has_no_axis(tmp_path, capsys):
-    """The box is about the vertex, so a photon started at the IP rather than on
-    the ECAL's face has none of its hits in it: it has no axis, and that's said."""
+    """The box reaches half its side either side of the vertex, so a photon
+    started at the IP rather than on the ECAL's face has none of its hits in
+    it: it has no axis, and that's said."""
     line = direction(*ANGLES[2])
     path = write_showers(str(tmp_path / "photons_REC.edm4hep.root"), [
         (1, 20 * line, shower(*ANGLES[2])),
@@ -437,7 +472,7 @@ def test_a_shower_with_none_of_its_hits_in_its_box_has_no_axis(tmp_path, capsys)
         assert abs(values[0]) < 1e-9 and np.isnan(values[1:]).all(), (what, values)
     # (the shower without hits has no axis with or without a box)
     assert "warning: 1 of the 2 showers with hits have none in the bounding box (800 mm about " \
-        "the incident particle's vertex)" in capsys.readouterr().err
+        "the incident particle's line of flight), so they have no axis" in capsys.readouterr().err
 
 
 def test_changing_how_the_residuals_are_drawn_needs_no_measuring_again(showers, tmp_path):
