@@ -359,8 +359,8 @@ def test_help_needs_no_configuration(bench):
 def test_inputs_made_elsewhere_are_simulated_each_with_its_own_seed(bench):
     """tau_pairs' inputs are made elsewhere: there, they are done, and each is
     simulated once, with the seed it goes with; their reconstruction isn't a
-    particle gun's; and the pi0s of the paper's figure 11 are measured and
-    plotted."""
+    particle gun's; and the pi0s of the paper's figures 10 to 12 are measured
+    and plotted."""
     bench.with_tau_pairs()
     status, output = bench.run("pipeline.sh", "--dry-run")
     assert "left out" not in output, output
@@ -407,7 +407,9 @@ def test_inputs_made_elsewhere_are_simulated_each_with_its_own_seed(bench):
     js = [row for row in rows if row["metric"] == "JS"]
     assert sorted((row["scenario"], row["profile"], row["simulator"], row["metric"])
                   for row in js) == [("tau_pairs", "energy", "caloclouds3", "JS"),
-                                     ("tau_pairs", "mass", "caloclouds3", "JS")]
+                                     ("tau_pairs", "mass", "caloclouds3", "JS"),
+                                     ("tau_pairs", "phi", "caloclouds3", "JS"),
+                                     ("tau_pairs", "theta", "caloclouds3", "JS")]
     # from the two seeds, paired, so with their spread
     assert all(float(row["uncertainty"]) > 0 for row in js), js
     # and the rest, the model's relative deviation from Geant4 in each category
@@ -416,7 +418,8 @@ def test_inputs_made_elsewhere_are_simulated_each_with_its_own_seed(bench):
                                                   "n_missed")}
     assert rows != js and all(row["metric"] == "dev%" and row["profile"] in categories
                               for row in rows if row not in js), rows
-    for figure in ("pi0_mass__tau_pairs", "pi0_energy__tau_pairs", "pi0_categories__tau_pairs"):
+    for figure in ("pi0_mass__tau_pairs", "pi0_energy__tau_pairs", "pi0_theta__tau_pairs",
+                   "pi0_phi__tau_pairs", "pi0_categories__tau_pairs"):
         assert os.path.isfile(bench.path("observables", "plots", figure + ".png")), figure
 
     # Nothing makes the inputs made elsewhere, even forced

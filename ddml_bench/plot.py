@@ -7,10 +7,12 @@ energy per event in each bin (for a radial profile, per unit area: divided by
 the area of the bin's ring around the shower axis; see DENSITIES), Geant4 as a
 grey filled histogram and each model as a line in its own colour and line
 style, each with its statistical uncertainty as a band, and below, each model's
-relative deviation from Geant4. The legend gives each model's distance from
-Geant4, by the metric of the observable in the configuration (jensen_shannon:
-the Jensen-Shannon divergence, natural logarithm, of the fractions of the
-energy in the bins; l1: the mean absolute difference).
+relative deviation from Geant4, its band the uncertainties of the model and of
+Geant4 combined (relative_deviation(); every figure's deviations are drawn
+so). The legend gives each model's distance from Geant4, by the metric of the
+observable in the configuration (jensen_shannon: the Jensen-Shannon
+divergence, natural logarithm, of the fractions of the energy in the bins; l1:
+the mean absolute difference).
 
 The reconstructed energy of each event (the observable energy) gives two
 figures, the energy linearity and resolution of the benchmark paper. The events
@@ -55,14 +57,17 @@ each scenario, whether all the two measured is the same, number for number,
 as it should be where both simulated the same events with the same seeds and
 closure.identical says so (closures()).
 
-The pi0s of the tau decays (the observable pi0) give two figures, as the
-paper's figure 11 does, of the good pi0 candidates (both photons those of one
-MC pi0): the invariant mass of their two photons, and their reconstructed
-energy less the MC pi0's, each as the fraction of the good pi0s per GeV. Each
-simulator's curve is the mean over the ddsim seeds of each seed's, and its band
-the spread over the seeds; the metric compares the numbers of good pi0s in the
-bins, seed by seed, as the separation's does (seed_histograms(),
-seed_metric()).
+The pi0s of the tau decays (the observable pi0) give four figures of the good
+pi0 candidates (both photons those of one MC pi0): as the paper's figure 11
+does, the invariant mass of their two photons, and their reconstructed energy
+less the MC pi0's, each as the fraction of the good pi0s per GeV; and as its
+figure 12 does, theta and phi of their direction (the candidate's momentum)
+less those of the MC pi0's, each as the fraction of the good pi0s per degree.
+Each simulator's curve is the mean over the ddsim seeds of each seed's, and
+its band the spread over the seeds; the metric compares the numbers of good
+pi0s in the bins, seed by seed, as the separation's does (seed_histograms(),
+seed_metric()). A fifth figure, as the paper's figure 10, counts the
+candidates of each category of the reconstruction, and the MC pi0s missed.
 
 Every figure is also drawn as SVG for the dashboard, dashboard.html next to
 the figures (ddml_bench/dashboard.py), with each model's parts marked with its
@@ -79,8 +84,9 @@ observable, profile and scenario, named <observable>_<profile>__<scenario>.<form
 (energy_linearity__<scenario> and energy_resolution__<scenario> for the
 energy, intrinsic_angle_<angle>_<hits>__<scenario> for the intrinsic angles,
 e.g. intrinsic_angle_theta_top4__single_photon,
-photon_separation_<E>GeV__<scenario> for the separation, and pi0_mass__<scenario>
-and pi0_energy__<scenario> for the pi0s), with the metrics in
+photon_separation_<E>GeV__<scenario> for the separation, and pi0_mass__<scenario>,
+pi0_energy__<scenario>, pi0_theta__<scenario>, pi0_phi__<scenario> and
+pi0_categories__<scenario> for the pi0s), with the metrics in
 metrics.csv (and their uncertainties, for those that have one) and the fitted
 parameters of the energy figures, with their uncertainties, chi^2 and degrees
 of freedom, in fits.csv. It needs numpy and matplotlib, and PyYAML only to
@@ -278,6 +284,25 @@ def stairs_band(ax, edges, low, high, color, alpha):
                            step="post", color=color, alpha=alpha, linewidth=0)
 
 
+def relative_deviation(mean, error, reference_mean, reference_error):
+    """A model's relative deviation from the reference, in %: (mean /
+    reference_mean - 1) * 100, with the uncertainties of both combined as
+    its uncertainty, those of a ratio of independent values: 100 *
+    sqrt((error / reference_mean)^2 + (mean * reference_error /
+    reference_mean^2)^2). The ratio panels draw it as the model's one band,
+    or error bar, rather than the reference's and the model's apart. NaN
+    where the reference isn't above 0 (and the uncertainty, where either
+    isn't known)."""
+    import numpy as np
+    mean, error = np.asarray(mean, dtype=float), np.asarray(error, dtype=float)
+    reference_mean = np.asarray(reference_mean, dtype=float)
+    reference_error = np.asarray(reference_error, dtype=float)
+    safe = np.where(reference_mean > 0, reference_mean, np.nan)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = mean / safe
+        return (ratio - 1) * 100, 100 * np.hypot(error, ratio * reference_error) / safe
+
+
 def plot_profile(observable, scenario, profile, curves, reference, metric_name, out_base,
                  formats, xlabel=None, note=None, trim=True, room=False, ylabel=None,
                  guide=None, metric_texts=None, every_deviation=False):
@@ -288,9 +313,10 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
     top left (for distributions peaked in the middle); guide is a value to
     draw a line at, across the axes. With metric_name None, the metric is the
     caller's: metric_texts, [(simulator, text)], gives what each simulator's
-    label says of it. The axis of the deviations from Geant4 shows the 95% of
-    them in the bins it measures well, or with every_deviation all of them
-    (for a few bins, all measured well)."""
+    label says of it. Each model's deviation from Geant4 below has one band,
+    the uncertainties of both combined (relative_deviation()). The axis of the
+    deviations shows the 95% of them in the bins Geant4 measures well, or
+    with every_deviation all of them (for a few bins, all measured well)."""
     import numpy as np
 
     default_xlabel, log_y = STYLES.get(observable, (profile, False))
@@ -387,8 +413,6 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
         bottom = axes[1][0]
         r_mean, r_err = ref[2][keep], ref[3][keep]
         valid = r_mean > 0
-        safe = np.where(valid, r_mean, np.nan)
-        stairs_band(bottom, edges, -r_err / safe * 100, r_err / safe * 100, REFERENCE_EDGE, 0.3)
         bottom.axhline(0, color=REFERENCE_EDGE, linewidth=1)
         # The deviations' axis is set by the bins Geant4 measures to 10% or
         # better, if there are any, so that sparse tails don't set it
@@ -398,8 +422,7 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
         for simulator, _, mean, err, _ in curves:
             if simulator is reference:
                 continue
-            dev = (mean[keep] / safe - 1) * 100
-            band = err[keep] / safe * 100
+            dev, band = relative_deviation(mean[keep], err[keep], r_mean, r_err)
             mark(simulator, DATA,
                  bottom.stairs(dev, edges, color=simulator.color, baseline=None,
                                linestyle=simulator.linestyle, linewidth=1.4),
@@ -804,7 +827,8 @@ def plot_energy(observable, scenario, measured, reference, metric_name, out, suf
 def plot_energy_figure(spec, scenario, entries, reference, metric_name, out_base, formats):
     """One figure of the energy (a spec of ENERGY_FIGURES): every simulator's
     points against the true energy, each with its uncertainty and the function
-    fitted to them, and below, each model's relative deviation from Geant4.
+    fitted to them, and below, each model's relative deviation from Geant4,
+    its error bars the uncertainties of both combined (relative_deviation()).
     Returns ([(simulator, metric, value)], [(simulator, (parameter, value,
     uncertainty, chi^2, degrees of freedom))])."""
     from matplotlib.lines import Line2D
@@ -886,22 +910,16 @@ def plot_energy_figure(spec, scenario, entries, reference, metric_name, out_base
 
     if with_ratio:
         bottom = axes[1][0]
-        r_x, r_y, r_err = column(ref, "energy"), column(ref, value), column(ref, value + "_err")
-        r_band = np.where(r_y > 0, r_err / np.where(r_y > 0, r_y, 1) * 100, np.nan)
-        if len(r_x) > 1:
-            bottom.fill_between(r_x, -r_band, r_band, color=REFERENCE_EDGE, alpha=0.3,
-                                linewidth=0)
-        else:
-            bottom.errorbar(r_x, [0], yerr=r_band, fmt="none", ecolor=REFERENCE_EDGE)
         bottom.axhline(0, color=REFERENCE_EDGE, linewidth=1)
-        spread = [r_band]
+        spread = []
         for (simulator, points), (color, linestyle, marker, size, layer) in zip(entries, styles):
             pairs = aligned(ref, points) if simulator is not reference else []
             if not pairs:
                 continue
-            base = np.array([r[value] for r, _ in pairs])
-            dev = (np.array([p[value] for _, p in pairs]) / base - 1) * 100
-            band = np.array([p[value + "_err"] for _, p in pairs]) / base * 100
+            # The error bars are the model's and Geant4's uncertainties combined
+            dev, band = relative_deviation(
+                [p[value] for _, p in pairs], [p[value + "_err"] for _, p in pairs],
+                [r[value] for r, _ in pairs], [r[value + "_err"] for r, _ in pairs])
             energy = [p["energy"] for _, p in pairs]
             # The line apart from the points, so the error bars stay solid
             mark(simulator, DATA,
@@ -911,7 +929,7 @@ def plot_energy_figure(spec, scenario, entries, reference, metric_name, out_base
                                  markersize=size - 1, markeredgecolor="white",
                                  markeredgewidth=0.8, elinewidth=1.0, capsize=0, zorder=layer))
             spread.append(np.abs(dev) + band)
-        spread = np.concatenate(spread)
+        spread = np.concatenate(spread) if spread else np.zeros(0)
         spread = spread[np.isfinite(spread)]
         limit = float(np.clip(1.25 * spread.max(), 2, 100)) if spread.size else 10.0
         bottom.set_ylim(-limit, limit)
@@ -1247,14 +1265,22 @@ def separation_figures(observable, scenario, simulators, reference, settings, ou
 
 # ---------------------------------------------------------------------------
 # The pi0s of the tau decays: the invariant mass of the good pi0 candidates'
-# two photons, and their reconstructed energy less their MC pi0s' (the
-# observable pi0, ddml_bench/measure.py), as in the paper's figure 11
+# two photons, and their reconstructed energy less their MC pi0s', as in the
+# paper's figure 11; theta and phi of their direction less their MC pi0s', as
+# in its figure 12 (the observable pi0, ddml_bench/measure.py)
 
-PI0_LABELS = {
-    "mass": r"Reconstructed $\pi^0$ mass $M_{\gamma\gamma}$ [GeV]",
-    "energy": r"$E_{\pi^0}^\mathrm{reco} - E_{\pi^0}^\mathrm{MC}$ [GeV]",
-}
-PI0_YLABEL = r"Fraction of good $\pi^0$s per GeV"
+# The figures of the good pi0s, in the order drawn: of each, what it draws
+# (good_pi0s() gives it), its axis label, and its y axis label
+PI0_FIGURES = (
+    ("mass", r"Reconstructed $\pi^0$ mass $M_{\gamma\gamma}$ [GeV]",
+     r"Fraction of good $\pi^0$s per GeV"),
+    ("energy", r"$E_{\pi^0}^\mathrm{reco} - E_{\pi^0}^\mathrm{MC}$ [GeV]",
+     r"Fraction of good $\pi^0$s per GeV"),
+    ("theta", r"$\theta_{\pi^0}^\mathrm{reco} - \theta_{\pi^0}^\mathrm{MC}$" + " [°]",
+     r"Fraction of good $\pi^0$s per degree"),
+    ("phi", r"$\phi_{\pi^0}^\mathrm{reco} - \phi_{\pi^0}^\mathrm{MC}$" + " [°]",
+     r"Fraction of good $\pi^0$s per degree"),
+)
 # The categories of the pi0 reconstruction (the paper's figure 10), in the
 # order drawn: the key pi0_categories() gives each, and its label
 PI0_CATEGORIES = (("n_reco", "nRecoPi0"), ("n_fake", "nFake"), ("n_good", "nGood"),
@@ -1303,17 +1329,26 @@ def seed_histograms(values, seeds, edges):
 
 def good_pi0s(simulator, observable, scenario, energy):
     """{figure: [good pi0]} of what the figures draw of a simulator's good pi0
-    candidates (measure.GOOD): the invariant mass of their two photons, and
-    their reconstructed energy (energy: the stored item, the fitted energy or
-    the sum of the photons') less the MC pi0's; and the ddsim seed of each."""
+    candidates (measure.GOOD): the invariant mass of their two photons; their
+    reconstructed energy (energy: the stored item, the fitted energy or the
+    sum of the photons') less the MC pi0's; and theta and phi of their
+    momentum less those of the MC pi0's, in degrees (phi's from -180 to 180,
+    measure.azimuth_residual()); and the ddsim seed of each."""
     import numpy as np
     stored = simulator.stored(observable, scenario)
     counts = np.asarray(stored["n_candidates"], dtype=np.int64)
     seeds = np.repeat(event_seeds(simulator, scenario, len(counts)), counts)
     good = np.asarray(stored["match"]) == measure.GOOD
-    return ({"mass": np.asarray(stored["mass"])[good],
-             "energy": (np.asarray(stored[energy]) - np.asarray(stored["true_energy"]))[good]},
+
+    def item(name):
+        return np.asarray(stored[name], dtype=float)
+
+    return ({"mass": item("mass")[good],
+             "energy": (item(energy) - item("true_energy"))[good],
+             "theta": (item("theta") - item("true_theta"))[good],
+             "phi": measure.azimuth_residual(item("phi"), item("true_phi"))[good]},
             seeds[good])
+
 
 def pi0_categories(simulator, observable, scenario):
     """({category: [event]}, [event's ddsim seed]) of the reconstruction of a
@@ -1371,9 +1406,10 @@ def plot_pi0_categories(observable, scenario, entries, reference, out, suffix, f
     of each category (PI0_CATEGORIES) a bar of each simulator, its mean over
     the seeds with their spread as the error, Geant4 first; below, each
     model's relative deviation from Geant4 in each category, its error the
-    model's spread, with Geant4's as the band. Returns [(simulator,
+    spreads of both combined (relative_deviation()). Returns [(simulator,
     figure, metric, value, uncertainty)]: of each model and category the
-    relative deviation in %, figure categories_<category>."""
+    relative deviation in %, with that combined uncertainty, figure
+    categories_<category>."""
     import numpy as np
     ref = next((points for simulator, points in entries if simulator is reference), None)
     with_ratio = ref is not None and len(entries) > 1
@@ -1381,6 +1417,9 @@ def plot_pi0_categories(observable, scenario, entries, reference, out, suffix, f
     top = axes[0][0]
     keys = [key for key, _ in PI0_CATEGORIES]
     x = np.arange(len(keys))
+    if with_ratio:
+        r_mean = np.array([ref["mean"][key] for key in keys])
+        r_err = np.array([ref["error"][key] for key in keys])
     # Geant4 first, then the models in their order
     ordered = sorted(entries, key=lambda entry: entry[0] is not reference)
     width = 0.8 / len(ordered)
@@ -1398,21 +1437,9 @@ def plot_pi0_categories(observable, scenario, entries, reference, out, suffix, f
         keyed.append((bars, simulator.label, None if is_ref else simulator))
         if not is_ref:
             mark(simulator, DATA, bars)
-        if not with_ratio:
+        if is_ref or not with_ratio:
             continue
-        if is_ref:
-            r_mean = np.array([ref["mean"][key] for key in keys])
-            r_err = np.array([ref["error"][key] for key in keys])
-            safe = np.where(r_mean > 0, r_mean, np.nan)
-            for i in x:
-                band = r_err[i] / safe[i] * 100
-                if np.isfinite(band):
-                    axes[1][0].fill_between([i - 0.4, i + 0.4], -band, band,
-                                            color=REFERENCE_EDGE, alpha=0.3, linewidth=0)
-            continue
-        with np.errstate(divide="ignore", invalid="ignore"):
-            dev = (mean / safe - 1) * 100
-            band = error / safe * 100
+        dev, band = relative_deviation(mean, error, r_mean, r_err)
         mark(simulator, DATA,
              axes[1][0].errorbar(x + shift, dev, yerr=band, fmt="o", color=color, markersize=4,
                                  markeredgecolor="white", markeredgewidth=0.6, elinewidth=1,
@@ -1454,19 +1481,23 @@ def plot_pi0_categories(observable, scenario, entries, reference, out, suffix, f
 
 def pi0_figures(observable, scenario, simulators, reference, settings, out, suffix, formats):
     """The figures of the pi0s of a scenario, of the simulators that measured
-    them, as the paper's figure 11: of the good candidates, the invariant mass
-    of their two photons, pi0_mass__<scenario>, and their reconstructed energy
+    them (PI0_FIGURES, from good_pi0s()). As the paper's figure 11, of the
+    good candidates: the invariant mass of their two photons,
+    pi0_mass__<scenario>, and their reconstructed energy
     (reconstructed_energy: fitted, or photons) less the MC pi0s',
-    pi0_energy__<scenario>; each as the fraction of the good pi0s per GeV,
-    the mean over the ddsim seeds with the spread over them as the band
-    (seed_histograms()), drawn as the profiles are, with each model's relative
-    deviation from Geant4 below. The legend gives each model's metric (by
-    default jensen_shannon) of the numbers of good pi0s in the bins from
-    Geant4's, seed by seed: the mean, with the spread over the seeds
-    (seed_metric()). Then, as the paper's figure 10, the categories of the
-    reconstruction (pi0_categories()) of every simulator,
-    pi0_categories__<scenario> (plot_pi0_categories()). Returns ([(simulator,
-    figure, metric, value, uncertainty)], [])."""
+    pi0_energy__<scenario>, each as the fraction of the good pi0s per GeV. As
+    its figure 12: theta and phi of their direction less the MC pi0s',
+    pi0_theta__<scenario> and pi0_phi__<scenario>, as the fraction per
+    degree. Each is the mean over the ddsim seeds with the spread over them as
+    the band (seed_histograms()), drawn as the profiles are, with each model's
+    relative deviation from Geant4 below, in the bins of the settings
+    (measure.pi0_binning()). The legend gives each model's metric (by default
+    jensen_shannon) of the numbers of good pi0s in the bins from Geant4's,
+    seed by seed: the mean, with the spread over the seeds (seed_metric()).
+    Then, as the paper's figure 10, the categories of the reconstruction
+    (pi0_categories()) of every simulator, pi0_categories__<scenario>
+    (plot_pi0_categories()). Returns ([(simulator, figure, metric, value,
+    uncertainty)], [])."""
     import numpy as np
     settings = settings or {}
     try:
@@ -1494,7 +1525,7 @@ def pi0_figures(observable, scenario, simulators, reference, settings, out, suff
         measured.append((simulator, values, seeds))
 
     results = []
-    for figure in ("mass", "energy"):
+    for figure, xlabel, ylabel in PI0_FIGURES:
         first, last, n_bins = binning[figure]
         edges = np.linspace(first, last, n_bins + 1)
         entries = [(simulator, seed_histograms(values[figure], seeds, edges))
@@ -1528,8 +1559,8 @@ def pi0_figures(observable, scenario, simulators, reference, settings, out, suff
             note += "\n%.2g%% outside the bins" % (100 * shown["outside"])
         base = figure_base(out, observable, figure, scenario, suffix)
         plot_profile(observable, scenario, figure, curves, reference if ref is not None else None,
-                     None, base, formats, xlabel=PI0_LABELS[figure], ylabel=PI0_YLABEL,
-                     note=note, trim=False, room=True, metric_texts=texts)
+                     None, base, formats, xlabel=xlabel, ylabel=ylabel, note=note, trim=False,
+                     room=True, metric_texts=texts)
         say("%s: %s" % (", ".join(c[0].label for c in curves),
                         ", ".join("%s.%s" % (os.path.basename(base), f) for f in formats)))
 

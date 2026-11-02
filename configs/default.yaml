@@ -354,12 +354,14 @@ observables:
   # match (the highest weight of the links each way), and a candidate is good
   # when both its photons are correct and those of the same MC pi0 (the
   # paper's nGood), confused when only one is, and fake otherwise. The figures
-  # take the good ones, as the paper's figure 11 does: the invariant mass of
-  # the two photons, M = sqrt(2 E1 E2 (1 - cos(angle between them))), and the
-  # reconstructed energy less the MC pi0's, each simulator's mean over the
-  # seeds with their spread as the band. Every candidate is kept, with its
-  # match, angles and the MC pi0 it is matched to, so the paper's other pi0
-  # figures need no measuring again.
+  # take the good ones, as the paper's figures 11 and 12 do: the invariant
+  # mass of the two photons, M = sqrt(2 E1 E2 (1 - cos(angle between them))),
+  # the reconstructed energy less the MC pi0's, and theta and phi of the
+  # candidate's direction less the MC pi0's, each simulator's mean over the
+  # seeds with their spread as the band; and, as its figure 10, the number of
+  # candidates of each category, and of MC pi0s missed. Every candidate is
+  # kept, with its match, angles and the MC pi0 it is matched to, so changing
+  # the figures needs no measuring again.
   pi0:
     scenarios: [tau_pairs]
     # The pi0 candidates, and the reconstructed particles their two photons
@@ -380,17 +382,25 @@ observables:
     # How the figures draw them (only drawing, so changing these needs no
     # measuring again): the reconstructed energy of a candidate, fitted (its
     # own, from the mass-constrained fit) or photons (the sum of its two
-    # photons'); and the bins, from the first to the last of each range (GeV)
-    # in so many bins.
+    # photons'); and the bins, from the first to the last of each range (GeV
+    # for the mass and energy, degrees for theta and phi) in so many bins.
     reconstructed_energy: fitted
     mass_range: [0.09, 0.18]
     mass_bins: 27
     energy_range: [-15, 15]
     energy_bins: 48
+    # A first guess, to be tuned on the measured widths: the figures note the
+    # share of the good pi0s outside the bins.
+    theta_range: [-0.3, 0.3]
+    theta_bins: 40
+    phi_range: [-0.3, 0.3]
+    phi_bins: 40
     # How it is compared to Geant4: the Jensen-Shannon divergence of the
     # numbers of good pi0s in the bins, seed by seed, as the mean over the
-    # seeds with their spread as its uncertainty (the paper's JS of M_pi0 and
-    # of E_pi0).
+    # seeds with their spread as its uncertainty (the paper's JS of M_pi0, of
+    # E_pi0, and of the residuals of theta and phi). More bins raise its floor
+    # (two samples of N from one distribution that fills k bins give about
+    # (k - 1) / 4N), so compare it between models drawn in the same bins.
     metric: jensen_shannon
 
 # Published data that the pipeline fetches instead of making it: before a run

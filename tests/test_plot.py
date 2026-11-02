@@ -72,6 +72,40 @@ def test_a_radial_profile_is_drawn_per_unit_area(figures, tmp_path):
     assert value != pytest.approx(plot.jensen_shannon(geant4 / areas, model / areas))
 
 
+def test_a_models_deviation_carries_its_own_and_geant4s_uncertainty():
+    dev, band = plot.relative_deviation([1.1, 2.0, 2.0, 1.0, 3.0], [0.11, 0.1, 0.1, 0.2, 0.1],
+                                        [1.0, 2.5, 2.0, 0.0, -1.0], [0.05, 0.25, 0.2, 0.1, 0.1])
+    np.testing.assert_allclose(dev[:3], [10.0, -20.0, 0.0])
+    # As for a ratio of independent values: its relative uncertainty is the
+    # quadrature sum of theirs
+    np.testing.assert_allclose(band[:3], [110 * np.hypot(0.11 / 1.1, 0.05 / 1.0),
+                                          80 * np.hypot(0.1 / 2.0, 0.25 / 2.5),
+                                          np.hypot(5.0, 10.0)])
+    # (where the two agree, the quadrature sum of the two bands drawn before:
+    # the model's 5% and Geant4's 10% of Geant4's value); none without a
+    # reference above 0
+    assert np.isnan(dev[3:]).all() and np.isnan(band[3:]).all()
+
+
+def test_each_models_deviation_has_one_band_of_both_uncertainties(figures, tmp_path):
+    from matplotlib.colors import to_hex
+    edges = measure.bin_edges((-0.5, 4.5, 5))
+    geant4 = np.array([1.0, 2.0, 4.0, 2.0, 1.0])
+    model = np.array([1.1, 1.8, 4.0, 2.2, 1.0])
+    draw("longitudinal_profile", edges, (geant4, model), tmp_path / "layers")
+    top, bottom = figures[0].axes
+    # Geant4's band stays above, but below there is only the model's, in its colour
+    assert len(top.collections) == 2
+    (band,) = bottom.collections
+    assert to_hex(band.get_facecolor()[0], keep_alpha=False) == "#e66100"
+    dev, error = plot.relative_deviation(model, 0.05 * model, geant4, 0.05 * geant4)
+    # with 5% on each, sqrt(2) times 5% of their ratio
+    np.testing.assert_allclose(error, np.sqrt(2) * 5 * model / geant4)
+    y = band.get_paths()[0].vertices[:, 1]
+    assert y.min() == pytest.approx((dev - error).min())
+    assert y.max() == pytest.approx((dev + error).max())
+
+
 def test_a_longitudinal_profile_is_drawn_per_layer(figures, tmp_path):
     edges = measure.bin_edges((-0.5, 30.5, 31))
     layers = np.arange(31)
@@ -250,6 +284,13 @@ def test_the_energy_figures_draw_points_fits_and_deviations(figures, tmp_path):
         assert "(L1 %.2e)" % metric[3] in labels[1]
         np.testing.assert_allclose(bottom.containers[0].lines[0].get_ydata(),
                                    (np.divide(mine, reference) - 1) * 100)
+        # its error bars the model's and Geant4's uncertainties combined, with
+        # no band of Geant4's of its own
+        (bars,) = bottom.collections
+        _, band = plot.relative_deviation(
+            mine, [p[value + "_err"] for p in points[1]], reference,
+            [p[value + "_err"] for p in points[0]])
+        np.testing.assert_allclose([s[1, 1] - s[0, 1] for s in bars.get_segments()], 2 * band)
     # A wider resolution for the model
     assert all(m["resolution"] > g["resolution"] for g, m in zip(*points))
 
@@ -500,11 +541,14 @@ def test_the_distribution_over_the_seeds_and_its_spread():
     assert not single["spread"]
 
 
-def pi0_simulator(name, label, color, linestyle, scale, seed, seeds=(1, 2, 3), n_events=1500):
+def pi0_simulator(name, label, color, linestyle, scale, seed, seeds=(1, 2, 3), n_events=1500,
+                  angular=0.05):
     """A simulator that measured the pi0s of tau_pairs: of each of n_events
     for each ddsim seed, its candidates (0 to 2), each good, confused or fake,
     with the mass of its photons, its fitted energy, its photons' energy and
-    its MC pi0's, the energies scaled."""
+    its MC pi0's, the energies scaled; and theta and phi of its direction and
+    its MC pi0's, in degrees, off by angular (the standard deviation), phi all
+    the way round."""
     rng = np.random.default_rng(seed)
     counts = rng.integers(0, 3, n_events * len(seeds))
     k = int(counts.sum())
@@ -517,6 +561,11 @@ def pi0_simulator(name, label, color, linestyle, scale, seed, seeds=(1, 2, 3), n
               "energy": rng.normal(true * scale, 0.8),
               "photon_energy": rng.normal(true * scale - 0.5, 1.0),
               "true_energy": np.where(match != measure.FAKE, true, np.nan)}
+    true_theta, true_phi = rng.uniform(40, 140, k), rng.uniform(-180, 180, k)
+    stored.update(theta=true_theta + rng.normal(0, angular, k),
+                  phi=(true_phi + rng.normal(0, angular, k) + 180) % 360 - 180,
+                  true_theta=np.where(match != measure.FAKE, true_theta, np.nan),
+                  true_phi=np.where(match != measure.FAKE, true_phi, np.nan))
     data = {"tau_pairs__n_events": np.array([n_events] * len(seeds)),
             "tau_pairs__seeds": np.array(seeds)}
     return types.SimpleNamespace(name=name, label=label, color=color, linestyle=linestyle,
@@ -525,20 +574,30 @@ def pi0_simulator(name, label, color, linestyle, scale, seed, seeds=(1, 2, 3), n
 
 def test_the_pi0_figures_draw_the_good_pi0s_over_the_seeds(figures, tmp_path):
     geant4 = pi0_simulator("geant4", "Geant4", "#8c8c8c", "-", 1.0, 1)
-    model = pi0_simulator("model", "Model", "#e66100", "--", 0.98, 2)
+    model = pi0_simulator("model", "Model", "#e66100", "--", 0.98, 2, angular=0.06)
     settings = {"mass_range": [0.09, 0.18], "mass_bins": 18, "energy_range": [-4, 4],
-                "energy_bins": 32, "reconstructed_energy": "photons"}
+                "energy_bins": 32, "reconstructed_energy": "photons", "theta_range": [-0.2, 0.2],
+                "theta_bins": 40, "phi_range": [-0.25, 0.25], "phi_bins": 25}
     results, fits = plot.pi0_figures("pi0", "tau_pairs", [geant4, model], geant4, settings,
                                      str(tmp_path), "", ["png"])
     assert sorted(p.name for p in tmp_path.iterdir()) == ["pi0_categories__tau_pairs.png",
                                                           "pi0_energy__tau_pairs.png",
-                                                          "pi0_mass__tau_pairs.png"]
-    assert fits == [] and [result[:3] for result in results[:2]] == [(model, "mass", "JS"),
-                                                                     (model, "energy", "JS")]
-    assert [result[1] for result in results[2:]] == [
+                                                          "pi0_mass__tau_pairs.png",
+                                                          "pi0_phi__tau_pairs.png",
+                                                          "pi0_theta__tau_pairs.png"]
+    assert fits == [] and [result[:3] for result in results[:4]] == [
+        (model, "mass", "JS"), (model, "energy", "JS"), (model, "theta", "JS"),
+        (model, "phi", "JS")]
+    assert [result[1] for result in results[4:]] == [
         "categories_" + key for key, _ in plot.PI0_CATEGORIES]
-    for figure, (_, name, _, value, spread), (first, last, n_bins) in zip(
-            figures, results, ((0.09, 0.18, 18), (-4.0, 4.0, 32))):
+    # The residuals, reconstructed less the MC pi0's, phi's the shorter way round
+    residuals = {"mass": lambda stored: stored["mass"],
+                 "energy": lambda stored: stored["photon_energy"] - stored["true_energy"],
+                 "theta": lambda stored: stored["theta"] - stored["true_theta"],
+                 "phi": lambda stored: (stored["phi"] - stored["true_phi"] + 180) % 360 - 180}
+    for figure, (_, name, _, value, spread), (first, last, n_bins), unit in zip(
+            figures, results, ((0.09, 0.18, 18), (-4.0, 4.0, 32), (-0.2, 0.2, 40),
+                               (-0.25, 0.25, 25)), ("GeV", "GeV", "degree", "degree")):
         edges = np.linspace(first, last, n_bins + 1)
         width = (last - first) / n_bins
         expected, counts = [], []
@@ -546,14 +605,14 @@ def test_the_pi0_figures_draw_the_good_pi0s_over_the_seeds(figures, tmp_path):
             stored = simulator.stored(None, None)
             seeds = np.repeat(np.repeat([1, 2, 3], 1500), stored["n_candidates"])
             good = stored["match"] == measure.GOOD
-            values = stored["mass"] if name == "mass" else (stored["photon_energy"]
-                                                           - stored["true_energy"])
+            values = residuals[name](stored)
             per_seed = [np.histogram(values[good & (seeds == s)], edges)[0] for s in (1, 2, 3)]
             sizes = [np.sum(good & (seeds == s)) for s in (1, 2, 3)]
             expected.append(np.mean([c / n / width for c, n in zip(per_seed, sizes)], axis=0))
             counts.append(per_seed)
         top, bottom = figure.axes
         assert top.get_xlim() == (first, last)
+        assert top.get_ylabel() == r"Fraction of good $\pi^0$s per " + unit
         steps = drawn_steps(top)
         for values, wanted in zip(steps, (expected[0], expected[0], expected[1])):
             np.testing.assert_allclose(values, wanted)
@@ -571,6 +630,38 @@ def test_the_pi0_figures_draw_the_good_pi0s_over_the_seeds(figures, tmp_path):
     model_energy = drawn_steps(figures[1].axes[0])[2]
     centres = np.linspace(-4, 4, 33)[:-1] + 0.125
     assert np.sum(model_energy * centres) < np.sum(drawn_steps(figures[1].axes[0])[0] * centres)
+    # and its wider spread of directions in the angles, lower in the middle
+    for figure in figures[2:4]:
+        geant4_steps, _, model_steps = drawn_steps(figure.axes[0])
+        middle = slice(len(model_steps) // 2 - 2, len(model_steps) // 2 + 2)
+        assert model_steps[middle].sum() < 0.95 * geant4_steps[middle].sum()
+    assert figures[2].axes[1].get_xlabel().startswith(r"$\theta_{\pi^0}^\mathrm{reco}")
+    assert figures[3].axes[1].get_xlabel().startswith(r"$\phi_{\pi^0}^\mathrm{reco}")
+
+
+def test_the_pi0_angles_are_of_the_direction_less_the_mc_pi0s_phi_the_shorter_way():
+    G, F = measure.GOOD, measure.FAKE
+    nan = float("nan")
+    # Event 0: a good pi0 and a fake; event 1: none; events 2 and 3: a good
+    # one each, the first across phi = 180 degrees
+    stored = {"n_candidates": np.array([2, 0, 1, 1]), "match": np.array([G, F, G, G]),
+              "mass": np.full(4, 0.135), "energy": np.array([20.0, 5.0, 10.0, 30.0]),
+              "photon_energy": np.full(4, 1.0), "true_energy": np.array([21.0, nan, 9.0, 30.0]),
+              "theta": np.array([80.01, 60.0, 99.98, 45.0]),
+              "true_theta": np.array([80.0, nan, 100.0, 45.02]),
+              "phi": np.array([179.99, 0.0, -179.995, 90.0]),
+              "true_phi": np.array([-179.99, nan, 179.995, 89.97])}
+    simulator = types.SimpleNamespace(data={"tau_pairs__n_events": np.array([2, 2]),
+                                            "tau_pairs__seeds": np.array([7, 9])},
+                                      stored=lambda observable, scenario: stored)
+    values, seeds = plot.good_pi0s(simulator, "pi0", "tau_pairs", "energy")
+    np.testing.assert_allclose(values["theta"], [0.01, -0.02, -0.02], atol=1e-9)
+    np.testing.assert_allclose(values["phi"], [-0.02, 0.01, 0.03], atol=1e-9)
+    np.testing.assert_allclose(values["energy"], [-1.0, 1.0, 0.0])
+    np.testing.assert_array_equal(seeds, [7, 9, 9])
+    np.testing.assert_allclose(measure.azimuth_residual(np.array([179.0, -179.0, 10.0, nan]),
+                                                        np.array([-179.0, 179.0, -10.0, 0.0])),
+                               [-2.0, 2.0, 20.0, nan])
 
 
 def test_a_simulator_without_good_pi0s_is_left_out(figures, tmp_path):
@@ -605,6 +696,30 @@ def test_the_pi0_categories_are_counted_per_event():
     for key, values in expected.items():
         np.testing.assert_array_equal(categories[key], values, err_msg=key)
     np.testing.assert_array_equal(seeds, [-1] * 4)
+
+
+def test_the_category_deviations_carry_the_spreads_of_both(figures, tmp_path):
+    keys = [key for key, _ in plot.PI0_CATEGORIES]
+    geant4 = types.SimpleNamespace(name="geant4", label="Geant4", color="#8c8c8c", linestyle="-")
+    model = types.SimpleNamespace(name="model", label="Model", color="#e66100", linestyle="--")
+
+    def totals(mean, error):
+        return {"seeds": [1, 2, 3], "mean": dict(zip(keys, mean)),
+                "error": dict(zip(keys, error)), "spread": True,
+                "events": {1: 100, 2: 100, 3: 100}}
+
+    g_mean, g_error = [400.0, 50.0, 280.0, 70.0, 500.0], [10.0, 5.0, 12.0, 2.0, 11.0]
+    m_mean, m_error = [440.0, 50.0, 320.0, 75.0, 460.0], [9.0, 6.0, 4.0, 1.0, 5.0]
+    results = plot.plot_pi0_categories("pi0", "tau_pairs", [(geant4, totals(g_mean, g_error)),
+                                                            (model, totals(m_mean, m_error))],
+                                       geant4, str(tmp_path), "", ["png"])
+    dev, band = plot.relative_deviation(m_mean, m_error, g_mean, g_error)
+    assert [row[:3] for row in results] == [(model, "categories_" + key, "dev%") for key in keys]
+    np.testing.assert_allclose([row[3] for row in results], dev)
+    np.testing.assert_allclose([row[4] for row in results], band)
+    # Below, the model's error bars alone, of that combined uncertainty
+    (bars,) = figures[0].axes[1].collections
+    np.testing.assert_allclose([s[1, 1] - s[0, 1] for s in bars.get_segments()], 2 * band)
 
 
 def test_the_pi0_category_totals_are_per_seed():

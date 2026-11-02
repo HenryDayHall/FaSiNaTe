@@ -772,7 +772,8 @@ def test_drawing_the_pi0s_differently_needs_no_measuring_again(pi0_file, tmp_pat
     files = {"s": [pi0_file]}
     for drawn in ({"reconstructed_energy": "photons"}, {"mass_range": [0.1, 0.17]},
                   {"mass_bins": 30}, {"energy_range": [-3, 3], "energy_bins": 12},
-                  {"metric": "l1"}):
+                  {"theta_range": [-1, 1], "theta_bins": 20},
+                  {"phi_range": [-0.5, 0.5], "phi_bins": 25}, {"metric": "l1"}):
         assert measure.is_up_to_date(out, measure.wanted(configured_pi0(**drawn)), files) \
             == (True, ""), drawn
     assert measure.is_up_to_date(out, measure.wanted(configured_pi0(ancestor_pdg=[15, 24])),
@@ -781,7 +782,11 @@ def test_drawing_the_pi0s_differently_needs_no_measuring_again(pi0_file, tmp_pat
 
 def test_the_pi0_settings_are_checked():
     assert measure.pi0_binning("pi0", {}) == {"mass": (0.09, 0.18, 18),
-                                              "energy": (-6.0, 6.0, 48)}
+                                              "energy": (-6.0, 6.0, 48),
+                                              "theta": (-0.3, 0.3, 40),
+                                              "phi": (-0.3, 0.3, 40)}
+    assert measure.pi0_binning("pi0", {"phi_range": [-1, 2], "theta_bins": 7})["phi"] == (
+        -1.0, 2.0, 40)
     for settings, message in (
             ({"candidate_collection": None}, "observables.pi0.candidate_collection should be "
                                              "the name of a collection"),
@@ -789,8 +794,13 @@ def test_the_pi0_settings_are_checked():
             ({"ancestor_pdg": 15}, "observables.pi0.ancestor_pdg should be a list of PDG codes"),
             ({"reconstructed_energy": "sum"}, "reconstructed_energy should be fitted or photons"),
             ({"mass_range": [0.18, 0.09]}, "observables.pi0.mass_range should be [first, last]"),
-            ({"energy_range": [-6]}, "energy_range should be [first, last]"),
-            ({"mass_bins": 0}, "observables.pi0.mass_bins should be a number of bins")):
+            ({"energy_range": [-6]}, "energy_range should be [first, last], the lowest and "
+                                     "highest edges of the bins in GeV"),
+            ({"theta_range": [0.3, -0.3]}, "observables.pi0.theta_range should be [first, last], "
+                                           "the lowest and highest edges of the bins in degrees"),
+            ({"phi_range": "0.3"}, "observables.pi0.phi_range should be [first, last]"),
+            ({"mass_bins": 0}, "observables.pi0.mass_bins should be a number of bins"),
+            ({"phi_bins": 2.5}, "observables.pi0.phi_bins should be a number of bins")):
         with pytest.raises(measure.ObservableError) as error:
             configured_pi0(**settings)
         assert message in str(error.value), (settings, str(error.value))
