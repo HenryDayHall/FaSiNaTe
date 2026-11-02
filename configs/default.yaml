@@ -307,9 +307,21 @@ observables:
   intrinsic_angle:
     scenarios: [single_photon]
     hit_collections: [EcalBarrelCollectionRec]
-    # One PCA for each fraction of the hits, the most energetic first: all of
-    # them, and the top 4% (rounded up, but at least 2 hits), which leaves out
-    # the peripheral hits (e.g. from backscatter) that tilt the axis.
+    # Of those, only the hits in a box about the shower go into the PCAs: a
+    # cube with sides of this many mm, centred on the photon's vertex (where
+    # the particle gun starts it, on the ECAL's front face), its edges along
+    # the global axes (those of the top stave: x across it, y its normal, z
+    # the beam). Like the 800 mm box of the paper's optimal shower generators,
+    # it leaves out hits far from the shower, such as those of backscatter
+    # reaching the other side of the detector, which the models (putting their
+    # hits in boxes of their own about the shower) don't make, and which can
+    # tilt the axis of all the hits a long way. null uses every hit. Unlike
+    # the bins below, changing it means measuring again.
+    bounding_box: 800
+    # One PCA for each fraction of the hits in the box, the most energetic
+    # first: all of them, and the top 4% (rounded up, but at least 2 hits),
+    # which leaves out the peripheral hits (e.g. from backscatter) that tilt
+    # the axis.
     hit_fractions: [1.0, 0.04]
     # How the figures bin the residuals: from -max_residual to max_residual
     # degrees in n_bins bins. Each is one number for every fraction, or a list

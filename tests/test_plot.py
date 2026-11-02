@@ -1,6 +1,7 @@
 """The figures: what each kind of profile is drawn as, and how it is compared;
 and the energy linearity and resolution, with their fits."""
 
+import json
 import os
 import types
 
@@ -348,6 +349,51 @@ def test_without_settings_the_residuals_are_drawn_in_the_default_bins(figures, t
     assert figures[0].axes[0].get_xlim() == (-measure.MAX_RESIDUAL, measure.MAX_RESIDUAL)
     assert len(drawn_steps(figures[0].axes[0])[0]) == measure.RESIDUAL_BINS
     assert os.path.isfile(str(tmp_path / "intrinsic_angle_phi_top4__single_photon_n4000.png"))
+
+
+def measured_in_box(simulator, side):
+    """The simulator, with the settings of its intrinsic angles as its .npz file
+    records them: hits in a bounding box with that side (mm), or every hit."""
+    settings = {"hit_collections": ["EcalBarrelCollectionRec"], "hit_fractions": [1.0, 0.04],
+                "scenarios": ["single_photon"]}
+    if side is not None:
+        settings["bounding_box"] = side
+    simulator.data = {"intrinsic_angle__single_photon__settings": np.array(
+        json.dumps(settings, sort_keys=True))}
+    return simulator
+
+
+def test_the_angle_figures_say_which_bounding_box_the_hits_were_in(figures, tmp_path, capsys):
+    geant4 = measured_in_box(angle_simulator("geant4", "Geant4", "#8c8c8c", "-",
+                                             residual_sample(1.0, 0, 1)), 800)
+    model = measured_in_box(angle_simulator("model", "Model", "#e66100", "--",
+                                            residual_sample(1.2, 0.2, 2)), 800)
+    plot.angle_figures("intrinsic_angle", "single_photon", [geant4, model], geant4, {},
+                       str(tmp_path), "", ["png"])
+    assert len(figures) == 4
+    for figure in figures:
+        (note,) = [text.get_text() for text in figure.axes[0].texts]
+        lines = note.split("\n")
+        assert lines[0].startswith("single_photon, PCA of ") and lines[1] == \
+            "in a box of side 800 mm" and lines[2].endswith(" showers (Geant4)"), note
+    said = capsys.readouterr().err
+    assert "(fewer than two hits in the bounding box), so they're left out" in said
+    assert "same bounding box" not in said
+    # Measured in another box (or in none), a model's showers aren't cut as
+    # Geant4's are: that's said, and the note is Geant4's
+    del figures[:]
+    measured_in_box(model, None)
+    plot.angle_figures("intrinsic_angle", "single_photon", [geant4, model], geant4, {},
+                       str(tmp_path), "", ["png"])
+    assert "single_photon: the intrinsic angles weren't all measured in the same bounding box " \
+        "(geant4: 800 mm, model: none)" in capsys.readouterr().err
+    assert all(f.axes[0].texts[0].get_text().split("\n")[1] == "in a box of side 800 mm"
+               for f in figures)
+    # and without a box, the note doesn't mention one
+    del figures[:]
+    plot.angle_figures("intrinsic_angle", "single_photon", [model], None, {}, str(tmp_path),
+                       "", ["png"])
+    assert all("box" not in f.axes[0].texts[0].get_text() for f in figures) and figures
 
 
 # ---------------------------------------------------------------------------
