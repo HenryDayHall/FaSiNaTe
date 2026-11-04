@@ -120,8 +120,8 @@ Before any GPU job is submitted, the PyTorch in the environment must have been
 built with CUDA. If it wasn't, the GPU tasks are blocked, saying so, and the
 CPU tasks are still submitted. In each GPU job, PyTorch must also find a GPU,
 or `ddsim` stops at once, saying why. On a GPU node the job passes the GPU
-into the container (`APPTAINER_NV=1`, i.e. `apptainer --nv`) when
-`container.enabled` is true.
+into the container (`APPTAINER_NV=1`, i.e. `apptainer --nv`, or
+`SINGULARITY_NV=1`) when `container.enabled` is true.
 
 What isn't known until it runs on a GPU node: whether each TorchScript network
 runs on the GPU as it is. A network that makes tensors on the CPU inside itself
@@ -174,7 +174,8 @@ to `timing/summary.csv`. It has a row for each result:
 - The node (`host`, `cpu_model`, `gpu`), `inference_on` and `drift_z`.
 
 It also has a row for each kind of node, scenario and simulator over all its
-inputs (`input` is `all`). That row is the mean of the inputs' means, each
+inputs (`input` is `all`, or `all_t<N>` for each number of events timed where
+there are results of several). That row is the mean of the inputs' means, each
 input weighing the same: for the single photons that is every energy alike, as
 the paper's average over 10–100 GeV. Its standard error comes from the inputs'
 standard errors.

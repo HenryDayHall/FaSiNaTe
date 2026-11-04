@@ -23,6 +23,7 @@ steps, which it runs itself:
 import argparse
 import json
 import os
+import shutil
 import sys
 
 from ddml_bench import process
@@ -92,8 +93,8 @@ def command_run(argv):
         return executors.run_slurm(plan, args.dry_run, sbatch_args)
     if any(task["inference"] == "cuda" for task in plan["tasks"]):
         # The GPU goes into the container too, if there is one (apptainer --nv)
-        os.environ.setdefault("APPTAINER_NV", "1")
-        os.environ.setdefault("SINGULARITY_NV", "1")
+        os.environ.setdefault("APPTAINER_NV" if shutil.which("apptainer") else "SINGULARITY_NV",
+                              "1")
     if in_environment():
         return executors.run_local(plan, args.dry_run)
     # The plan goes in through a file in the timing folder, which is mounted

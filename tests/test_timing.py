@@ -283,6 +283,16 @@ def test_the_summary_of_the_results(tmp_path):
     assert float(everything["mean_s"]) == pytest.approx(0.055)
     assert float(everything["speedup"]) == pytest.approx(5.5 / 0.055)
     assert by[("cpu", "geant4", "all")]["speedup"] == ""
+    # Results of another number of events are a sample of their own
+    write_result(folder, "cpu", "single_photon", "caloclouds3", "p22_en10_seed0_ip_surface_t2",
+                 [0.02, 0.02])
+    assert summary.main(folder, out=printed.append) == 0
+    with open(os.path.join(folder, "summary.csv")) as stream:
+        rows = list(csv.DictReader(stream))
+    totals = sorted((r["input"], r["mean_s"]) for r in rows
+                    if r["simulator"] == "caloclouds3" and r["device"] == "cpu"
+                    and r["input"].startswith("all"))
+    assert totals == [("all_t2", "0.02"), ("all_t4", "0.055")]
     # A standard error of 0 needs no more events
     assert by[("cpu", "caloclouds3", names[0])]["events_for_10pct"] == "0"
     assert summary._short_names(names) == {names[0]: "en10_seed0", names[1]: "en100_seed9"}
@@ -441,7 +451,8 @@ def test_slurm_timing_on_cpu_and_gpu_nodes(timing):
     submission, = [d for d in os.listdir(bench.path("timing", "slurm"))
                    if d.startswith("timing_")]
     script = open(bench.path("timing", "slurm", submission, "job.sh")).read()
-    assert "gpu/*) export APPTAINER_NV=1 SINGULARITY_NV=1 ;;" in script
+    assert "    gpu/*)\n        if command -v apptainer >/dev/null; then export APPTAINER_NV=1" \
+        in script, script
 
     # Again: nothing to submit; the summary has every result
     status, output = bench.run("slurm_timing.sh", "-n", "2", "--warmup", "1")

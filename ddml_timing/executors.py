@@ -251,9 +251,12 @@ def write_job_script(directory, plan):
     ]
     if cuda:
         lines += [
-            "# On a GPU node, the GPU goes into the container too (apptainer --nv)",
+            "# On a GPU node, the GPU goes into the container too (apptainer --nv), if",
+            "# there is one (container.enabled)",
             "case $key in",
-            "    %s) export APPTAINER_NV=1 SINGULARITY_NV=1 ;;" % "|".join(cuda),
+            "    %s)" % "|".join(cuda),
+            "        if command -v apptainer >/dev/null; then export APPTAINER_NV=1",
+            "        else export SINGULARITY_NV=1; fi ;;",
             "esac",
         ]
     lines += [

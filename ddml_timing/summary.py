@@ -14,7 +14,8 @@ uncertainty from both standard errors), the node, and drift_z, the difference
 between the means of the first and the second half of the events timed in
 units of its uncertainty (more than about 3 says the times drift, e.g. a
 warm-up longer than the events left out). Then a row for each kind of node,
-scenario and simulator over all its inputs (input "all"): the mean of the
+scenario and simulator over all its inputs (input "all", or all_t<N> for each
+number of events timed where there are results of several): the mean of the
 inputs' means, each input weighing the same (for the single photons, every
 energy alike, as the benchmark paper's average over 10-100 GeV), with its
 standard error from theirs, and the speed-up of that on Geant4's over the same
@@ -110,6 +111,7 @@ def _row(result):
     return {
         "device": result["device"], "scenario": result["scenario"],
         "simulator": result["simulator"], "input": _input_name(result),
+        "requested": (result.get("events") or {}).get("requested"),
         "events": wall.get("n"), "warmup": (result.get("events") or {}).get("warmup"),
         "mean_s": wall.get("mean"), "sd_s": wall.get("sd"), "sem_s": wall.get("sem"),
         "rel_sem_pct": None if wall.get("rel_sem") is None else 100 * wall["rel_sem"],
@@ -153,22 +155,27 @@ def summarise(results):
                   key=lambda r: (r["device"], r["scenario"], r["simulator"] != GEANT4,
                                  r["simulator"], r["input"]))
     totals = []
-    groups = {}
+    # Over the inputs, each number of events timed (each sample) apart
+    groups, samples = {}, {}
     for row in rows:
-        groups.setdefault((row["device"], row["scenario"], row["simulator"]), []).append(row)
-    for (device, scenario, simulator), mine in sorted(
+        key = (row["device"], row["scenario"], row["simulator"])
+        groups.setdefault(key + (row["requested"] or 0,), []).append(row)
+        samples.setdefault(key, set()).add(row["requested"] or 0)
+    for (device, scenario, simulator, requested), mine in sorted(
             groups.items(), key=lambda item: (item[0][0], item[0][1], item[0][2] != GEANT4,
-                                              item[0][2])):
+                                              item[0][2], item[0][3])):
         means = [r["mean_s"] for r in mine if r["mean_s"] is not None]
         if not means:
             continue
+        label = "all" if len(samples[(device, scenario, simulator)]) == 1 else "all_t%d" % requested
         sems = [r["sem_s"] for r in mine if r["mean_s"] is not None]
         mean = sum(means) / len(means)
         sem = math.sqrt(sum(s * s for s in sems)) / len(sems) if all(
             s is not None for s in sems) else None
         totals.append({
             "device": device, "scenario": scenario, "simulator": simulator,
-            "input": "all", "inputs": [r["input"] for r in mine if r["mean_s"] is not None],
+            "input": label, "requested": requested,
+            "inputs": [r["input"] for r in mine if r["mean_s"] is not None],
             "events": sum(r["events"] or 0 for r in mine), "warmup": mine[0]["warmup"],
             "mean_s": mean, "sd_s": None, "sem_s": sem,
             "rel_sem_pct": None if sem is None or not mean else 100 * sem / mean,
@@ -250,8 +257,8 @@ def print_table(rows, totals, failures, out=print):
     for row in rows + totals:
         blocks.setdefault((row["device"], row["scenario"]), []).append(row)
     for (device, scenario), mine in sorted(blocks.items()):
-        short = _short_names(sorted({r["input"] for r in mine if r["input"] != "all"}))
-        names = dict((id(r), "all" if r["input"] == "all" else short.get(r["input"], r["input"]))
+        short = _short_names(sorted({r["input"] for r in mine if "inputs" not in r}))
+        names = dict((id(r), r["input"] if "inputs" in r else short.get(r["input"], r["input"]))
                      for r in mine)
         width = max([len(name) for name in names.values()] + [5])
         simulators = max([len(r["simulator"]) for r in mine] + [9])
@@ -261,7 +268,7 @@ def print_table(rows, totals, failures, out=print):
         out("  %-*s  %-*s %7s %10s %7s %18s %8s  %s" % (simulators, "simulator", width, "input",
                                                        "events", "per event", "+-%", "speed-up",
                                                        "showers", "inference"))
-        for row in sorted(mine, key=lambda r: (r["input"] == "all", r["simulator"] != GEANT4,
+        for row in sorted(mine, key=lambda r: ("inputs" in r, r["simulator"] != GEANT4,
                                                 r["simulator"], r["input"])):
             speedup = "-" if row["speedup"] is None else "x%.3g" % row["speedup"]
             if row["speedup_error"] is not None and row["speedup"] is not None:
