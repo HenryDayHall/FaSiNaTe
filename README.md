@@ -29,6 +29,7 @@ The models are those DDML runs: CaloClouds3, both through DDML's embedded Python
   - [6. Plot](#6-plot)
 - [Where the data goes](#where-the-data-goes)
 - [Reusing published measurements](#reusing-published-measurements)
+- [Timing](#timing)
 - [The models](#the-models)
   - [Closure tests](#closure-tests)
 - [Extending the benchmark](#extending-the-benchmark)
@@ -416,6 +417,24 @@ python3 scripts/ddml-bench manifest --out /path/to/zenodo --stage --records 'ess
 
 Each record gets a folder with its `manifest.json` and a suggested title, and with `--stage` the files to upload under the flat names the manifest gives them: links to the data folder's files (`--copy` to copy them), so nothing big is copied, and the `other` record's archives. For every file the manifest has its path in the data folder, sha256, size and role. For an input it adds the scenarios and gun options that made it, or `external: true` for one made elsewhere. For a measurement it adds the simulator, scenarios and observable settings, the reconstructions it was measured from with their seeds and events, the inputs behind them with their sha256, the software from the logs of their simulations and reconstructions (Key4hep release, DDML and ILDConfig commits, patches, detector, presets or model configurations, the sha256 of a model's description and of its own Python code as each simulation started, reconstruction arguments), a model's description as it is now (`model`: presets or configurations, detector, weights with their md5 sum, and the sha256 of the description and of each module of its own Python code), and whether it is up to date with this configuration. Every manifest also has the configuration's scenarios, observables and stack pins, and the essential record's lists every record (`catalogue`), so that it says where everything else is. Warnings point out inputs missing from the configuration, measurements out of date, logs that aren't there, mixed software versions, and records over the limits. Hashing reads every file once, which takes a while for the simulations; `--records` makes some records at a time. It needs numpy (and PyYAML for the configuration), so it runs on a login node.
 
+## Timing
+
+The time per event of every simulator on every scenario's inputs is measured by a workflow of its own, [`ddml_timing/`](ddml_timing/) ([`docs/timing.md`](docs/timing.md)). It runs in slurm jobs apart from the pipeline's, so that each kind of node can be asked for. It uses the pipeline's configuration, inputs, models, environment and `ddsim` command, and its own section of the configuration, `timing`.
+
+Each task times one input with one simulator on one kind of node, on its first `timing.events` events (200), after `timing.warmup_events` that aren't counted (10). It records each event's wall-clock and CPU time, from the moment ddsim prints the event's start, and the model's showers and embedded-Python inference calls within it.
+
+- **`cpu` nodes** (`--constraint=EPYC&7402&512G`): every simulator, Geant4 too, with the models' inference on the CPU.
+- **`gpu` nodes** (`--constraint=A100-PCIE-80GB&GPUx1`): the models DDML runs through embedded Python, with their inference on the GPU. DDML's LibTorch and ONNX Runtime backends run on the CPU only, so those models are skipped there, and the report says why.
+
+```bash
+./slurm_timing.sh --dry-run     # what is timed, and the jobs it would submit
+./slurm_timing.sh               # a job per input, simulator and kind of node
+./timing.sh -d gpu caloclouds3  # or here, one task after another (e.g. on a GPU node)
+./timing_summary.sh             # mean time per event, its uncertainty and the speed-up on Geant4
+```
+
+The results go to `<paths.data_dir>/timing/<node>/<scenario>/<simulator>/`: a `.json` with the statistics and what ran where, an `.events.csv` with each event, and the log. `timing_summary.sh` tabulates them in `timing/summary.csv`, input by input, and over each scenario's inputs.
+
 ## The models
 
 Each model in [`models/`](models/) runs through DDML in the ECal barrel, as DDML's presets do: photons above 10 GeV entering the barrel go to the model, and Geant4 simulates everything else. They are DDML's generative models, each with DDML's own weights, which building DDML downloads (and `L2LFlowsx9.pt`, which DDML's build leaves out, `scripts/build_ddml.sh` fetches as DDML would, by its md5 sum: `ddml.extra_models`):
@@ -516,6 +535,9 @@ The tests run the scripts end to end, `pipeline.sh` and `slurm_pipeline.sh` incl
 ├── pipeline.sh                         # all six stages, here, one task after another
 ├── slurm_pipeline.sh                   # all six stages, as slurm jobs of one file each
 ├── slurm_simulate_geant4.sh            #   ... just the Geant4 stage
+├── slurm_timing.sh                     # the timing benchmark, as slurm jobs on CPU and GPU nodes
+├── timing.sh                           #   ... here, one task after another
+├── timing_summary.sh                   #   ... and its results in one table
 ├── setup.sh                            # interactive environment
 ├── ILD_Particle_Gun.py                 # particle-gun input generator
 ├── ILD_Di_Photon_Gun.py                # di-photon input generator
@@ -523,9 +545,10 @@ The tests run the scripts end to end, `pipeline.sh` and `slurm_pipeline.sh` incl
 ├── configs/pipeline_test.yaml          # a very light test run of the whole pipeline
 ├── models/                             # one YAML file per model
 ├── ddml_bench/                         # the harness: layout, stages, task graph, executors
-├── scripts/                            # building, the environment launcher, the steering files, ddml-bench
+├── ddml_timing/                        # the timing benchmark (docs/timing.md)
+├── scripts/                            # building, the environment launcher, the steering files, ddml-bench, ddml-timing
 ├── tests/                              # the tests, with the fakes they run the pipeline on
-├── docs/                               # harness.md, and figures for this README
+├── docs/                               # harness.md, timing.md, and figures for this README
 └── di_photon_old/                      # the earlier di-photon separation analysis (legacy)
 ```
 

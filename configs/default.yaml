@@ -444,6 +444,56 @@ published:
   # Where the records' manifests are kept once fetched
   cache_dir: ${paths.data_dir}/.ddml-bench/published
 
+# The timing benchmark (./slurm_timing.sh, ./timing.sh and ./timing_summary.sh;
+# the code is in ddml_timing/, and docs/timing.md describes it): the time per
+# event of every simulator on the inputs of every scenario, on each kind of node
+# below, in jobs of its own, apart from the pipeline's. A task times one input
+# with one simulator on one kind of node: ddsim simulates the input's first
+# warmup_events + events events (and one more, which ends the last one timed),
+# and the wall-clock and CPU time of each event is recorded, the first
+# warmup_events not counted. Each input is simulated with its first seed of the
+# scenario's simulation_seeds. The results go to <paths.data_dir>/timing.
+timing:
+  # Events timed of each input, and the events before them that aren't
+  # counted (the first calls of a model and the caches are slower)
+  events: 200
+  warmup_events: 10
+  # Run ddsim on one CPU of the job's, as the benchmark paper's timings ran on
+  # a single core
+  pin_cpu: true
+  # Keep the timing runs' simulations next to their results, rather than
+  # writing them to the node's temporary folder and deleting them
+  keep_simulations: false
+  # Jobs are named <prefix>-<device>-<simulator>
+  job_name_prefix: fasinate-timing
+  # The kinds of node, each a set of jobs (slurm_timing.sh): where the models'
+  # inference runs (cpu, or cuda for the node's GPU), the simulators timed
+  # there (all: geant4 and every model in models/; models: every model; or a
+  # list of names), and the jobs' slurm settings, as for the pipeline's
+  # stages (slurm.sbatch_args come first, then these sbatch_args).
+  devices:
+    cpu:
+      inference: cpu
+      simulators: all
+      partition: maxcpu
+      constraint: "EPYC&7402&512G"
+      time: "04:00:00"
+      # A node to itself, so that nothing else runs beside the timing
+      sbatch_args: [--exclusive]
+    gpu:
+      inference: cuda
+      # Geant4 runs on the CPU only, so it is timed on the CPU nodes
+      simulators: models
+      # DDML runs a model's inference on the GPU only through its embedded
+      # Python (its LibTorch and ONNX Runtime backends run on the CPU). A model
+      # without it is left out on this kind of node, unless this is true: then
+      # it is timed here too, on this node's CPU.
+      also_cpu_only_models: false
+      partition: maxgpu
+      constraint: "A100-PCIE-80GB&GPUx1"
+      time: "04:00:00"
+      sbatch_args: [--exclusive]
+
 # The slurm jobs of ./slurm_pipeline.sh, which runs every stage of the pipeline
 # as jobs of one file each (one input, one simulation, one reconstruction),
 # each waiting for the jobs that make what it reads. The defaults are for

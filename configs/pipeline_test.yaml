@@ -63,6 +63,17 @@ published:
   # events), so there is nothing to fetch
   enabled: false
 
+# With this file, slurm_timing.sh tries the timing benchmark too, on 5 events
+# of each of these inputs, after 1 of warm-up, in short jobs
+timing:
+  events: 5
+  warmup_events: 1
+  devices:
+    cpu:
+      time: "00:30:00"
+    gpu:
+      time: "00:30:00"
+
 slurm:
   stages:
     generate:

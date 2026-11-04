@@ -26,14 +26,27 @@ It fails when "<simulator> <input file name>" matches the shell pattern in
 $FAKE_CONTROL/ddsim_fail, if there is one, e.g. "geant4 *en80*" or "* *en80*".
 (The environment the stages run in is a clean one, so a test can't pass that
 in a variable; the fake DDML build's env file sets FAKE_CONTROL.)
+
+As it copies the events, it prints the lines ddsim prints for each (the
+timing benchmark, ddml_timing/events.py, reads them): GenerationInit's
+"Initializing event", the particle handler's "Begin event action", DDML's line
+for each shower it places in the barrel (one per model configuration, here)
+and the output's "Saving EDM4hep event"; then, if the input ran out first, the
+start of one more event, which finds the input ended, and ddsim's timing
+summary. With $FAKE_CONTROL/ddsim_event_seconds it takes that long over each
+event, and with $FAKE_CONTROL/ddsim_run_inference it calls the
+run_inference() of each configuration's embedded-Python module once per event,
+as DDML does for each shower.
 """
 
 import fnmatch
+import importlib
 import importlib.util
 import io
 import json
 import os
 import sys
+import time
 
 
 def fail(message, status=2):
@@ -146,6 +159,47 @@ models = [{"plugin": config.plugin,
            "applicable_particles": sorted(config.applicable_particles),
            "triggers_gev": dict((p, e / GeV) for p, e in config.triggers.items()),
            "correct_angles": config.correct_angles} for config, module in zip(configs, modules)]
+
+# The lines ddsim prints for each event, and its timing summary
+control_dir = os.environ.get("FAKE_CONTROL", "/nonexistent")
+seconds = 0.0
+if os.path.exists(os.path.join(control_dir, "ddsim_event_seconds")):
+    with open(os.path.join(control_dir, "ddsim_event_seconds")) as stream:
+        seconds = float(stream.read().strip() or 0)
+# Each configuration's run_inference(), where it is to be called
+inference = [None] * len(configs)
+if os.path.exists(os.path.join(control_dir, "ddsim_run_inference")):
+    import numpy
+    for index, config in enumerate(configs):
+        module = dict(config.plugin_properties).get("PythonModule")
+        if module:
+            inference[index] = importlib.import_module(module).run_inference
+started = time.time()
+for number in range(1, len(events) + 1):
+    print("GenerationInit   INFO  +++ Initializing event %d. Within run:0 event %d."
+          % (number, number))
+    print("LCIOFileReader   INFO  read collection MCParticle from event %d in run 0 " % (number - 1))
+    print("ParticleHandler  INFO  +++ Event %d Begin event action. Access event related "
+          "information." % (number - 1))
+    for run_inference in inference:
+        if run_inference is not None:
+            run_inference([numpy.array([[50.0]], dtype=numpy.float32),
+                           numpy.array([[10.0]], dtype=numpy.float32),
+                           numpy.array([[90.0]], dtype=numpy.float32)])
+        print("PolyhedraBarrelGeometry::localToGlobal INFO  nLayer = 30")
+    if seconds:
+        time.sleep(seconds)
+    print("Geant4Output2EDM4hep INFO  +++ Saving EDM4hep event %d run 0." % (number - 1))
+if options["numberOfEvents"] < 0 or len(events) < options["numberOfEvents"]:
+    print("GenerationInit   INFO  +++ Initializing event %d. Within run:0 event %d."
+          % (len(events) + 1, len(events) + 1))
+    print("UI               INFO  ++ End of file reached, ending run...")
+print("GenerationInit   WARN  +++ Finished run 0 after %d events (%d events in total)"
+      % (len(events), len(events)))
+spent = time.time() - started
+print("DDSim            INFO Total Time:   %.2f s (User), %.2f s (System)" % (spent + 1, 0.1))
+print("DDSim            INFO StartUp Time: %.2f s, Processing and Init: %.2f s (~%.2f s/Event) "
+      % (1.0, spent, spent / max(len(events), 1)))
 with open(options["outputFile"], "w") as stream:
     json.dump({"simulator": simulator, "compact": options["compactFile"],
                "seed": options["seed"], "models": models, "events": events}, stream)

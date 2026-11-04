@@ -15,6 +15,8 @@ Everything is written under paths.data_dir:
   observables/plots/<observable>_<profile>__<scenario><sample>.<format>
   observables/plots/metrics<sample>.csv                       the figures and metrics,
   observables/plots/fits<sample>.csv                          and the energy figures' fits
+  timing/                                                     the timing benchmark's results,
+      which ddml_timing/plan.py names
 
 <sample> is empty for the full inputs, and _n<N> for a test on the first N
 events of each (-n N). It is set once, when an input is simulated: the
@@ -47,8 +49,10 @@ SIM_DIR = "sim_output"
 REC_DIR = "rec_output"
 OBSERVABLES_DIR = "observables"
 PLOTS_DIR = "plots"
+# The timing benchmark's results (ddml_timing/, which names what goes in it)
+TIMING_DIR = "timing"
 # The folders the harness keeps for itself, which no inputs may go in
-RESERVED_FOLDERS = (SIM_DIR, REC_DIR, OBSERVABLES_DIR, "slurm")
+RESERVED_FOLDERS = (SIM_DIR, REC_DIR, OBSERVABLES_DIR, "slurm", TIMING_DIR)
 
 # The reference simulator, which no model may be named after
 GEANT4 = "geant4"

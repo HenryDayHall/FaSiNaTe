@@ -254,6 +254,15 @@ for real), pyLCIO, DDML's Python package, and slurm's `sbatch` and `squeue`
 (running each job as it is submitted, or queueing them). See the README's
 Tests section; CI runs them on every push.
 
+## The timing benchmark
+
+`ddml_timing/` is a workflow of its own beside the harness: the time per event
+of each simulator on each scenario's inputs, on CPU and GPU nodes, in slurm jobs
+apart from the pipeline's (`slurm_timing.sh`, `timing.sh`, `timing_summary.sh`).
+It uses the harness's configuration, scenarios, models, environment checks and
+`ddsim` commands as they are; its results go to `timing/` in the data folder,
+which `layout.py` keeps for it. `docs/timing.md` describes it.
+
 ## Extending it
 
 - **A stage**: a class in `stages/` with the methods above, added to
