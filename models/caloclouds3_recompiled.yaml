@@ -70,7 +70,7 @@ ddml:
   # from FaSiNaTe's weights folder, and their md5 sum, which
   # simulate_models.sh checks
   weights: models/weights/CC3_recompiled.pt
-  weights_md5: "e71fa7f29318f774bd447ad0611f597d"
+  weights_md5: "ee692a5f5da2fb221ba564b199da0427"
 
 # How plot_observables.sh draws this model: a colour and a line style
 # (matplotlib's: here a dash pattern, offset and lengths)

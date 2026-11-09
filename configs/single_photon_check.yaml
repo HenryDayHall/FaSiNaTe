@@ -1,0 +1,6 @@
+# Try the single photon scinario to decide if a model is basically well configured
+scenarios:
+  di_photon:
+    enabled: false
+  tau_pairs:
+    enabled: false
