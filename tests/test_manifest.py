@@ -37,7 +37,7 @@ def test_the_records_of_a_data_folder(bench):
     simulations = ["%s__%s__%s" % (stage, scenario, simulator)
                    for stage in ("sim_output", "rec_output")
                    for scenario in ("single_photon", "di_photon")
-                   for simulator in ("geant4", "caloclouds3")]
+                   for simulator in ("geant4", "caloclouds3_paper")]
     assert sorted(os.listdir(out)) == sorted(
         ["essential", "input_truth__single_photon", "input_truth__di_photon", "other"]
         + simulations)
@@ -50,7 +50,7 @@ def test_the_records_of_a_data_folder(bench):
         "pipeline needs"
     by_name = dict((entry["name"], entry) for entry in essential["files"])
     assert sorted(by_name) == sorted([name + ".slcio" for name in INPUTS + [DI_PHOTON_INPUT]]
-                                     + ["caloclouds3.npz", "geant4.npz"])
+                                     + ["caloclouds3_paper.npz", "geant4.npz"])
     for name, entry in by_name.items():
         source = bench.path(entry["path"])
         assert entry["sha256"] == digest(source) and entry["size"] == os.path.getsize(source)
@@ -88,11 +88,11 @@ def test_the_records_of_a_data_folder(bench):
     assert len(geant4["stack"]["ildconfig"]) == 40
     assert essential["stack"] == dict((k, v) for k, v in geant4["stack"].items()
                                       if k != "steering")
-    caloclouds3 = by_name["caloclouds3.npz"]
-    assert caloclouds3["stack"]["presets"] == "CC3_BARREL_PY_INTERFACE"
+    caloclouds3 = by_name["caloclouds3_paper.npz"]
+    assert caloclouds3["stack"]["presets"] == "CC3_BARREL"
     # What the model is, by its logs and by its description now: DDML's own
-    # Python module, none of models/
-    with open(os.path.join(bench.repo, "models", "caloclouds3.yaml")) as stream:
+    # plugin, and no module of models/
+    with open(os.path.join(bench.repo, "models", "caloclouds3_paper.yaml")) as stream:
         described = models.description_sha256(yaml.safe_load(stream))
     assert caloclouds3["stack"]["description_sha256"] == described
     assert caloclouds3["stack"]["python"] == "none"
@@ -110,14 +110,15 @@ def test_the_records_of_a_data_folder(bench):
 
     # The simulations and reconstructions, file by file, by stage, scenario
     # and simulator, never fetched
-    record = load(out, "rec_output__di_photon__caloclouds3")
-    assert record["title"] == "FaSiNaTe benchmark data: caloclouds3 reconstructions, di_photon"
+    record = load(out, "rec_output__di_photon__caloclouds3_paper")
+    assert record["title"] == \
+        "FaSiNaTe benchmark data: caloclouds3_paper reconstructions, di_photon"
     assert sorted(entry["name"] for entry in record["files"]) == sorted(
         name + ending for name in DI_PHOTON_SIMULATIONS
         for ending in (".log", "_AIDA.root", "_PfoAnalysis.root", "_REC.edm4hep.root"))
     for entry in record["files"]:
         assert entry["role"] == "archive"
-        assert entry["path"] == "rec_output/di_photon/caloclouds3/" + entry["name"]
+        assert entry["path"] == "rec_output/di_photon/caloclouds3_paper/" + entry["name"]
         assert entry["sha256"] == digest(bench.path(entry["path"]))
         assert os.path.islink(os.path.join(out, record["record"], entry["name"]))
     truth = load(out, "input_truth__single_photon")
@@ -176,14 +177,14 @@ def test_measurements_from_a_data_folder_without_logs_say_so(bench):
 
 
 def test_the_manifest_records_what_a_model_with_its_own_code_is(bench):
-    """caloclouds3_rescaled, whose inference code is a module of models/: the
+    """caloclouds3_recompiled, whose inference code is a module of models/: the
     logs of its simulations record the sha256 of its description and of that
     code as ddsim started, and its measurements' entry in the manifest has
     those (stack), and the description's as it is now (model)."""
-    bench.add_model("caloclouds3_rescaled")
+    bench.add_model("caloclouds3_recompiled")
     bench.run("pipeline.sh")
-    code = os.path.join(bench.repo, "models", "caloclouds3_rescaled.py")
-    description = os.path.join(bench.repo, "models", "caloclouds3_rescaled.yaml")
+    code = os.path.join(bench.repo, "models", "caloclouds3_recompiled.py")
+    description = os.path.join(bench.repo, "models", "caloclouds3_recompiled.yaml")
     with open(code, "rb") as stream:
         sha256 = hashlib.sha256(stream.read()).hexdigest()
     with open(description) as stream:
@@ -194,29 +195,30 @@ def test_the_manifest_records_what_a_model_with_its_own_code_is(bench):
     def entry():
         bench.run("scripts/ddml-bench", "manifest", "--out", out, "--records", "essential")
         return dict((e["name"], e) for e in load(out, "essential")["files"])[
-            "caloclouds3_rescaled.npz"]
+            "caloclouds3_recompiled.npz"]
 
     measured = entry()
     assert measured["stack"]["description_sha256"] == described
-    assert measured["stack"]["python"] == "caloclouds3_rescaled:" + sha256
+    assert measured["stack"]["python"] == "caloclouds3_recompiled:" + sha256
     assert measured["stack"]["model_configs"] == ddml_configs.canonical(
         [{"preset": "CC3_BARREL_PY_INTERFACE",
-          "plugin_properties": {"PythonModule": "caloclouds3_rescaled"}}])
+          "plugin_properties": {"PythonModule": "caloclouds3_recompiled"}}])
     assert measured["model"]["description_sha256"] == described
-    assert measured["model"]["python"] == {"caloclouds3_rescaled": {
-        "path": "models/caloclouds3_rescaled.py", "sha256": sha256}}
+    assert measured["model"]["python"] == {"caloclouds3_recompiled": {
+        "path": "models/caloclouds3_recompiled.py", "sha256": sha256}}
 
     # Both changed since: the logs still say what the simulations were made
     # with, and the description what the model is now
     with open(code, "a") as stream:
         stream.write("# changed\n")
+    assert text.count("training_range: [1, 127]") == 1
     with open(description, "w") as stream:
-        stream.write(text.replace("energy_rescale: 1.0065416493", "energy_rescale: 1.01"))
+        stream.write(text.replace("training_range: [1, 127]", "training_range: [1, 126]"))
     measured = entry()
     assert measured["stack"]["description_sha256"] == described
-    assert measured["stack"]["python"] == "caloclouds3_rescaled:" + sha256
+    assert measured["stack"]["python"] == "caloclouds3_recompiled:" + sha256
     assert measured["model"]["description_sha256"] not in (None, described)
-    assert measured["model"]["python"]["caloclouds3_rescaled"]["sha256"] != sha256
+    assert measured["model"]["python"]["caloclouds3_recompiled"]["sha256"] != sha256
 
 
 def test_records_are_split_with_each_samples_files_together():

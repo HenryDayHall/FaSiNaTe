@@ -131,7 +131,7 @@ def test_forcing_a_stage_remakes_what_is_made_from_it(configured):
     measured = dict((task["simulator"], task) for task in graph.list
                     if task["stage"] == "observables")
     assert measured["geant4"]["why"].endswith("is made again")
-    assert measured["caloclouds3"]["why"] == "no caloclouds3.npz yet"
+    assert measured["caloclouds3_paper"]["why"] == "no caloclouds3_paper.npz yet"
 
 
 def test_what_isnt_selected_isnt_run(configured):
@@ -167,13 +167,13 @@ def test_up_to_date_measurements_need_no_simulations_or_reconstructions(fetched)
 def test_a_model_added_runs_only_its_own_tasks(fetched, monkeypatch):
     folder = os.path.join(fetched.tmp, "models")
     os.makedirs(folder)
-    for name in ("caloclouds3", "newmodel"):
-        shutil.copy(os.path.join(models.MODELS_DIR, "caloclouds3.yaml"),
+    for name in ("caloclouds3_paper", "newmodel"):
+        shutil.copy(os.path.join(models.MODELS_DIR, "caloclouds3_paper.yaml"),
                     os.path.join(folder, name + ".yaml"))
     monkeypatch.setattr(models, "MODELS_DIR", folder)
     graph = Graph(make_plan()).find_status()
     assert status(graph, "geant4") == {UNNEEDED: 4}
-    assert status(graph, "models", "caloclouds3") == {UNNEEDED: 4}
+    assert status(graph, "models", "caloclouds3_paper") == {UNNEEDED: 4}
     assert status(graph, "models", "newmodel") == {TODO: 4}
     assert status(graph, "reconstruct", "newmodel") == {TODO: 4}
     assert status(graph, "reconstruct") == {UNNEEDED: 8, TODO: 4}
@@ -195,9 +195,9 @@ def test_forcing_a_stage_makes_what_isnt_there_and_what_is_made_from_it(fetched)
                     if task["stage"] == "observables")
     assert measured["geant4"]["status"] == TODO and measured["geant4"]["redo"]
     # CaloClouds3's measurements are up to date, so its tasks aren't needed
-    assert measured["caloclouds3"]["status"] == DONE
+    assert measured["caloclouds3_paper"]["status"] == DONE
     assert status(graph, "models") == {UNNEEDED: 4}
-    assert status(graph, "reconstruct", "caloclouds3") == {UNNEEDED: 4}
+    assert status(graph, "reconstruct", "caloclouds3_paper") == {UNNEEDED: 4}
 
 
 def test_measurements_out_of_date_need_their_reconstructions(fetched, monkeypatch):
@@ -286,7 +286,7 @@ def test_each_seed_of_a_scenario_is_a_simulation_of_its_own(configured, monkeypa
     simulations = [task for task in graph.list
                    if task["stage"] in ("geant4", "models") and task["scenario"] == "di_photon"]
     assert sorted((task["simulator"], task["seed"]) for task in simulations) == [
-        ("caloclouds3", 1), ("caloclouds3", 2), ("geant4", 1), ("geant4", 2)]
+        ("caloclouds3_paper", 1), ("caloclouds3_paper", 2), ("geant4", 1), ("geant4", 2)]
     for task in simulations:
         assert task["name"].endswith("_seed0_simseed%d" % task["seed"])
         assert os.path.basename(task["output"]).startswith(task["name"] + ".")
@@ -381,7 +381,7 @@ def test_inputs_made_elsewhere_are_done_and_each_simulated_with_its_own_seed(tau
     simulations = [task for task in graph.list
                    if task["stage"] in ("geant4", "models") and task["scenario"] == "tau_pairs"]
     assert sorted((task["simulator"], task["name"], task["seed"]) for task in simulations) == [
-        (simulator, name, seed) for simulator in ("caloclouds3", "geant4")
+        (simulator, name, seed) for simulator in ("caloclouds3_paper", "geant4")
         for name, seed in (("taus_a_simseed42", 42), ("taus_b_simseed1764", 1764))]
     for task in simulations:
         command = BY_NAME[task["stage"]].command(task, "/detector.xml", "/out/.partial.root")

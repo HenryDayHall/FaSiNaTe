@@ -70,19 +70,19 @@ def test_a_fresh_data_folder_fetches_what_is_published(bench, published):
     assert bench.files("input_single_particle_gun") == sorted(
         name + ".slcio" for name in INPUTS + [DI_PHOTON_INPUT])
     assert sorted({row["simulator"] for row in read_metrics(
-        bench.path("observables", "plots", "metrics.csv"))}) == ["caloclouds3"]
+        bench.path("observables", "plots", "metrics.csv"))}) == ["caloclouds3_paper"]
     status, output = bench.run("pipeline.sh")
     assert "everything selected is done" in output and "fetching" not in output, output
 
     # A model added runs only its own tasks, against the published measurements
-    with open(os.path.join(bench.repo, "models", "caloclouds3.yaml")) as stream:
-        model = stream.read().replace('linestyle: "-"', 'linestyle: "--"')
+    with open(os.path.join(bench.repo, "models", "caloclouds3_paper.yaml")) as stream:
+        model = stream.read().replace('linestyle: "-."', 'linestyle: "--"')
     with open(os.path.join(bench.repo, "models", "another.yaml"), "w") as stream:
         stream.write(model)
     status, output = bench.run("pipeline.sh")
     assert "made 10 of 10" in output and "fetching" not in output, output
     assert sorted({row["simulator"] for row in read_metrics(
-        bench.path("observables", "plots", "metrics.csv"))}) == ["another", "caloclouds3"]
+        bench.path("observables", "plots", "metrics.csv"))}) == ["another", "caloclouds3_paper"]
 
 
 def test_slurm_fetches_on_the_login_node_and_submits_the_rest(bench, published):
@@ -245,22 +245,24 @@ def test_the_manifest_describes_the_models():
 
 def test_published_measurements_of_a_model_described_otherwise_arent_used(bench, published):
     fetching(bench, published)
-    path = os.path.join(bench.repo, "models", "caloclouds3.yaml")
+    path = os.path.join(bench.repo, "models", "caloclouds3_paper.yaml")
     with open(path) as stream:
         text = stream.read()
-    assert "\nname: CaloClouds3\n" in text and 'color: "#e8710a"' in text
+    assert "\nname: CaloClouds3 (paper)\n" in text and 'color: "#1f6fb4"' in text
     # Its comments, label and plot style don't make it another model...
     with open(path, "w") as stream:
-        stream.write("# Said otherwise.\n" + text.replace("\nname: CaloClouds3\n", "\nname: CC3\n")
-                     .replace('color: "#e8710a"', 'color: "#000000"'))
+        stream.write("# Said otherwise.\n" + text.replace("\nname: CaloClouds3 (paper)\n",
+                                                          "\nname: CC3\n")
+                     .replace('color: "#1f6fb4"', 'color: "#000000"'))
     status, output = bench.run("pipeline.sh", "--dry-run")
     assert "would fetch 5 published file(s)" in output, output
     # ... but anything else does, e.g. a setting its own code would read
     with open(path, "w") as stream:
         stream.write(text + "energy_rescale: 1.01\n")
     status, output = bench.run("pipeline.sh", "--dry-run")
-    assert "the published caloclouds3.npz (Zenodo record 123) isn't used, as the model was " \
-        "simulated with another description than models/caloclouds3.yaml" in output, output
+    assert "the published caloclouds3_paper.npz (Zenodo record 123) isn't used, as the model " \
+        "was simulated with another description than models/caloclouds3_paper.yaml" in output, \
+        output
     assert "would fetch 4 published file(s)" in output, output
 
 
