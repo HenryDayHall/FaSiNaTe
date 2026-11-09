@@ -26,8 +26,9 @@ from ddml_bench import ddml_configs, models
 REPO_MODELS = sorted(name[:-len(".yaml")] for name in os.listdir(os.path.join(REPO, "models"))
                      if name.endswith(".yaml"))
 # Models set aside for now (unused_models/), whose descriptions some tests still
-# use: the closure test of caloclouds3 (caloclouds3_libtorch), and a model
-# trained on other particles than DDML gives it (par04_vae_onnx)
+# use: a compiled model that is the closure test of one DDML runs in Python
+# (caloclouds3_libtorch), and a model trained on other particles than DDML gives
+# it (par04_vae_onnx)
 UNUSED_MODELS = os.path.join(REPO, "unused_models")
 INPUTS = ["p22_th43-137_ph79-109_en20_seed0_ip_surface",
           "p22_th43-137_ph79-109_en80_seed1_ip_surface"]
@@ -69,6 +70,13 @@ def test_every_model_in_the_repository_is_described_whole():
     for model in described:
         assert bool(model["presets"]) != bool(model["model_configs"]), model["name"]
         assert model["weights"] and model["weights_md5"], model["name"]
+        # Its weights are in DDML's build, or kept in this repository, where
+        # they are what their md5 sum says
+        assert model["weights_in"] in ("ddml", "fasinate"), model["name"]
+        if model["weights_in"] == "fasinate":
+            with open(os.path.join(REPO, model["weights"]), "rb") as stream:
+                assert hashlib.md5(stream.read()).hexdigest() == model["weights_md5"], \
+                    model["name"]
         assert model["compact_file"] == "ILD/compact/ILD_l5_o1_v02/ILD_l5_o1_v02.xml"
         assert model["particles"] == ["gamma"], model["name"]
         for entry in model["model_configs"]:
@@ -76,9 +84,10 @@ def test_every_model_in_the_repository_is_described_whole():
                 # Relative to DDML's scripts/ folder, where ddsim runs
                 assert entry["plugin_properties"]["ModelPath"] == "../" + model["weights"]
         assert len(model["description_sha256"]) == 64, model["name"]
-        # Its own inference code, a module of models/ named after it
-        assert sorted(model["python"]) == (["caloclouds3_rescaled"]
-                                           if model["name"] == "caloclouds3_rescaled" else [])
+        # Its own inference code, if it has any: the module of models/ named
+        # after it (caloclouds3_recompiled's)
+        own = os.path.isfile(os.path.join(REPO, "models", model["name"] + ".py"))
+        assert sorted(model["python"]) == ([model["name"]] if own else []), model["name"]
         for module, code in model["python"].items():
             assert code["path"] == "models/%s.py" % module
             with open(os.path.join(REPO, code["path"]), "rb") as stream:
@@ -306,14 +315,14 @@ def test_the_steering_file_runs_the_models_own_code_from_models(tmp_path):
     status, output, simulated = run_fake_ddsim(
         tmp_path, "--ml-config", ddml_configs.option(
             {"preset": "CC3_BARREL_PY_INTERFACE",
-             "plugin_properties": {"PythonModule": "caloclouds3_rescaled"}}),
+             "plugin_properties": {"PythonModule": "caloclouds3_recompiled"}}),
         "--ml-config", ddml_configs.option({"preset": "CC3_ENDCAP_PY_INTERFACE"}))
     assert status == 0, output
     own, ddmls = simulated["models"]
-    assert own["plugin_properties"] == {"PythonModule": "caloclouds3_rescaled",
+    assert own["plugin_properties"] == {"PythonModule": "caloclouds3_recompiled",
                                         "EntryPoint": "run_inference"}
     assert os.path.realpath(own["python_module"]) == os.path.realpath(
-        os.path.join(REPO, "models", "caloclouds3_rescaled.py"))
+        os.path.join(REPO, "models", "caloclouds3_recompiled.py"))
     assert os.path.realpath(ddmls["python_module"]) == os.path.realpath(
         os.path.join(FAKES, "ddml", "python", "examples", "cc3_sf_2a_wrapper.py"))
     # A module that is nowhere stops ddsim, as DDML's plugin does
@@ -323,7 +332,7 @@ def test_the_steering_file_runs_the_models_own_code_from_models(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# The models' own inference code (models/caloclouds3_rescaled.py), as DDML's
+# The models' own inference code (models/caloclouds3_recompiled.py), as DDML's
 # embedded-Python plugin runs it, on a stand-in for PyTorch whose model gives a
 # made-up output
 
@@ -396,33 +405,24 @@ def caloclouds_output():
     return np.concatenate([counts, points.ravel(), np.zeros(8, dtype=np.float32)])[None, :]
 
 
-def test_caloclouds3_rescaled_rescales_the_energy_of_every_point(monkeypatch):
-    with open(os.path.join(REPO, "models", "caloclouds3_rescaled.yaml")) as stream:
+def test_caloclouds3_recompiled_runs_the_weights_kept_in_this_repository(monkeypatch):
+    with open(os.path.join(REPO, "models", "caloclouds3_recompiled.yaml")) as stream:
         described = yaml.safe_load(stream)
+    assert described["ddml"]["weights_in"] == "fasinate"
     output, seen = caloclouds_output(), {}
-    rescaled = import_own_code(monkeypatch, "caloclouds3_rescaled", output, seen)
-    # The weights of its description, in DDML's build, whose md5 sum is checked
-    assert seen["weights"] == os.path.join("/sw/DDML", described["ddml"]["weights"])
+    # It needs no DDML build ($DDML_SOURCE_DIR unset)...
+    recompiled = import_own_code(monkeypatch, "caloclouds3_recompiled", output, seen, ddml=None)
+    # ... as the weights of its description are in this repository, whose md5
+    # sum is checked
+    assert seen["weights"] == os.path.join(REPO, described["ddml"]["weights"])
     assert seen["device"] == "cpu"
 
     inputs = [np.array([[value]], dtype=np.float32) for value in (50.0, 90.0, 85.0)]
-    out = rescaled.run_inference(inputs)
+    out = recompiled.run_inference(inputs)
     assert [a.tolist() for a in seen["inputs"]] == [[[50.0]], [[90.0]], [[85.0]]]
+    # The model's output as it is, flat, as DDML reads it
     assert out.dtype == np.float32 and out.shape == (output.size,)
-    flat = output.ravel()
-    # The energy of every point, by the description's factor...
-    energies = np.zeros(out.size, dtype=bool)
-    energies[30 + 3::4] = True
-    assert np.allclose(out[energies], flat[energies] * described["energy_rescale"],
-                       rtol=1e-6, atol=0)
-    assert out[[33, 37, 41]].tolist() != flat[[33, 37, 41]].tolist()
-    # ... and nothing else: the points in each layer, where they are
-    assert out[~energies].tolist() == flat[~energies].tolist()
-
-
-def test_caloclouds3_rescaled_needs_ddmls_build(monkeypatch):
-    with pytest.raises(RuntimeError, match="DDML_SOURCE_DIR isn't set"):
-        import_own_code(monkeypatch, "caloclouds3_rescaled", caloclouds_output(), {}, ddml=None)
+    assert out.tolist() == output.ravel().tolist()
 
 
 # ---------------------------------------------------------------------------
@@ -431,7 +431,8 @@ def test_caloclouds3_rescaled_needs_ddmls_build(monkeypatch):
 
 def test_every_model_of_the_repository_runs_in_ddsim(bench):
     """Each of the repository's models, presets or configurations, set up in
-    ddsim by the steering file it needs, as its description says."""
+    ddsim by the steering file it needs, as its description says, with its
+    weights where it keeps them: in DDML's build, or in this repository."""
     for name in REPO_MODELS:
         bench.add_model(name)
     bench.run("generate_input.sh", "single_photon")
@@ -441,8 +442,9 @@ def test_every_model_of_the_repository_runs_in_ddsim(bench):
         with open(os.path.join(bench.repo, "models", model + ".yaml")) as stream:
             described = yaml.safe_load(stream)
         ddml = described["ddml"]
-        assert "%s: weights %s, md5 checked" % (model, os.path.join(bench.ddml, ddml["weights"])) \
-            in output
+        kept = bench.repo if ddml.get("weights_in") == "fasinate" else bench.ddml
+        assert "%s: weights %s, md5 checked" % (model, os.path.join(kept, ddml["weights"])) \
+            in output, output
         own = os.path.join(bench.repo, "models", model + ".py")
         for name in INPUTS:
             path = bench.path("sim_output", "single_photon", model, name + "_n2.root")
@@ -488,6 +490,9 @@ def test_every_model_of_the_repository_runs_in_ddsim(bench):
 def test_the_environment_check_finds_what_a_model_gets_wrong(bench):
     text = open(os.path.join(UNUSED_MODELS, "caloclouds3_libtorch.yaml")).read()
     assert "    - preset: CC3_BARREL\n" in text and "ModelPath: ../models/CC3_SF_2A.pt" in text
+    # without its closure test of caloclouds3, which is no more
+    assert "\nclosure:\n  of: caloclouds3\n  identical: false\n" in text
+    text = text.replace("\nclosure:\n  of: caloclouds3\n  identical: false\n", "\n")
     bench.add_model("other_weights", text.replace("ModelPath: ../models/CC3_SF_2A.pt",
                                                   "ModelPath: ../models/CC3_paper_checkpoint.pt"))
     bench.add_model("no_plugin", text.replace("    - preset: CC3_BARREL\n",
@@ -500,14 +505,33 @@ def test_the_environment_check_finds_what_a_model_gets_wrong(bench):
                                               "    - preset: CC3_NOPE\n"))
     # Python modules: one that is nowhere, and one of models/ that would stand
     # in for a preset's own without the description naming it
-    own = open(os.path.join(REPO, "models", "caloclouds3_rescaled.yaml")).read()
-    assert "        PythonModule: caloclouds3_rescaled\n" in own
-    bench.add_model("no_module", own.replace("PythonModule: caloclouds3_rescaled",
+    own = open(os.path.join(REPO, "models", "caloclouds3_recompiled.yaml")).read()
+    assert "        PythonModule: caloclouds3_recompiled\n" in own
+    bench.add_model("no_module", own.replace("PythonModule: caloclouds3_recompiled",
                                              "PythonModule: nowhere"))
     bench.add_model("unnamed_module", own.replace(
-        "      plugin_properties:\n        PythonModule: caloclouds3_rescaled\n", ""))
+        "      plugin_properties:\n        PythonModule: caloclouds3_recompiled\n", ""))
     with open(os.path.join(bench.repo, "models", "cc3_sf_2a_wrapper.py"), "w") as stream:
         stream.write("def run_inference(inputs):\n    return inputs[0]\n")
+    # and a model of presets, which runs DDML's own even so: here a preset of
+    # DDML's embedded-Python plugin
+    paper = open(os.path.join(REPO, "models", "caloclouds3_paper.yaml")).read()
+    assert "  presets: [CC3_BARREL]\n" in paper
+    bench.add_model("python_preset", paper.replace("  presets: [CC3_BARREL]\n",
+                                                   "  presets: [CC3_BARREL_PY_INTERFACE]\n"))
+    # Weights kept in this repository (ddml.weights_in: fasinate), checked
+    # there: ones that aren't there, and ones that aren't what their md5 sum says
+    assert "\n  weights_in: fasinate\n" in own
+    assert "\n  weights: models/weights/CC3_recompiled.pt\n" in own
+    kept_here = os.path.join(bench.repo, "models", "weights")
+    for name in ("missing_weights", "changed_weights"):
+        bench.add_model(name, own.replace("models/weights/CC3_recompiled.pt",
+                                          "models/weights/%s.pt" % name))
+    os.remove(os.path.join(kept_here, "missing_weights.pt"))
+    with open(os.path.join(kept_here, "changed_weights.pt"), "rb") as stream:
+        described_md5 = hashlib.md5(stream.read()).hexdigest()
+    with open(os.path.join(kept_here, "changed_weights.pt"), "wb") as stream:
+        stream.write(b"other weights\n")
     # Given other particles on purpose, and saying so
     bench.add_model("par04_vae_onnx", folder="unused_models")
     bench.run("generate_input.sh", "single_photon")
@@ -520,8 +544,16 @@ def test_the_environment_check_finds_what_a_model_gets_wrong(bench):
             "which ddsim would take from %s, ahead of DDML's" % os.path.join(
                 bench.repo, "models", "cc3_sf_2a_wrapper.py")) in output, output
     # but a model with presets runs DDML's own, as DDML's steering file does
-    assert "caloclouds3: preset CC3_BARREL_PY_INTERFACE runs the Python module %s" % (
-        os.path.join(bench.ddml, "python", "examples", "cc3_sf_2a_wrapper.py")) in output
+    assert "python_preset: preset CC3_BARREL_PY_INTERFACE runs the Python module %s" % (
+        os.path.join(bench.ddml, "python", "examples", "cc3_sf_2a_wrapper.py")) in output, output
+    assert "missing_weights: weights not found: %s " % os.path.join(
+        kept_here, "missing_weights.pt") in output, output
+    assert ("changed_weights: the md5 sum of %s is %s, not %s as in models/changed_weights.yaml"
+            % (os.path.join(kept_here, "changed_weights.pt"),
+               hashlib.md5(b"other weights\n").hexdigest(), described_md5)) in output, output
+    # and those that are fine are checked there too
+    assert "unnamed_module: weights %s, md5 checked" % os.path.join(
+        kept_here, "CC3_recompiled.pt") in output, output
     weights = os.path.join(bench.ddml, "models", "CC3_SF_2A.pt")
     assert ("other_weights: model configuration 1 loads %s, but the weights "
             "models/other_weights.yaml checks are %s" % (
@@ -540,8 +572,15 @@ def test_the_environment_check_finds_what_a_model_gets_wrong(bench):
 
 
 def test_a_compiled_model_is_its_python_twins_closure_test(bench):
-    # Set aside in unused_models/ for now, but its closure test still runs
-    bench.add_model("caloclouds3_libtorch", folder="unused_models")
+    # Set aside in unused_models/ for now, but its closure test still runs. Its
+    # twin, caloclouds3 (the same weights through DDML's embedded-Python
+    # plugin), is no more, so caloclouds3_recompiled, which that plugin runs
+    # too, stands in for it
+    text = open(os.path.join(UNUSED_MODELS, "caloclouds3_libtorch.yaml")).read()
+    assert "\nclosure:\n  of: caloclouds3\n" in text
+    bench.add_model("caloclouds3_recompiled")
+    bench.add_model("caloclouds3_libtorch", text.replace(
+        "\nclosure:\n  of: caloclouds3\n", "\nclosure:\n  of: caloclouds3_recompiled\n"))
     status, output = bench.run("pipeline.sh")
     # It ran with its configuration, from the steering file for them
     with open(bench.path("sim_output", "di_photon", "caloclouds3_libtorch",
@@ -551,16 +590,17 @@ def test_a_compiled_model_is_its_python_twins_closure_test(bench):
     config, = simulated["models"]
     assert config["plugin"] == "CaloCloudsTwoAngleModelPolyhedraBarrelTorchModel/BarrelModelTorch"
     assert config["plugin_properties"]["ModelPath"] == "../models/CC3_SF_2A.pt"
-    with open(bench.path("sim_output", "di_photon", "caloclouds3",
+    with open(bench.path("sim_output", "di_photon", "caloclouds3_recompiled",
                          DI_PHOTON_SIMULATIONS[0] + ".root")) as stream:
         twin = json.load(stream)
     assert twin["models"][0]["plugin"].startswith(
         "CaloCloudsTwoAngleModelPolyhedraBarrelPyEmbeddedModel")
 
-    # Both are compared with Geant4, and with each other in closure/
+    # Both are compared with Geant4 (as the bench's model is), and with each
+    # other in closure/
     plots = bench.path("observables", "plots")
     assert {row["simulator"] for row in read_csv(os.path.join(plots, "metrics.csv"))} == {
-        "caloclouds3", "caloclouds3_libtorch"}
+        "caloclouds3_paper", "caloclouds3_recompiled", "caloclouds3_libtorch"}
     closure = os.path.join(plots, "closure", "caloclouds3_libtorch")
     rows = read_csv(os.path.join(closure, "metrics.csv"))
     assert rows and {row["simulator"] for row in rows} == {"caloclouds3_libtorch"}
@@ -569,12 +609,14 @@ def test_a_compiled_model_is_its_python_twins_closure_test(bench):
     assert os.path.isfile(os.path.join(closure, "radial_profile_r30__single_photon.png"))
     # A comparison of the distributions, even with the same seeds
     assert read_csv(os.path.join(plots, "closure.csv")) == [
-        {"model": "caloclouds3_libtorch", "reference": "caloclouds3", "scenario": "di_photon",
-         "seeds": "same", "identical": "yes", "expected": "statistical", "passed": ""},
-        {"model": "caloclouds3_libtorch", "reference": "caloclouds3",
+        {"model": "caloclouds3_libtorch", "reference": "caloclouds3_recompiled",
+         "scenario": "di_photon", "seeds": "same", "identical": "yes",
+         "expected": "statistical", "passed": ""},
+        {"model": "caloclouds3_libtorch", "reference": "caloclouds3_recompiled",
          "scenario": "single_photon", "seeds": "ddsim's own", "identical": "yes",
          "expected": "statistical", "passed": ""}]
-    assert "closure test: caloclouds3_libtorch on di_photon: the same as caloclouds3" in output
+    assert "closure test: caloclouds3_libtorch on di_photon: the same as " \
+        "caloclouds3_recompiled" in output, output
 
     # A pair that should give the same events with the same seeds passes...
     path = os.path.join(bench.repo, "models", "caloclouds3_libtorch.yaml")
@@ -595,8 +637,9 @@ def test_a_compiled_model_is_its_python_twins_closure_test(bench):
         arrays["photon_separation__di_photon__n_photons"] + 1
     np.savez_compressed(path, **arrays)
     status, output = bench.run("plot_observables.sh")
-    assert "closure test FAILED: caloclouds3_libtorch and caloclouds3 were simulated with " \
-        "the same seeds on di_photon, but their measurements differ" in output, output
+    assert "closure test FAILED: caloclouds3_libtorch and caloclouds3_recompiled were " \
+        "simulated with the same seeds on di_photon, but their measurements differ" in output, \
+        output
     rows = read_csv(os.path.join(plots, "closure.csv"))
     assert [(row["scenario"], row["identical"], row["passed"]) for row in rows] == [
         ("di_photon", "no", "no"), ("single_photon", "yes", "")]

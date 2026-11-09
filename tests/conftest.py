@@ -36,7 +36,8 @@ COPIED = ["ddml_bench", "scripts", "configs", "ILD_Particle_Gun.py",
           "pipeline.sh", "slurm_pipeline.sh", "slurm_simulate_geant4.sh", "generate_input.sh",
           "simulate_geant4.sh", "simulate_models.sh", "reconstruct_simulation.sh",
           "observables_from_reconstruction.sh", "plot_observables.sh"]
-BENCH_MODELS = ["caloclouds3"]
+# A model of DDML's presets alone, with its weights in DDML's build
+BENCH_MODELS = ["caloclouds3_paper"]
 # The plugins DDML declares (src/MLModelActions.cc), with every backend built
 DDML_PLUGINS = [
     "RegularGridGANPolyhedraBarrelONNXModel", "RegularGridGANEndcapONNXModel",
@@ -280,16 +281,19 @@ class Bench(object):
     def add_model(self, name, text=None, folder="models"):
         """Put the repository's <folder>/<name>.yaml (models/ unless said, or
         unused_models/ for a model set aside), or text, in the copy's models/,
-        with fake weights in the fake DDML build, whose md5 sum it is then
-        given, and the modules of <folder> that its DDML model configurations
-        run (its own inference code: plugin_properties PythonModule)."""
+        with fake weights where it keeps them, in the fake DDML build or, with
+        ddml.weights_in: fasinate, in the copy of the repository, whose md5 sum
+        it is then given, and the modules of <folder> that its DDML model
+        configurations run (its own inference code: plugin_properties
+        PythonModule)."""
         if text is None:
             with open(os.path.join(REPO, folder, name + ".yaml")) as stream:
                 text = stream.read()
         ddml = yaml.safe_load(text).get("ddml") or {}
         weights = ddml.get("weights")
         if weights:
-            path = os.path.join(self.ddml, weights)
+            path = os.path.join(self.repo if ddml.get("weights_in") == "fasinate" else self.ddml,
+                                weights)
             if not os.path.exists(path):
                 _write(path, "fake weights: %s\n" % weights)
             md5 = hashlib.md5(open(path, "rb").read()).hexdigest()
