@@ -1,28 +1,19 @@
-# CaloClouds3 (CC3), rescaled: the checkpoint of the CaloClouds3 paper, run
-# inside ddsim with DDML's embedded-Python inference by this repository's own
-# inference code, models/caloclouds3_rescaled.py, which multiplies the energy
-# of every point of a shower by energy_rescale.
+# CaloClouds3 (CC3), recompiled: regenerated the pt file from weights
 #
 # simulate_models.sh simulates the benchmark scenarios with every model in this
-# folder; the file name (caloclouds3_rescaled) names the model and its output
+# folder; the file name (caloclouds3_recompiled) names the model and its output
 # folders, and the inference code is the module of the same name.
 #
 # The training details are from the CaloClouds3 paper, arXiv:2511.01460, and
 # the benchmark paper, "A First Full Physics Benchmark for Highly Granular
 # Calorimeter Surrogates".
 
-name: CaloClouds3 (rescaled)
+name: CaloClouds3 (recompiled)
 
 # Each shower is a set of points (x, y, layer, energy), as many as the shower
 # needs, rather than energies on a fixed grid of cells. DDML deposits each
 # point in the cell of the real detector it falls in.
 representation: point_cloud
-
-# The factor that models/caloclouds3_rescaled.py multiplies the energy of every
-# point the model makes by. The module reads it from here, so changing it
-# changes the model's description, which each simulation's log records (as its
-# sha256), and the manifest of published measurements with it.
-energy_rescale: 1.0065416493
 
 # Factors fixed when the model was trained. The model has no input for them, so
 # it is only valid where they hold.
@@ -65,27 +56,26 @@ ddml:
   # preset CC3_BARREL_PY_INTERFACE, which gives photons above 10 GeV entering
   # the ECal barrel to DDML's embedded-Python plugin, except near the ends of
   # the barrel and the joins between its staves (Geant4 simulates everything
-  # else), with the plugin running models/caloclouds3_rescaled.py in place of
+  # else), with the plugin running models/caloclouds3_recompiled.py in place of
   # DDML's python/examples/cc3_sf_2a_wrapper.py. scripts/ddsim_steer_models.py,
   # which runs the configurations, puts models/ first on ddsim's Python path,
   # so the plugin imports the module from there.
   model_configs:
     - preset: CC3_BARREL_PY_INTERFACE
       plugin_properties:
-        PythonModule: caloclouds3_rescaled
-  # The weights the module loads (it reads them from here), relative to the
-  # DDML clone (building DDML downloads them), and their md5 sum, which
-  # simulate_models.sh checks: the checkpoint published with the CaloClouds3
-  # paper, which DDML's LibTorch preset CC3_BARREL loads too
-  # (models/caloclouds3_paper.yaml).
-  weights: models/CC3_paper_checkpoint.pt
-  weights_md5: "efa35d840d739be8047109813d80c474"
+        PythonModule: caloclouds3_recompiled
+  # for this model, the weights live here in FaSiNaTe
+  weights_in: fasinate
+  # The weights the module loads (it reads them from here)
+  # from FaSiNaTe's weights folder, and their md5 sum, which
+  # simulate_models.sh checks
+  weights: models/weights/CC3_recompiled.pt
+  weights_md5: "ee692a5f5da2fb221ba564b199da0427"
 
 # How plot_observables.sh draws this model: a colour and a line style
-# (matplotlib's: here a dash pattern, offset and lengths), as in the benchmark
-# paper. Every model needs a line style of its own, as well as a colour, so the
-# curves can be told apart without colour; this blue is a lighter one of
-# caloclouds3_paper's, whose weights it runs.
+# (matplotlib's: here a dash pattern, offset and lengths)
+# Every model needs a line style of its own, as well as a colour, so the
+# curves can be told apart without colour.
 plot:
-  color: "#6baed6"
-  linestyle: [0, [5, 5]]
+  color: "#ff5917"
+  linestyle: [0, [1, 5]]
