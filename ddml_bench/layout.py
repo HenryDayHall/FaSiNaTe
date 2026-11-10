@@ -15,8 +15,12 @@ Everything is written under paths.data_dir:
   observables/plots/<observable>_<profile>__<scenario><sample>.<format>
   observables/plots/metrics<sample>.csv                       the figures and metrics,
   observables/plots/fits<sample>.csv                          and the energy figures' fits
+  observables/plots/pareto_<js|wasserstein>_<node>__<scenario><sample>.<format>
+  observables/plots/pareto<sample>.csv                        the Pareto fronts of the metrics
+      against the time per event in timing/summary.csv
   timing/                                                     the timing benchmark's results,
       which ddml_timing/plan.py names
+  timing/summary.csv                                          and their table
 
 <sample> is empty for the full inputs, and _n<N> for a test on the first N
 events of each (-n N). It is set once, when an input is simulated: the
@@ -51,6 +55,9 @@ OBSERVABLES_DIR = "observables"
 PLOTS_DIR = "plots"
 # The timing benchmark's results (ddml_timing/, which names what goes in it)
 TIMING_DIR = "timing"
+# Their table, in TIMING_DIR (ddml_timing/summary.py), which the plots' Pareto
+# fronts take the time per event from (ddml_bench/pareto.py)
+TIMING_SUMMARY = "summary.csv"
 # The folders the harness keeps for itself, which no inputs may go in
 RESERVED_FOLDERS = (SIM_DIR, REC_DIR, OBSERVABLES_DIR, "slurm", TIMING_DIR)
 
@@ -156,6 +163,13 @@ def figure_base(folder, observable, profile, scenario, suffix=""):
     return os.path.join(folder, "%s_%s%s%s%s" % (observable, profile, SEP, scenario, suffix))
 
 
+def timing_summary_of(observables_dir):
+    """The timing benchmark's table of the data folder whose observables folder
+    is observables_dir: <data_dir>/timing/summary.csv, beside it."""
+    return os.path.join(os.path.dirname(os.path.abspath(observables_dir)), TIMING_DIR,
+                        TIMING_SUMMARY)
+
+
 def measurement_files(folder, suffix=""):
     """[(simulator, .npz file)] of one sample's measurements in a folder, by name."""
     found = []
@@ -256,6 +270,11 @@ class Layout(object):
     @property
     def metrics(self):
         return os.path.join(self.plots_dir, "metrics%s.csv" % self.suffix)
+
+    @property
+    def timing_summary(self):
+        """The timing benchmark's table (made by timing_summary.sh)."""
+        return os.path.join(self.data_dir, TIMING_DIR, TIMING_SUMMARY)
 
     # Records of files, e.g. in the .npz files
 

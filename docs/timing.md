@@ -180,6 +180,25 @@ input weighing the same: for the single photons that is every energy alike, as
 the paper's average over 10–100 GeV. Its standard error comes from the inputs'
 standard errors.
 
+## Accuracy against time: the Pareto fronts
+
+Whenever the plots are drawn (`plot_observables.sh`, or the pipeline's plot
+stage) and `timing/summary.csv` is there, each scenario also gets Pareto
+fronts for each kind of node in the table
+([`ddml_bench/pareto.py`](../ddml_bench/pareto.py)):
+`pareto_js_<node>__<scenario>.png` and `pareto_wasserstein_<node>__<scenario>.png`
+next to the other figures, every metric of the scenario on one axis with a
+marker each, and `pareto.csv` with every point. Each model's time is the row
+of its scenario over all the inputs (`all`, or the `all_t<N>` of the most
+events) on that kind of node, and Geant4's the same on that kind of node, or
+else on the `cpu` nodes. Its accuracy in each metric is its Jensen–Shannon
+distance, or its Wasserstein distance, from Geant4 (the χ² for the energy
+figures and the π⁰ categories), divided by the mean of the models', so that
+every metric is on the same scale.
+The README's [Pareto fronts](../README.md#the-pareto-fronts) section has the
+details. The pipeline draws the plots again when the table is newer than
+`metrics.csv`.
+
 ## Options
 
 `slurm_timing.sh`, which submits the jobs, and `timing.sh`, which times here,

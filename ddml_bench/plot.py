@@ -12,7 +12,13 @@ Geant4 combined (relative_deviation(); every figure's deviations are drawn
 so). The legend gives each model's distance from Geant4, by the metric of the
 observable in the configuration (jensen_shannon: the Jensen-Shannon
 divergence, natural logarithm, of the fractions of the energy in the bins; l1:
-the mean absolute difference).
+the mean absolute difference). metrics.csv also has each model's Wasserstein
+distance from Geant4 (W1, wasserstein()) of each distribution drawn (the
+profiles, the intrinsic angles, the separation and the pi0s, in the same bins
+as the metric), in the units of the bins. The figures that aren't of
+distributions, the energy figures and the pi0 categories, instead have each
+model's chi^2 from Geant4 (chi2, chi_squared()) over their points, with the
+uncertainties drawn, which their legends give too, as chi^2/ndf.
 
 The reconstructed energy of each event (the observable energy) gives two
 figures, the energy linearity and resolution of the benchmark paper. The events
@@ -71,6 +77,17 @@ pi0s in the bins, seed by seed, as the separation's does (seed_histograms(),
 seed_metric()). A fifth figure, as the paper's figure 10, counts the
 candidates of each category of the reconstruction, and the MC pi0s missed.
 
+Where the timing benchmark has timed the models (<paths.data_dir>/timing/
+summary.csv, or the table --timing gives), every scenario also has its Pareto
+fronts on each kind of node timed (ddml_bench/pareto.py): every metric of the
+scenario on one axis, a marker each, each model's distance from Geant4,
+divided by the mean of the models', against its time per event, Geant4 at no
+distance. There are two versions, by the Jensen-Shannon distance of the
+distributions, pareto_js_<node>__<scenario>, and by their Wasserstein
+distance, pareto_wasserstein_<node>__<scenario>; both measure the energy
+figures and the pi0 categories by their chi^2. Every point is in pareto.csv;
+--no-pareto leaves them out.
+
 Every figure is also drawn as SVG for the dashboard, dashboard.html next to
 the figures (ddml_bench/dashboard.py), with each model's parts marked with its
 name (mark()), so that its menu can hide them; --format svg keeps the SVG
@@ -79,7 +96,8 @@ files, and --no-dashboard leaves the dashboard out.
 
   python3 -m ddml_bench.plot [--dir DIR] [--out DIR] [--events N]
                              [--format pdf,png] [--reference NAME]
-                             [--no-closure] [--no-dashboard] [SIMULATOR ...]
+                             [--no-closure] [--no-dashboard] [--timing CSV]
+                             [--no-pareto] [SIMULATOR ...]
 
 (plot_observables.sh runs it.) The figures go to <dir>/plots (or --out), one per
 observable, profile and scenario, named <observable>_<profile>__<scenario>.<format>
@@ -106,7 +124,8 @@ from urllib.parse import quote
 
 from . import dashboard, measure
 from .dashboard import DATA, KEY, MARK, TARGET
-from .layout import GEANT4, OBSERVABLES_DIR, PLOTS_DIR, SEP, figure_base, measurement_files
+from .layout import (GEANT4, OBSERVABLES_DIR, PLOTS_DIR, SEP, TIMING_DIR, TIMING_SUMMARY,
+                     figure_base, measurement_files, timing_summary_of)
 
 REFERENCE = GEANT4
 REFERENCE_FILL = "#d9d9d9"
@@ -267,6 +286,72 @@ METRICS = {"jensen_shannon": ("JS", jensen_shannon), "l1": ("L1", l1_distance)}
 DEFAULT_METRICS = {"energy": "l1"}
 
 
+def wasserstein(p, q, edges):
+    """The Wasserstein distance (W1, the earth mover's distance) of two
+    non-negative distributions in the same bins, each normalised, with each
+    bin's content at its centre: the area between their cumulative
+    distributions, in the units of the bins (mm, layers, degrees, GeV). NaN
+    if either is empty."""
+    import numpy as np
+    p = np.clip(np.asarray(p, dtype=float), 0, None)
+    q = np.clip(np.asarray(q, dtype=float), 0, None)
+    if p.sum() <= 0 or q.sum() <= 0:
+        return float("nan")
+    edges = np.asarray(edges, dtype=float)
+    between = np.cumsum(p / p.sum() - q / q.sum())[:-1]
+    return float(np.sum(np.abs(between) * np.diff((edges[1:] + edges[:-1]) / 2)))
+
+
+# Every distribution's Wasserstein distance from the reference's is in
+# metrics.csv as well as its metric (as this metric), for the Pareto fronts
+# (ddml_bench/pareto.py), though the legends give only the metric
+WASSERSTEIN = "W1"
+# The units of each kind of observable's bins, which its Wasserstein distance
+# is in (of the pi0s, of each figure)
+UNITS = {"radial_profile": "mm", "longitudinal_profile": "layers", "intrinsic_angle": "°",
+         "photon_separation": "mm"}
+PI0_UNITS = dict((figure, "°" if unit == "degrees" else unit)
+                 for figure, unit in measure.PI0_UNITS.items())
+
+
+def unit_of(observable, profile):
+    """The unit of a figure's bins, as its Wasserstein distance is in ("" if
+    not known)."""
+    if observable == "pi0":
+        return PI0_UNITS.get(profile, "")
+    return UNITS.get(observable, "")
+
+
+# The figures that aren't of distributions, the energy figures and the pi0
+# categories, have in metrics.csv each model's chi^2 from the reference as
+# well, as this metric: their legends give it, and the Pareto fronts measure
+# them by it (ddml_bench/pareto.py)
+CHI2 = "chi2"
+
+
+def chi_squared(values, errors, reference, reference_errors):
+    """(chi^2, the number of points) of a model's points from the reference's,
+    point for point: the sum of (value - reference)^2 / (error^2 + reference
+    error^2), the uncertainties drawn (as the deviations' error bars below
+    the figure combine them), over the points with both and a combined
+    uncertainty above 0. (nan, 0) if no point has."""
+    import numpy as np
+    values, errors, reference, reference_errors = (
+        np.asarray(a, dtype=float) for a in (values, errors, reference, reference_errors))
+    variance = errors ** 2 + reference_errors ** 2
+    kept = np.isfinite(values) & np.isfinite(reference) & np.isfinite(variance) & (variance > 0)
+    if not kept.any():
+        return float("nan"), 0
+    return (float(np.sum((values[kept] - reference[kept]) ** 2 / variance[kept])),
+            int(kept.sum()))
+
+
+def chi_squared_text(value, points):
+    """A chi^2 as the legends give it, with its number of points (its degrees
+    of freedom, nothing being fitted): chi^2/ndf 312/10."""
+    return r"$\chi^2$/ndf %s/%d" % ("%.0f" % value if value >= 100 else "%.3g" % value, points)
+
+
 def metric_of(observable, settings):
     """The metric of an observable: its settings' metric, or its default."""
     return (settings or {}).get("metric") or DEFAULT_METRICS.get(observable, "jensen_shannon")
@@ -308,13 +393,16 @@ def relative_deviation(mean, error, reference_mean, reference_error):
 def plot_profile(observable, scenario, profile, curves, reference, metric_name, out_base,
                  formats, xlabel=None, note=None, trim=True, room=False, ylabel=None,
                  guide=None, metric_texts=None, every_deviation=False):
-    """One figure; returns [(simulator, metric, value)]. xlabel, ylabel and note,
+    """One figure; returns [(simulator, metric, value)]: each model's metric,
+    then each model's Wasserstein distance (WASSERSTEIN) from the reference.
+    xlabel, ylabel and note,
     the text in the corner, replace the observable's own; with trim, the bins
     at either end that are empty for every simulator are left out; with room,
     the top of the axes is left to the legend and the note, which goes at the
     top left (for distributions peaked in the middle); guide is a value to
     draw a line at, across the axes. With metric_name None, the metric is the
-    caller's: metric_texts, [(simulator, text)], gives what each simulator's
+    caller's, and so are the Wasserstein distances: metric_texts,
+    [(simulator, text)], gives what each simulator's
     label says of it. Each model's deviation from Geant4 below has one band,
     the uncertainties of both combined (relative_deviation()). The axis of the
     deviations shows the 95% of them in the bins Geant4 measures well, or
@@ -355,7 +443,7 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
     with_ratio = ref is not None and len(curves) > 1
     fig, axes = new_figure(with_ratio)
     top = axes[0][0]
-    results = []
+    results, distances = [], []
     # The legend's entries: (handle, label, simulator; None for the reference)
     entries = []
 
@@ -381,6 +469,9 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
             given = next((t for s, t in metric_texts if s is simulator), None)
             if given:
                 label = "%s (%s)" % (label, given)
+        if ref is not None and metric_name is not None:
+            # (of the energy per bin too, as the metric)
+            distances.append((simulator, WASSERSTEIN, wasserstein(ref[2][keep], mean, edges)))
         mean, err = mean / scale, err / scale
         line = top.stairs(drawable(mean, log_y), edges, color=simulator.color,
                           linestyle=simulator.linestyle, linewidth=1.6, label=label,
@@ -441,7 +532,7 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
 
     top.set_xlim(edges[0], edges[-1])
     finish(fig, axes, out_base, formats)
-    return results
+    return results + distances
 
 
 def new_figure(with_ratio):
@@ -801,7 +892,8 @@ def plot_energy(observable, scenario, measured, reference, metric_name, out, suf
     """The energy linearity and resolution figures of a scenario, from
     measured, [(simulator, true energies, reconstructed energies)]; returns
     ([(simulator, figure, metric, value)], [(simulator, figure, parameter,
-    value, uncertainty, chi^2, degrees of freedom)])."""
+    value, uncertainty, chi^2, degrees of freedom)]): of each figure, the
+    models' metrics, then their chi^2 from Geant4 (CHI2); and the fits."""
     entries = []
     for simulator, true, reconstructed in measured:
         points, skipped = energy_points(true, reconstructed)
@@ -831,8 +923,11 @@ def plot_energy_figure(spec, scenario, entries, reference, metric_name, out_base
     points against the true energy, each with its uncertainty and the function
     fitted to them, and below, each model's relative deviation from Geant4,
     its error bars the uncertainties of both combined (relative_deviation()).
-    Returns ([(simulator, metric, value)], [(simulator, (parameter, value,
-    uncertainty, chi^2, degrees of freedom))])."""
+    The legend gives each model's metric and its chi^2 from Geant4 (chi_squared(),
+    of the points at Geant4's energies). Returns ([(simulator, metric,
+    value)], [(simulator, (parameter, value, uncertainty, chi^2, degrees of
+    freedom))]): each model's metric, then each model's chi^2 (CHI2); and
+    the fits."""
     from matplotlib.lines import Line2D
     import numpy as np
 
@@ -860,7 +955,7 @@ def plot_energy_figure(spec, scenario, entries, reference, metric_name, out_base
                            MARKERS[models % len(MARKERS)], 5.5, 4 + models))
             models += 1
 
-    keyed, results, fits = [], [], []
+    keyed, results, chi2s, fits = [], [], [], []
     for (simulator, points), (color, linestyle, marker, size, layer) in zip(entries, styles):
         model = simulator is not reference
         x, y, err = column(points, "energy"), column(points, value), column(points, value + "_err")
@@ -868,12 +963,21 @@ def plot_energy_figure(spec, scenario, entries, reference, metric_name, out_base
                               markeredgecolor="white", markeredgewidth=0.8, elinewidth=1.0,
                               capsize=0, zorder=layer)]
         label = simulator.label
-        if ref is not None and simulator is not reference and metric is not None:
-            pairs = aligned(ref, points)
-            if pairs:
-                result = metric([r[value] for r, _ in pairs], [p[value] for _, p in pairs])
-                results.append((simulator, short, result))
-                label = "%s (%s %.2e)" % (label, short, result)
+        pairs = aligned(ref, points) if ref is not None and simulator is not reference else []
+        texts = []
+        if pairs and metric is not None:
+            result = metric([r[value] for r, _ in pairs], [p[value] for _, p in pairs])
+            results.append((simulator, short, result))
+            texts.append("%s %.2e" % (short, result))
+        if pairs:
+            found, points_compared = chi_squared(
+                [p[value] for _, p in pairs], [p[value + "_err"] for _, p in pairs],
+                [r[value] for r, _ in pairs], [r[value + "_err"] for r, _ in pairs])
+            if points_compared:
+                chi2s.append((simulator, CHI2, found))
+                texts.append(chi_squared_text(found, points_compared))
+        if texts:
+            label = "%s (%s)" % (label, ", ".join(texts))
         fit = (least_squares(fit_terms(figure, x), y, err)
                if len(x) >= len(parameters) else None)
         if fit is None:
@@ -886,7 +990,9 @@ def plot_energy_figure(spec, scenario, entries, reference, metric_name, out_base
             drawn += top.plot(line, fit_terms(figure, line) @ params, color=color,
                               linestyle=linestyle, linewidth=1.2 if simulator is reference else 1.4,
                               zorder=layer - 0.5)
-            label += ": " + fit_text(terms, params)
+            # On a line of its own after the metrics, so that the legend
+            # stays clear of the points
+            label += (":\n" if texts else ": ") + fit_text(terms, params)
             fits += [(simulator, (name, float(p), float(u), chi2, ndf))
                      for name, p, u in zip(parameters, params, uncertainties)]
         if model:
@@ -941,7 +1047,7 @@ def plot_energy_figure(spec, scenario, entries, reference, metric_name, out_base
         top.set_xlabel(ENERGY_XLABEL, color=INK)
 
     finish(fig, axes, out_base, formats)
-    return results, fits
+    return results + chi2s, fits
 
 
 def energy_figures(observable, scenario, simulators, reference, settings, out, suffix, formats):
@@ -1169,6 +1275,22 @@ def seed_metric(metric, reference, points, key="photons"):
     return float(np.mean(values)), spread, len(values)
 
 
+def seed_distances(figure, edges, reference, entries, key="photons"):
+    """The Wasserstein distance (WASSERSTEIN) of what each model of entries,
+    [(simulator, points)], has in the bins (edges) from the reference's points
+    (None for no reference), seed by seed (seed_metric()): [(simulator,
+    figure, WASSERSTEIN, the mean over the seeds, their spread)]."""
+    found = []
+    for simulator, points in entries if reference is not None else ():
+        if points is reference:
+            continue
+        value, spread, pairs = seed_metric(lambda p, q: wasserstein(p, q, edges), reference,
+                                           points, key)
+        if pairs:
+            found.append((simulator, figure, WASSERSTEIN, value, spread))
+    return found
+
+
 def energy_name(energy):
     """A figure's name for photons of an energy, GeV: 20GeV, 12.5GeV, 100GeV."""
     return "%gGeV" % float("%.3g" % energy)
@@ -1185,7 +1307,8 @@ def plot_separation(observable, scenario, measured, reference, settings, out, su
     deviation from Geant4 below. The legend gives each model's metric (by
     default jensen_shannon) of the photons in the bins from Geant4's, the mean
     over the seeds and its spread (seed_metric()). Returns ([(simulator,
-    figure, metric, value, uncertainty)], [])."""
+    figure, metric, value, uncertainty)], []): of each figure, each model's
+    metric, then its Wasserstein distance, likewise (seed_distances())."""
     import numpy as np
     settings = settings or {}
     try:
@@ -1253,6 +1376,7 @@ def plot_separation(observable, scenario, measured, reference, settings, out, su
             results.append((simulator, profile, short, value, spread))
             texts.append((simulator, "%s %.2e \u00b1 %.1e" % (short, value, spread)
                           if np.isfinite(spread) else "%s %.2e" % (short, value)))
+        results += seed_distances(profile, edges, ref, entries)
         # The text in the corner is of Geant4, if it is there
         shown = ref if ref is not None else entries[0][1]
         events = sorted(set(shown["events"].values()))
@@ -1432,10 +1556,12 @@ def plot_pi0_categories(observable, scenario, entries, reference, out, suffix, f
     of each category (PI0_CATEGORIES) a bar of each simulator, its mean over
     the seeds with their spread as the error, Geant4 first; below, each
     model's relative deviation from Geant4 in each category, its error the
-    spreads of both combined (relative_deviation()). Returns [(simulator,
-    figure, metric, value, uncertainty)]: of each model and category the
-    relative deviation in %, with that combined uncertainty, figure
-    categories_<category>."""
+    spreads of both combined (relative_deviation()). The legend gives each
+    model's chi^2 from Geant4 over the categories (chi_squared(), with the errors
+    drawn). Returns [(simulator, figure, metric, value, uncertainty)]: of each
+    model and category the relative deviation in %, with that combined
+    uncertainty, figure categories_<category>; then each model's chi^2 (CHI2),
+    figure categories."""
     import numpy as np
     ref = next((points for simulator, points in entries if simulator is reference), None)
     with_ratio = ref is not None and len(entries) > 1
@@ -1449,18 +1575,25 @@ def plot_pi0_categories(observable, scenario, entries, reference, out, suffix, f
     # Geant4 first, then the models in their order
     ordered = sorted(entries, key=lambda entry: entry[0] is not reference)
     width = 0.8 / len(ordered)
-    results, keyed = [], []
+    results, chi2s, keyed = [], [], []
     for place, (simulator, points) in enumerate(ordered):
         shift = (place - (len(ordered) - 1) / 2) * width
         is_ref = simulator is reference
         color = REFERENCE_EDGE if is_ref else simulator.color
         mean = np.array([points["mean"][key] for key in keys])
         error = np.array([points["error"][key] for key in keys])
+        label = simulator.label
+        if with_ratio and not is_ref:
+            # Of the categories, with the errors drawn (the seed spreads)
+            found, compared = chi_squared(mean, error, r_mean, r_err)
+            if compared:
+                chi2s.append((simulator, PI0_CATEGORY_FIGURE, CHI2, found))
+                label = "%s (%s)" % (label, chi_squared_text(found, compared))
         bars = top.bar(x + shift, mean, width, color=REFERENCE_FILL if is_ref else color,
                        edgecolor=color, linewidth=1, alpha=1 if is_ref else 0.85,
-                       label=simulator.label, yerr=error,
+                       label=label, yerr=error,
                        error_kw={"ecolor": INK, "elinewidth": 1, "capsize": 2})
-        keyed.append((bars, simulator.label, None if is_ref else simulator))
+        keyed.append((bars, label, None if is_ref else simulator))
         if not is_ref:
             mark(simulator, DATA, bars)
         if is_ref or not with_ratio:
@@ -1502,7 +1635,7 @@ def plot_pi0_categories(observable, scenario, entries, reference, out, suffix, f
     finish(fig, axes, base, formats)
     say("%s: %s" % (", ".join(simulator.label for simulator, _ in ordered),
                     ", ".join("%s.%s" % (os.path.basename(base), f) for f in formats)))
-    return results
+    return results + chi2s
 
 
 def pi0_figures(observable, scenario, simulators, reference, settings, out, suffix, formats):
@@ -1523,7 +1656,10 @@ def pi0_figures(observable, scenario, simulators, reference, settings, out, suff
     Then, as the paper's figure 10, the categories of the reconstruction
     (pi0_categories()) of every simulator, pi0_categories__<scenario>
     (plot_pi0_categories()). Returns ([(simulator, figure, metric, value,
-    uncertainty)], [])."""
+    uncertainty)], []): of each figure of the good pi0s, each model's metric,
+    then its Wasserstein distance, likewise (seed_distances()), then the
+    categories' (plot_pi0_categories(): the relative deviations, then the
+    chi^2)."""
     import numpy as np
     settings = settings or {}
     try:
@@ -1572,6 +1708,7 @@ def pi0_figures(observable, scenario, simulators, reference, settings, out, suff
             results.append((simulator, figure, short, value, spread))
             texts.append((simulator, "%s %.2e ± %.1e" % (short, value, spread)
                           if np.isfinite(spread) else "%s %.2e" % (short, value)))
+        results += seed_distances(figure, edges, ref, entries, key="counts")
         # The text in the corner is of Geant4, if it is there
         shown = ref if ref is not None else entries[0][1]
         sizes = sorted(set(shown["values"].values()))
@@ -1865,6 +2002,12 @@ def main(argv=None):
     parser.add_argument("--no-dashboard", action="store_true",
                         help="don't write %s.html, every figure in one page with a menu to "
                              "show or hide each model" % dashboard.NAME)
+    parser.add_argument("--timing", metavar="CSV",
+                        help="the timing benchmark's table, for the Pareto fronts of accuracy "
+                             "against time per event (default: %s/%s in the data folder of "
+                             "--dir)" % (TIMING_DIR, TIMING_SUMMARY))
+    parser.add_argument("--no-pareto", action="store_true",
+                        help="leave out the Pareto fronts")
     args = parser.parse_args(argv)
 
     folder, observables = load_settings() if not args.dir else (args.dir, load_settings()[1])
@@ -1875,10 +2018,15 @@ def main(argv=None):
     formats = [f.strip() for f in args.format.split(",") if f.strip()]
     gathered = None if args.no_dashboard else dashboard.Collector(out)
     with collecting(gathered):
-        if not draw(folder, out, suffix, formats, observables, args.simulators, args.reference):
+        drawn = draw(folder, out, suffix, formats, observables, args.simulators, args.reference)
+        if not drawn:
             say("no measurements (*%s.npz) in %s; make them with "
                 "./observables_from_reconstruction.sh" % (suffix, folder))
             return 1
+        if not args.no_pareto:
+            from . import pareto
+            pareto.fronts(out, suffix, formats, drawn, args.reference,
+                          args.timing or timing_summary_of(folder))
         if not args.no_closure:
             closures(folder, out, suffix, formats, observables, args.simulators)
     if gathered is not None and gathered.figures:

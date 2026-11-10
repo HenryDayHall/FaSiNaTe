@@ -19,7 +19,8 @@ ddml_bench/
 │   ├── simulate.py     stages 2 (geant4) and 3 (models)
 │   ├── reconstruct.py  stage 4
 │   ├── observables.py  stage 5 (the measuring itself is in measure.py)
-│   └── plot.py         stage 6 (the figures and metrics are in plot.py)
+│   └── plot.py         stage 6 (the figures and metrics are in plot.py, the
+│                       Pareto fronts against the timing table in pareto.py)
 ├── graph.py            the plan, the task graph and each task's status
 ├── executors/          local (one task after another) and slurm (a job each)
 ├── environment.py      getting into the environment from setup.sh

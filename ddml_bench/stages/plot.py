@@ -1,9 +1,10 @@
 """Stage 6: plot every measurement against Geant4, and write metrics.csv; one
-task, of whatever is measured (ddml_bench/plot.py draws the figures)."""
+task, of whatever is measured (ddml_bench/plot.py draws the figures, and the
+Pareto fronts against the timing benchmark's table, if there is one)."""
 
 import os
 
-from ..layout import measurement_files
+from ..layout import measurement_files, timing_summary_of
 from .base import Stage, StageError, missing_modules
 
 
@@ -30,6 +31,10 @@ class Plot(Stage):
             return False, "not plotted yet"
         if max(os.path.getmtime(path) for _, path in found) > os.path.getmtime(task["output"]):
             return False, "measured again since the last plots"
+        # The Pareto fronts take the time per event from the timing table
+        timing = timing_summary_of(task["params"]["dir"])
+        if os.path.isfile(timing) and os.path.getmtime(timing) > os.path.getmtime(task["output"]):
+            return False, "timed again since the last plots (%s)" % timing
         return True, ""
 
     def nothing_to_use(self, task):

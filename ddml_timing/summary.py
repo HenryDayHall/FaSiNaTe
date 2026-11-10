@@ -32,6 +32,8 @@ import math
 import os
 import sys
 
+from ddml_bench.layout import TIMING_SUMMARY
+
 from .events import events_needed
 from .plan import FAILED, FORMAT, RESULT
 
@@ -306,7 +308,7 @@ def main(root, output=None, events=None, out=print):
     rows, totals = summarise(results)
     print_table(rows, totals, failures, out)
     if rows:
-        path = output or os.path.join(root, "summary.csv")
+        path = output or os.path.join(root, TIMING_SUMMARY)
         folder = os.path.dirname(os.path.abspath(path))
         os.makedirs(folder, exist_ok=True)
         write_csv(path, rows, totals)

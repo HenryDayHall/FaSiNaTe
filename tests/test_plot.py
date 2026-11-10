@@ -52,7 +52,8 @@ def test_a_radial_profile_is_drawn_per_unit_area(figures, tmp_path):
     # from the axis, the model's more slowly
     geant4 = 0.05 * np.exp(-centres / 5) * areas
     model = 0.05 * np.exp(-centres / 6) * areas
-    (_, short, value), = draw("radial_profile", edges, (geant4, model), tmp_path / "radial")
+    (_, short, value), (_, w_short, w_value) = draw("radial_profile", edges, (geant4, model),
+                                                    tmp_path / "radial")
 
     top = figures[0].axes[0]
     # Geant4's filled histogram and its outline, then the model's line
@@ -71,6 +72,12 @@ def test_a_radial_profile_is_drawn_per_unit_area(figures, tmp_path):
     assert short == "JS"
     assert value == pytest.approx(plot.jensen_shannon(geant4, model))
     assert value != pytest.approx(plot.jensen_shannon(geant4 / areas, model / areas))
+    # and so does the Wasserstein distance, in mm: the model's energy is
+    # farther out
+    assert w_short == "W1"
+    assert w_value == pytest.approx(plot.wasserstein(geant4, model, edges))
+    assert w_value == pytest.approx(np.sum(centres * model) / model.sum()
+                                    - np.sum(centres * geant4) / geant4.sum(), rel=0.02)
 
 
 def test_a_models_deviation_carries_its_own_and_geant4s_uncertainty():
@@ -112,14 +119,54 @@ def test_a_longitudinal_profile_is_drawn_per_layer(figures, tmp_path):
     layers = np.arange(31)
     geant4 = 2.0 * np.exp(-((layers - 8) / 6.0) ** 2) + 0.01
     model = 2.1 * np.exp(-((layers - 8.5) / 6.0) ** 2) + 0.01
-    (_, _, value), = draw("longitudinal_profile", edges, (geant4, model),
-                          tmp_path / "longitudinal")
+    (_, _, value), (_, _, w_value) = draw("longitudinal_profile", edges, (geant4, model),
+                                          tmp_path / "longitudinal")
 
     top = figures[0].axes[0]
     for values, mean in zip(drawn_steps(top), (geant4, geant4, model)):
         np.testing.assert_allclose(values, mean)
     assert top.get_ylabel() == "Mean energy per event [GeV]"
     assert value == pytest.approx(plot.jensen_shannon(geant4, model))
+    assert w_value == pytest.approx(plot.wasserstein(geant4, model, edges))
+
+
+def test_the_chi_squared_weighs_each_difference_by_both_uncertainties():
+    # (1 - 2)^2 / (0.3^2 + 0.4^2) + (5 - 5)^2 / ... = 4
+    assert plot.chi_squared([1.0, 5.0], [0.3, 0.1], [2.0, 5.0], [0.4, 0.2]) == (
+        pytest.approx(4.0), 2)
+    # Points without an uncertainty, or a value, aren't counted
+    assert plot.chi_squared([1.0, 3.0, np.nan], [0.0, 0.5, 0.1], [2.0, 2.0, 1.0],
+                            [0.0, 0.0, 0.1]) == (pytest.approx(4.0), 1)
+    found = plot.chi_squared([1.0], [0.0], [2.0], [0.0])
+    assert np.isnan(found[0]) and found[1] == 0
+    # As the legends give it: with the points (nothing is fitted), in full above 100
+    assert plot.chi_squared_text(25.3456, 10) == "$\\chi^2$/ndf 25.3/10"
+    assert plot.chi_squared_text(9304.41, 10) == "$\\chi^2$/ndf 9304/10"
+
+
+def test_the_wasserstein_distance_is_how_far_the_distribution_moves():
+    edges = np.linspace(0, 20, 21)
+    shape = np.exp(-((np.arange(20) - 6.0) / 2) ** 2)
+    # The same shape, 3 bins on: 3 units, however much of it there is
+    moved = np.roll(shape, 3)
+    assert plot.wasserstein(shape, moved, edges) == pytest.approx(3, rel=1e-3)
+    assert plot.wasserstein(10 * shape, moved, edges) == pytest.approx(3, rel=1e-3)
+    assert plot.wasserstein(moved, shape, edges) == plot.wasserstein(shape, moved, edges)
+    assert plot.wasserstein(shape, shape, edges) == 0
+    # In the units of the bins
+    assert plot.wasserstein(shape, moved, 0.5 * edges) == pytest.approx(1.5, rel=1e-3)
+    # Half of it moved 4 bins, in bins of any widths: each bin's content at its centre
+    uneven = np.array([0.0, 1.0, 1.5, 3.0, 5.0, 8.0])
+    assert plot.wasserstein([1, 1, 0, 0, 0], [1, 0, 0, 0, 1], uneven) == pytest.approx(
+        0.5 * ((8.0 + 5.0) / 2 - (1.0 + 1.5) / 2))
+    assert np.isnan(plot.wasserstein([0, 0], [1, 1], [0, 1, 2]))
+    # as scipy has it, of weighted values at the centres
+    stats = pytest.importorskip("scipy.stats")
+    rng = np.random.default_rng(3)
+    p, q = rng.random(20), rng.random(20)
+    centres = (edges[1:] + edges[:-1]) / 2
+    assert plot.wasserstein(p, q, edges) == pytest.approx(
+        stats.wasserstein_distance(centres, centres, p, q))
 
 
 def test_energy_spread_evenly_over_the_area_gives_a_flat_radial_profile():
@@ -279,10 +326,15 @@ def test_the_energy_figures_draw_points_fits_and_deviations(figures, tmp_path):
                 (parameter, p, e, chi2, ndf) for parameter, p, e in zip(parameters, params, errors)]
         # The model's distance from Geant4, and its relative deviation below
         reference, mine = ([p[value] for p in simulator_points] for simulator_points in points)
-        (metric,) = [result for result in results if result[1] == name]
+        (metric, chi2) = [result for result in results if result[1] == name]
         assert metric[0] is model and metric[2] == "L1"
         assert metric[3] == pytest.approx(np.mean(np.abs(np.subtract(mine, reference))))
-        assert "(L1 %.2e)" % metric[3] in labels[1]
+        # and its chi^2, with the uncertainties of both, both in the legend
+        assert chi2[0] is model and chi2[2] == "chi2"
+        errors = [np.hypot(m[value + "_err"], g[value + "_err"]) for g, m in zip(*points)]
+        assert chi2[3] == pytest.approx(np.sum((np.subtract(mine, reference) / errors) ** 2))
+        assert "(L1 %.2e, %s)" % (metric[3], plot.chi_squared_text(chi2[3], len(mine))) in \
+            labels[1]
         np.testing.assert_allclose(bottom.containers[0].lines[0].get_ydata(),
                                    (np.divide(mine, reference) - 1) * 100)
         # its error bars the model's and Geant4's uncertainties combined, with
@@ -346,9 +398,12 @@ def test_the_intrinsic_angles_are_drawn_as_fractions_of_the_showers_per_degree(f
     names = ["theta_all", "phi_all", "theta_top4", "phi_top4"]
     assert sorted(p.name for p in tmp_path.iterdir()) == sorted(
         "intrinsic_angle_%s__single_photon.png" % name for name in names)
-    assert fits == [] and [result[1] for result in results] == names
+    # Of each figure, its metric, then its Wasserstein distance
+    assert fits == [] and [result[1:3] for result in results] == [
+        (name, metric) for name in names for metric in ("JS", "W1")]
 
-    for figure, name, (simulator, profile, short, value) in zip(figures, names, results):
+    for figure, name, (simulator, profile, short, value), (_, _, _, w_value) in zip(
+            figures, names, results[::2], results[1::2]):
         angle, hits = name.split("_")
         limit, n_bins = (5, 50) if hits == "all" else (2, 40)
         edges = np.linspace(-limit, limit, n_bins + 1)
@@ -365,9 +420,11 @@ def test_the_intrinsic_angles_are_drawn_as_fractions_of_the_showers_per_degree(f
         steps = drawn_steps(top)
         for values, expected in zip(steps, (fractions[0], fractions[0], fractions[1])):
             np.testing.assert_allclose(values, expected / (2 * limit / n_bins))
-        # compared by the Jensen-Shannon divergence of the fractions
+        # compared by the Jensen-Shannon divergence of the fractions, and by
+        # their Wasserstein distance, in degrees
         assert (simulator, profile, short) == (model, name, "JS")
         assert value == pytest.approx(plot.jensen_shannon(*fractions))
+        assert w_value == pytest.approx(plot.wasserstein(*fractions, edges))
         # and the text in the corner says which PCA, of how many showers
         (note,) = [text.get_text() for text in top.texts]
         n = int(np.isfinite(geant4.stored(None, None)["d" + name]).sum())
@@ -517,8 +574,10 @@ def test_a_separation_figure_for_each_energy(figures, tmp_path):
     assert sorted(p.name for p in tmp_path.iterdir()) == [
         "photon_separation_100GeV__di_photon.png", "photon_separation_20GeV__di_photon.png"]
     assert fits == []
+    # Of each energy, the models' metrics, then their Wasserstein distances
     assert [(r[0].name, r[1], r[2]) for r in results] == [
-        ("model", "20GeV", "JS"), ("other", "20GeV", "JS"), ("model", "100GeV", "JS")]
+        ("model", "20GeV", "JS"), ("other", "20GeV", "JS"), ("model", "20GeV", "W1"),
+        ("other", "20GeV", "W1"), ("model", "100GeV", "JS"), ("model", "100GeV", "W1")]
 
     edges = np.linspace(0, 90, 19)
     for figure, energy in zip(figures, (20.0, 100.0)):
@@ -543,8 +602,16 @@ def test_a_separation_figure_for_each_energy(figures, tmp_path):
         value, spread, _ = plot.seed_metric(plot.jensen_shannon, expected[0], expected[1])
         assert labels[0] == "Geant4" and labels[1] == "Model (JS %.2e ± %.1e)" % (value,
                                                                                     spread)
-        (result,) = [r for r in results if r[0] is model and r[1] == plot.energy_name(energy)]
+        (result,) = [r for r in results if r[0] is model and r[1] == plot.energy_name(energy)
+                     and r[2] == "JS"]
         assert result[3:] == (value, spread)
+        # and the Wasserstein distance of the photons in the bins, seed by
+        # seed as the metric, in mm
+        (distance,) = [r for r in results if r[0] is model
+                       and r[1] == plot.energy_name(energy) and r[2] == "W1"]
+        assert distance[3:] == plot.seed_metric(
+            lambda p, q: plot.wasserstein(p, q, edges), expected[0], expected[1])[:2]
+        assert 0 < distance[3] < 90
         (note,) = [text.get_text() for text in top.texts]
         assert note == ("di_photon, %g GeV photons\n3000 events × 3 seeds (Geant4)\n"
                         "bands: the spread over the seeds" % energy)
@@ -631,19 +698,24 @@ def test_the_pi0_figures_draw_the_good_pi0s_over_the_seeds(figures, tmp_path):
                                                           "pi0_mass__tau_pairs.png",
                                                           "pi0_phi__tau_pairs.png",
                                                           "pi0_theta__tau_pairs.png"]
-    assert fits == [] and [result[:3] for result in results[:4]] == [
-        (model, "mass", "JS"), (model, "energy", "JS"), (model, "theta", "JS"),
-        (model, "phi", "JS")]
-    assert [result[1] for result in results[4:]] == [
-        "categories_" + key for key, _ in plot.PI0_CATEGORIES]
+    # Of each figure, the metric, then the Wasserstein distance, then the
+    # categories' deviations, then their chi^2
+    assert fits == [] and [result[:3] for result in results[:8]] == [
+        (model, name, metric) for name in ("mass", "energy", "theta", "phi")
+        for metric in ("JS", "W1")]
+    assert [result[1:3] for result in results[8:]] == [
+        ("categories_" + key, "dev%") for key, _ in plot.PI0_CATEGORIES] + [
+        ("categories", "chi2")]
+    distances = results[1:8:2]
+    results = results[:8:2]
     # The residuals, reconstructed less the MC pi0's, phi's the shorter way round
     residuals = {"mass": lambda stored: stored["mass"],
                  "energy": lambda stored: stored["photon_energy"] - stored["true_energy"],
                  "theta": lambda stored: stored["theta"] - stored["true_theta"],
                  "phi": lambda stored: (stored["phi"] - stored["true_phi"] + 180) % 360 - 180}
-    for figure, (_, name, _, value, spread), (first, last, n_bins), unit in zip(
-            figures, results, ((0.09, 0.18, 18), (-4.0, 4.0, 32), (-0.2, 0.2, 40),
-                               (-0.25, 0.25, 25)), ("GeV", "GeV", "degree", "degree")):
+    for figure, (_, name, _, value, spread), distance, (first, last, n_bins), unit in zip(
+            figures, results, distances, ((0.09, 0.18, 18), (-4.0, 4.0, 32), (-0.2, 0.2, 40),
+                                          (-0.25, 0.25, 25)), ("GeV", "GeV", "degree", "degree")):
         edges = np.linspace(first, last, n_bins + 1)
         width = (last - first) / n_bins
         expected, counts = [], []
@@ -666,6 +738,12 @@ def test_the_pi0_figures_draw_the_good_pi0s_over_the_seeds(figures, tmp_path):
         each = [plot.jensen_shannon(g, m) for g, m in zip(*counts)]
         assert value == pytest.approx(np.mean(each)) and spread == pytest.approx(
             np.std(each, ddof=1))
+        # and the Wasserstein distance likewise, in the units of the figure
+        each = [plot.wasserstein(g, m, edges) for g, m in zip(*counts)]
+        assert distance[1:3] == (name, "W1")
+        assert distance[3] == pytest.approx(np.mean(each))
+        assert distance[4] == pytest.approx(np.std(each, ddof=1))
+        assert plot.unit_of("pi0", name) == ("°" if unit == "degree" else unit)
         (note,) = [text.get_text() for text in top.texts]
         assert note.startswith("tau_pairs, good $\\pi^0$s\n")
         assert "× 3 seeds (Geant4)" in note and "\nbands: seed spread" in note, note
@@ -760,12 +838,20 @@ def test_the_category_deviations_carry_the_spreads_of_both(figures, tmp_path):
                                                             (model, totals(m_mean, m_error))],
                                        geant4, str(tmp_path), "", ["png"])
     dev, band = plot.relative_deviation(m_mean, m_error, g_mean, g_error)
-    assert [row[:3] for row in results] == [(model, "categories_" + key, "dev%") for key in keys]
-    np.testing.assert_allclose([row[3] for row in results], dev)
-    np.testing.assert_allclose([row[4] for row in results], band)
+    assert [row[:3] for row in results] == [(model, "categories_" + key, "dev%") for key in keys
+                                            ] + [(model, "categories", "chi2")]
+    np.testing.assert_allclose([row[3] for row in results[:5]], dev)
+    np.testing.assert_allclose([row[4] for row in results[:5]], band)
     # Below, the model's error bars alone, of that combined uncertainty
     (bars,) = figures[0].axes[1].collections
     np.testing.assert_allclose([s[1, 1] - s[0, 1] for s in bars.get_segments()], 2 * band)
+    # and its chi^2 over the categories, with the errors drawn (the spreads),
+    # in the legend as chi^2/ndf
+    chi2 = sum((m - g) ** 2 / (me ** 2 + ge ** 2)
+               for m, me, g, ge in zip(m_mean, m_error, g_mean, g_error))
+    assert len(results[5]) == 4 and results[5][3] == pytest.approx(chi2)
+    labels = [text.get_text() for text in figures[0].axes[0].get_legend().get_texts()]
+    assert labels == ["Geant4", "Model ($\\chi^2$/ndf %.3g/5)" % chi2]
 
 
 def test_the_pi0_category_totals_are_per_seed():

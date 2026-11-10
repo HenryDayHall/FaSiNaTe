@@ -65,10 +65,17 @@ def test_pipeline_runs_every_stage(bench):
         ("intrinsic_angle", "theta_top4"), ("intrinsic_angle", "phi_top4"),
         ("photon_separation", "20GeV")}
     assert all(float(row["value"]) > 0 for row in rows)
-    # Only the separation's metric has an uncertainty, from its two seeds
+    # Each distribution's Wasserstein distance as well as its metric, and each
+    # energy figure's chi^2
+    assert sorted((row["observable"], row["profile"]) for row in rows
+                  if row["metric"] == "W1") == sorted(
+        (row["observable"], row["profile"]) for row in rows if row["metric"] == "JS")
+    assert sorted(row["profile"] for row in rows if row["metric"] == "chi2") == [
+        "linearity", "resolution"]
+    # Only the separation's metrics have an uncertainty, from its two seeds
     for row in rows:
         if row["observable"] == "photon_separation":
-            assert row["metric"] == "JS" and float(row["uncertainty"]) > 0, row
+            assert row["metric"] in ("JS", "W1") and float(row["uncertainty"]) > 0, row
         else:
             assert row["uncertainty"] == "", row
     for figure in ("radial_profile_r30__single_photon", "energy_linearity__single_photon",
@@ -420,8 +427,16 @@ def test_inputs_made_elsewhere_are_simulated_each_with_its_own_seed(bench):
     # of the reconstruction (the paper's figure 10)
     categories = {"categories_" + key for key in ("n_reco", "n_fake", "n_good", "n_confused",
                                                   "n_missed")}
+    distances = [row for row in rows if row["metric"] == "W1"]
+    chi2 = [row for row in rows if row["metric"] == "chi2"]
     assert rows != js and all(row["metric"] == "dev%" and row["profile"] in categories
-                              for row in rows if row not in js), rows
+                              for row in rows if row not in js + distances + chi2), rows
+    # and their Wasserstein distances, seed by seed as the metric
+    assert sorted(row["profile"] for row in distances) == ["energy", "mass", "phi", "theta"]
+    assert all(float(row["uncertainty"]) > 0 for row in distances), distances
+    # and the categories' chi^2
+    assert [(row["profile"], row["uncertainty"]) for row in chi2] == [("categories", "")]
+    assert float(chi2[0]["value"]) >= 0
     for figure in ("pi0_mass__tau_pairs", "pi0_energy__tau_pairs", "pi0_theta__tau_pairs",
                    "pi0_phi__tau_pairs", "pi0_categories__tau_pairs"):
         assert os.path.isfile(bench.path("observables", "plots", figure + ".png")), figure

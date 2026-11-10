@@ -27,6 +27,10 @@
 #                      Geant4
 #       --no-closure   leave out the closure tests
 #       --no-dashboard don't write dashboard.html
+#       --timing FILE  the timing benchmark's table, for the Pareto fronts
+#                      (default: timing/summary.csv in the data folder of the
+#                      .npz files, if timing_summary.sh has made it)
+#       --no-pareto    leave out the Pareto fronts
 #   -h, --help         show this help
 #
 # Each figure is <observable>_<profile>__<scenario>.<format>, e.g.
@@ -37,10 +41,19 @@
 # (closure in models/<model>.yaml: the same model through another DDML
 # backend) is also drawn against that one alone, in closure/<model>/, and
 # closure.csv says for each scenario whether the two measured the same,
-# number for number. dashboard.html has every figure in one page, with a menu
-# to show or hide each model in all of them, or in one by clicking its legend
-# entry. It runs with this shell's python3 if that has numpy and matplotlib,
-# and otherwise in the environment from setup.sh.
+# number for number. metrics.csv also has each distribution's Wasserstein
+# distance from Geant4 (W1), and the energy figures' and the pi0 categories'
+# chi^2 (chi2, in their legends too). Where the timing benchmark has timed the
+# models (timing_summary.sh), each scenario also has its Pareto fronts on each
+# kind of node, pareto_js_<node>__<scenario>.<format> and
+# pareto_wasserstein_<node>__<scenario>.<format>: every metric on one axis, a
+# marker each, each model's JS or Wasserstein distance (or the chi^2) from
+# Geant4, divided by the models' mean, against its time per event, with
+# pareto.csv. dashboard.html has
+# every figure in one page, with a menu to show or hide each model in all of
+# them, or in one by clicking its legend entry. It runs with this shell's
+# python3 if that has numpy and matplotlib, and otherwise in the environment
+# from setup.sh.
 
 if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
     echo "plot_observables.sh exits when something fails, so run it instead of sourcing it" >&2
@@ -67,6 +80,10 @@ while (($#)); do
             mkdir -p -- "$2"
             args+=("$option" "$(realpath -- "$2")")
             bind_args+=(--bind "$(realpath -- "$2")")
+            # The timing table beside the .npz files' folder, which the
+            # Pareto fronts read unless given --timing
+            timing_dir=$(dirname -- "$(realpath -- "$2")")/timing
+            if [[ $option == --dir && -d $timing_dir ]]; then bind_args+=(--bind "$timing_dir"); fi
             shift 2
             ;;
         --format)
@@ -79,8 +96,16 @@ while (($#)); do
             args+=(--reference "$2")
             shift 2
             ;;
+        --timing)
+            (($# >= 2)) || die "--timing needs the timing benchmark's table"
+            [[ -f $2 ]] || die "there is no file '$2' (timing_summary.sh makes the table)"
+            args+=(--timing "$(realpath -- "$2")")
+            bind_args+=(--bind "$(dirname -- "$(realpath -- "$2")")")
+            shift 2
+            ;;
         --no-closure) args+=(--no-closure); shift ;;
         --no-dashboard) args+=(--no-dashboard); shift ;;
+        --no-pareto) args+=(--no-pareto); shift ;;
         -h | --help) usage; exit 0 ;;
         -*) die "unknown option '$1' (see --help)" ;;
         *) args+=("$1"); shift ;;
