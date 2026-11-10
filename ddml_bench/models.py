@@ -141,6 +141,8 @@ def load_model(name):
         "model_configs": [],
         "weights": get("ddml.weights", text,
                        "the path of the weights in the DDML clone", required=False),
+        "weights_in": get("ddml.weights_in", text,
+                          "repository storing the weights", required=False) or "ddml",
         "weights_md5": get("ddml.weights_md5",
                            lambda v: isinstance(v, str) and bool(_MD5.match(v)),
                            "an md5 sum: 32 hex digits, in quotes", required=False),

@@ -38,21 +38,10 @@ ENERGY = 3  # where in a point its energy is
 _description_path = os.path.splitext(os.path.abspath(__file__))[0] + ".yaml"
 with open(_description_path) as _stream:
     _description = yaml.safe_load(_stream)
-_energy_rescale = float(_description["energy_rescale"])
-_ddml_source = os.environ.get("DDML_SOURCE_DIR")
-if not _ddml_source:
-    raise RuntimeError("DDML_SOURCE_DIR isn't set, so the weights of %s can't be found: "
-                       "source setup.sh first" % _description_path)
-_model_path = os.path.join(_ddml_source, _description["ddml"]["weights"])
+# these weights are local
+_repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_model_path = os.path.join(_repo_dir, _description["ddml"]["weights"])
 _model = torch.jit.load(_model_path).eval().to("cpu")
-
-
-def rescale_energies(out, factor):
-    """Multiply the energy of every point of an output (a flat float32 array,
-    changed in place) by factor; returns it. Past its points, an output that is
-    longer than they need holds only what DDML doesn't read."""
-    out[N_LAYERS + ENERGY::POINT_SIZE] *= factor
-    return out
 
 
 @torch.inference_mode()
@@ -65,4 +54,4 @@ def run_inference(inputs):
     # A contiguous flat float32 array, which the C++ side copies into its
     # pre-allocated std::vector<float>
     out = out.detach().cpu().numpy().astype(np.float32, copy=False).ravel()
-    return rescale_energies(out, _energy_rescale)
+    return out

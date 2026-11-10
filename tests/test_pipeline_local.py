@@ -14,7 +14,7 @@ from conftest import TAU_INPUTS, TAU_SEEDS, write_tau_input
 
 INPUTS = ["p22_th43-137_ph79-109_en20_seed0_ip_surface",
           "p22_th43-137_ph79-109_en80_seed1_ip_surface"]
-SIMULATORS = ["caloclouds3", "geant4"]
+SIMULATORS = ["caloclouds3_paper", "geant4"]
 # The di_photon scenario's input, simulated with the seeds 1 and 2
 DI_PHOTON_INPUT = "diphoton_en20_sep90_x0_z70_r10_seed0"
 DI_PHOTON_SIMULATIONS = [DI_PHOTON_INPUT + "_simseed1", DI_PHOTON_INPUT + "_simseed2"]
@@ -44,7 +44,7 @@ def test_pipeline_runs_every_stage(bench):
         name + ending for name in INPUTS + [DI_PHOTON_INPUT] for ending in (".h5", ".slcio"))
     assert bench.files("sim_output", "single_photon", "geant4") == sorted(
         name + ending for name in INPUTS for ending in (".edm4hep.root", ".log"))
-    assert bench.files("sim_output", "single_photon", "caloclouds3") == sorted(
+    assert bench.files("sim_output", "single_photon", "caloclouds3_paper") == sorted(
         name + ending for name in INPUTS for ending in (".root", ".log"))
     for simulator in SIMULATORS:
         assert bench.files("rec_output", "single_photon", simulator) == sorted(
@@ -53,11 +53,11 @@ def test_pipeline_runs_every_stage(bench):
     # di_photon's input once with each of its seeds
     assert bench.files("sim_output", "di_photon", "geant4") == sorted(
         name + ending for name in DI_PHOTON_SIMULATIONS for ending in (".edm4hep.root", ".log"))
-    assert bench.files("sim_output", "di_photon", "caloclouds3") == sorted(
+    assert bench.files("sim_output", "di_photon", "caloclouds3_paper") == sorted(
         name + ending for name in DI_PHOTON_SIMULATIONS for ending in (".root", ".log"))
-    assert bench.files("observables") == ["caloclouds3.npz", "geant4.npz", "plots"]
+    assert bench.files("observables") == ["caloclouds3_paper.npz", "geant4.npz", "plots"]
     rows = read_metrics(bench.path("observables", "plots", "metrics.csv"))
-    assert sorted({row["simulator"] for row in rows}) == ["caloclouds3"]
+    assert sorted({row["simulator"] for row in rows}) == ["caloclouds3_paper"]
     assert {(row["observable"], row["profile"]) for row in rows} == {
         ("radial_profile", "r100"), ("radial_profile", "r30"),
         ("longitudinal_profile", "layers"), ("energy", "linearity"), ("energy", "resolution"),
@@ -80,7 +80,7 @@ def test_pipeline_runs_every_stage(bench):
         page = stream.read()
     assert page.count('<figure class="fsn-card"') == len(
         [name for name in bench.files("observables", "plots") if name.endswith(".png")])
-    assert '<label class="fsn-model" title="caloclouds3"' in page
+    assert '<label class="fsn-model" title="caloclouds3_paper"' in page
     # The two energies fix the straight line of the linearity, but not the
     # three parameters of the resolution's fit
     fits = read_metrics(bench.path("observables", "plots", "fits.csv"))
@@ -144,16 +144,17 @@ def test_pipeline_runs_every_stage(bench):
             assert photons[separation > 40].mean() > photons[separation < 15].mean()
 
     # The simulations ran as the stages run ddsim, di_photon's with their seeds
-    with open(bench.path("sim_output", "single_photon", "caloclouds3",
+    with open(bench.path("sim_output", "single_photon", "caloclouds3_paper",
                          INPUTS[0] + ".root")) as stream:
         simulation = json.load(stream)
-    assert simulation["simulator"] == "CC3_BARREL_PY_INTERFACE"
+    assert simulation["simulator"] == "CC3_BARREL"
     assert len(simulation["events"]) == 6 and simulation["seed"] is None
     log = open(bench.path("sim_output", "single_photon", "geant4", INPUTS[0] + ".log")).read()
     assert "ddsim_steer_geant4.py" in log and "# finished" in log
     assert "--random.seed" not in log and "# seed      ddsim's own" in log
     for seed, name in zip((1, 2), DI_PHOTON_SIMULATIONS):
-        with open(bench.path("sim_output", "di_photon", "caloclouds3", name + ".root")) as stream:
+        with open(bench.path("sim_output", "di_photon", "caloclouds3_paper",
+                             name + ".root")) as stream:
             simulation = json.load(stream)
         assert simulation["seed"] == seed and len(simulation["events"]) == 30
         assert all(len(event["particles"]) == 2 for event in simulation["events"])
@@ -193,7 +194,7 @@ def test_a_model_added_to_fetched_measurements_runs_only_its_own_tasks(bench):
     plots it against the others."""
     bench.run("pipeline.sh")
     measured = dict((name, open(bench.path("observables", name), "rb").read())
-                    for name in ("caloclouds3.npz", "geant4.npz"))
+                    for name in ("caloclouds3_paper.npz", "geant4.npz"))
     fetched = os.path.join(bench.tmp, "fetched")
     for folder in ("input_single_particle_gun", "observables"):
         os.makedirs(os.path.join(fetched, folder))
@@ -209,20 +210,21 @@ def test_a_model_added_to_fetched_measurements_runs_only_its_own_tasks(bench):
     status, output = bench.run("pipeline.sh", "--dry-run")
     assert "would run 1 task(s)" in output and "plot         every .npz file" in output, output
     assert "not needed, so not made, as what they are for is done: the measurements of geant4, " \
-        "the measurements of caloclouds3" in output, output
+        "the measurements of caloclouds3_paper" in output, output
     status, output = bench.run("simulate_geant4.sh", "--dry-run")
     assert "everything selected is done or not needed, so there is nothing to run" in output, \
         output
 
-    with open(os.path.join(bench.repo, "models", "caloclouds3.yaml")) as stream:
-        model = stream.read().replace("name: CaloClouds3", "name: Another model")
+    with open(os.path.join(bench.repo, "models", "caloclouds3_paper.yaml")) as stream:
+        model = stream.read().replace("name: CaloClouds3 (paper)", "name: Another model")
     with open(os.path.join(bench.repo, "models", "another.yaml"), "w") as stream:
-        stream.write(model.replace('linestyle: "-"', 'linestyle: "--"'))
+        stream.write(model.replace('linestyle: "-."', 'linestyle: "--"'))
     status, output = bench.run("pipeline.sh", "--dry-run")
     # Its 4 simulations and reconstructions, its measurements and the plots
     assert "would run 10 task(s)" in output, output
     status, output = bench.run("simulate_models.sh", "--dry-run")
-    assert "would run 4 task(s)" in output and "models       caloclouds3" not in output, output
+    assert "would run 4 task(s)" in output, output
+    assert "models       caloclouds3_paper" not in output, output
     status, output = bench.run("slurm_pipeline.sh", "--dry-run")
     assert "would submit 10 job(s)" in output, output
     status, output = bench.run("pipeline.sh")
@@ -231,11 +233,12 @@ def test_a_model_added_to_fetched_measurements_runs_only_its_own_tasks(bench):
     for scenario in ("single_photon", "di_photon"):
         assert bench.files("sim_output", scenario) == ["another"]
         assert bench.files("rec_output", scenario) == ["another"]
-    assert bench.files("observables") == ["another.npz", "caloclouds3.npz", "geant4.npz", "plots"]
+    assert bench.files("observables") == ["another.npz", "caloclouds3_paper.npz", "geant4.npz",
+                                          "plots"]
     for name, data in measured.items():
         assert open(bench.path("observables", name), "rb").read() == data, name
     rows = read_metrics(bench.path("observables", "plots", "metrics.csv"))
-    assert sorted({row["simulator"] for row in rows}) == ["another", "caloclouds3"]
+    assert sorted({row["simulator"] for row in rows}) == ["another", "caloclouds3_paper"]
     status, output = bench.run("pipeline.sh")
     assert "everything selected is done" in output, output
 
@@ -261,13 +264,13 @@ def test_stage_scripts_keep_one_sample_through_every_stage(bench):
         assert bench.files("rec_output", "single_photon", simulator) == sorted(
             name + ending for name in names
             for ending in ("_AIDA.root", "_PfoAnalysis.root", "_REC.edm4hep.root", ".log"))
-    assert bench.files("sim_output", "di_photon", "caloclouds3") == sorted(
+    assert bench.files("sim_output", "di_photon", "caloclouds3_paper") == sorted(
         "%s_n3_simseed%d%s" % (DI_PHOTON_INPUT, seed, ending) for seed in (1, 2)
         for ending in (".root", ".log"))
-    assert bench.files("observables") == ["caloclouds3_n3.npz", "geant4_n3.npz", "plots"]
+    assert bench.files("observables") == ["caloclouds3_paper_n3.npz", "geant4_n3.npz", "plots"]
     for name in ("metrics_n3.csv", "fits_n3.csv", "energy_resolution__single_photon_n3.png"):
         assert name in bench.files("observables", "plots"), name
-    with np.load(bench.path("observables", "caloclouds3_n3.npz")) as data:
+    with np.load(bench.path("observables", "caloclouds3_paper_n3.npz")) as data:
         assert list(data["single_photon__n_events"]) == [3, 3]
         assert list(data["di_photon__n_events"]) == [3, 3]
     # The reconstruction ran on the whole test simulation, of 3 events
@@ -292,7 +295,7 @@ def test_a_failure_stops_only_what_needs_it(bench):
     assert not any(name.startswith(".") for name in os.listdir(
         bench.path("sim_output", "single_photon", "geant4")))
     assert INPUTS[1] + ".edm4hep.root" not in bench.files("sim_output", "single_photon", "geant4")
-    assert bench.files("observables") == ["caloclouds3.npz"]
+    assert bench.files("observables") == ["caloclouds3_paper.npz"]
 
     bench.fail_ddsim(None)
     status, output = bench.run("pipeline.sh")
@@ -369,11 +372,12 @@ def test_inputs_made_elsewhere_are_simulated_each_with_its_own_seed(bench):
     assert "would run 30 task(s)" in output, output
     status, output = bench.run("pipeline.sh")
     assert "made 30 of 30" in output, output
-    for simulator, ending in (("geant4", ".edm4hep.root"), ("caloclouds3", ".root")):
+    for simulator, ending in (("geant4", ".edm4hep.root"), ("caloclouds3_paper", ".root")):
         assert bench.files("sim_output", "tau_pairs", simulator) == sorted(
             name + e for name in TAU_SIMULATIONS for e in (ending, ".log"))
     for seed, name in zip(TAU_SEEDS, TAU_SIMULATIONS):
-        log = open(bench.path("sim_output", "tau_pairs", "caloclouds3", name + ".log")).read()
+        log = open(bench.path("sim_output", "tau_pairs", "caloclouds3_paper",
+                              name + ".log")).read()
         assert "--random.seed=%d" % seed in log and "# seed      %d\n" % seed in log
         log = open(bench.path("rec_output", "tau_pairs", "geant4", name + ".log")).read()
         assert "--noBeamCalReco" in log and "--usingParticleGun" not in log
@@ -406,10 +410,10 @@ def test_inputs_made_elsewhere_are_simulated_each_with_its_own_seed(bench):
             if row["observable"] == "pi0"]
     js = [row for row in rows if row["metric"] == "JS"]
     assert sorted((row["scenario"], row["profile"], row["simulator"], row["metric"])
-                  for row in js) == [("tau_pairs", "energy", "caloclouds3", "JS"),
-                                     ("tau_pairs", "mass", "caloclouds3", "JS"),
-                                     ("tau_pairs", "phi", "caloclouds3", "JS"),
-                                     ("tau_pairs", "theta", "caloclouds3", "JS")]
+                  for row in js) == [("tau_pairs", "energy", "caloclouds3_paper", "JS"),
+                                     ("tau_pairs", "mass", "caloclouds3_paper", "JS"),
+                                     ("tau_pairs", "phi", "caloclouds3_paper", "JS"),
+                                     ("tau_pairs", "theta", "caloclouds3_paper", "JS")]
     # from the two seeds, paired, so with their spread
     assert all(float(row["uncertainty"]) > 0 for row in js), js
     # and the rest, the model's relative deviation from Geant4 in each category
