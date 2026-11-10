@@ -1,5 +1,10 @@
 """
 Particle gun to fire straight into the detector, with a small offset in the z direction.
+
+With --segments N, the events are in N files, and a run writes the one that
+--segment says (from 1), <name>_seg<i>of<N>: it makes all n_events events, as
+without segments, and writes those of the segment, numbered as they are in the
+whole set (ddml_bench/layout.py's segment_bounds()).
 """
 
 import sys
@@ -10,7 +15,7 @@ import argparse
 # What generating events needs (numpy, pyLCIO, h5py and particle) is imported
 # where it is used, so that the file names (get_parser and get_file_name) can be
 # worked out with any Python, as ddml_bench does when it plans the pipeline.
-from ddml_bench.layout import INPUT_DIR
+from ddml_bench.layout import INPUT_DIR, segment_bounds, segment_suffix
 
 REPO_DIR = os.path.dirname(os.path.realpath(__file__))
 # Subfolder of paths.data_dir (see configs/default.yaml) that the gun writes to
@@ -90,6 +95,8 @@ def get_parser():
             "configured paths.data_dir)",
         ),
         ("gun_from_ip", str_to_bool, True, "If true, gun emulates particle from the IP"),
+        ("segment", int, 1, "Write only this segment of the events, from 1"),
+        ("segments", int, 1, "The number of segments the events are split into, each a file"),
     ]
     # optionally, all of the simple_args can be specified postionally
     for arg, arg_type, default, help_str in simple_args:
@@ -349,6 +356,7 @@ def get_file_name(parsed_args):
         base_name += "_ip"
     if parsed_args.distribution != "spherical":
         base_name += f"_{parsed_args.distribution}"
+    base_name += segment_suffix(parsed_args.segment, parsed_args.segments)
     save_dir = parsed_args.save_dir or default_save_dir()
     file_path = os.path.join(save_dir, base_name + ".slcio")
     return file_path
@@ -381,10 +389,11 @@ def pxyz_to_lcio(
     energy,
     pxyzs,
     gun_position,
+    first_event=0,
 ):
     """
     For one particle PID, mass and charge, and a set
-    of momenta, write n_events to an LCIO file.
+    of momenta, write n_events to an LCIO file, numbered from first_event.
 
     Parameters
     ----------
@@ -424,7 +433,7 @@ def pxyz_to_lcio(
         col = IMPL.LCCollectionVec(EVENT.LCIO.MCPARTICLE)
         evt = IMPL.LCEventImpl()
 
-        evt.setEventNumber(event_n)
+        evt.setEventNumber(first_event + event_n)
 
         evt.addCollection(col, "MCParticle")
 
@@ -462,6 +471,10 @@ def pxyz_to_lcio(
 
 
 def run(parse_args):
+    if not 1 <= parse_args.segments <= parse_args.n_events:
+        raise ValueError("segments should be at least 1, and at most n_events")
+    if not 1 <= parse_args.segment <= parse_args.segments:
+        raise ValueError("segment should be from 1 to segments")
     particle_properties = ParticleProperties.from_parser(parse_args)
     print(particle_properties)
 
@@ -474,15 +487,18 @@ def run(parse_args):
     )
     gun_position = pick_gun_position(parse_args.gun_from_ip, pxyzs)
 
+    # Of all the events, those of the segment
+    start, stop = segment_bounds(parse_args.n_events, parse_args.segments)[parse_args.segment - 1]
     outfile = get_file_name(parse_args)
     os.makedirs(os.path.dirname(os.path.abspath(outfile)), exist_ok=True)
     print(f"Writing to {outfile}")
     pxyz_to_lcio(
         outfile,
         particle_properties,
-        energy,
-        pxyzs,
-        gun_position,
+        energy[start:stop],
+        pxyzs[start:stop],
+        gun_position[start:stop],
+        first_event=start,
     )
 
 

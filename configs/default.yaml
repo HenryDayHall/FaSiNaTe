@@ -174,6 +174,9 @@ scenarios:
       distribution: surface
       # The i-th energy uses seed + i, so the samples are independent.
       seed: 0
+      # The number of files each input's events are in (see di_photon): one,
+      # each energy's 3000 events a job of their own.
+      segments: 1
     # Each input is simulated once, with a seed ddsim chooses. List ddsim
     # seeds here (e.g. [1, 2, 3]) to simulate each input once with each
     # instead, as di_photon does.
@@ -207,8 +210,17 @@ scenarios:
       centre_z: 70
       # The i-th energy uses seed + i, so the samples are independent.
       seed: 0
+      # Each energy's pairs are in this many files (segments), each simulated
+      # and reconstructed as a job of its own, so that a job takes a third of
+      # the time: the gun makes all 15000 pairs, and writes those of each
+      # segment, 5000, to <input>_seg<i>of3.slcio, as one file split in three.
+      # Data made before from the whole files is split into segments by
+      # scripts/split_data.py.
+      segments: 3
     # Each input is simulated once with each of these ddsim seeds, so that the
     # figures can show the spread over them, and the metric its uncertainty.
+    # Each segment of an input is simulated with each seed, and the figures
+    # put the segments of a seed together.
     simulation_seeds: [1, 2, 3]
 
   # e+e- -> tau+tau- at 250 GeV (the paper's tau physics dataset): events of
@@ -235,10 +247,19 @@ scenarios:
         - gen_tau_pi0_250-SetA_2f_leptonic_eL_pR_42.slcio
         - gen_tau_pi0_250-SetA_2f_leptonic_eL_pR_1764.slcio
         - gen_tau_pi0_250-SetA_2f_leptonic_eL_pR_74088.slcio
+      # Each file's events are in this many segments, each simulated and
+      # reconstructed as a job of its own: <file>_seg<i>of3.slcio, of 2264,
+      # 2264 and 2263 events, split from the file by scripts/split_data.py
+      # (which also splits what was made from the whole files before). The
+      # segments are what the pipeline takes, so put the files here and run
+      # that before the pipeline.
+      segments: 3
     # The ddsim seeds the files are named after, and with one_seed_per_input
     # each file is simulated once, with the seed in the same place in this
     # list (rather than once with every seed, as di_photon's inputs are): three
-    # simulations, whose spread the figures show, as in the paper.
+    # simulations, whose spread the figures show, as in the paper. Each
+    # segment is simulated with its file's seed, and the figures put the
+    # segments of a seed together.
     simulation_seeds: [42, 1764, 74088]
     one_seed_per_input: true
 
@@ -436,7 +457,11 @@ published:
   records:
     # FaSiNaTe essential data 0.1.0, doi:10.5281/zenodo.23670827: the inputs
     # of single_photon and di_photon, and the measurements of Geant4 and
-    # CaloClouds3
+    # CaloClouds3. It predates di_photon's segments (input.segments), so only
+    # single_photon's inputs are fetched from it: no task makes its whole
+    # di_photon inputs, and its measurements were made from the whole inputs'
+    # reconstructions, not the segments' (each run says why they aren't used).
+    # A new version with the segments' inputs and measurements replaces it.
     - zenodo: 23670827
       manifest_md5: "88e6b911f7fa2d7a7b642a00364477c5"
   # Where a file of a record is downloaded from

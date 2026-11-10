@@ -86,6 +86,9 @@ def test_the_file_names_say_how_the_pairs_were_made():
     args = parser.parse_args(["--centre_z", "-12.5", "--max_separation", "30", "--surface_y",
                               "1500", "--save_dir", "/data/in"])
     assert gun.get_file_name(args) == "/data/in/diphoton_en20_sep30_x0_z-12.5_r10_y1500_seed0.slcio"
+    args = parser.parse_args(["--seed", "3", "--segment", "3", "--segments", "3", "--save_dir",
+                              "/data/in"])
+    assert gun.get_file_name(args) == "/data/in/diphoton_en20_sep90_x0_z70_r10_seed3_seg3of3.slcio"
 
 
 @pytest.mark.parametrize("option, message", [
@@ -94,6 +97,9 @@ def test_the_file_names_say_how_the_pairs_were_made():
     (["--max_separation", "0"], "max_separation should be above 0 mm"),
     (["--centre_radius", "-1"], "centre_radius should be at least 0 mm"),
     (["--surface_y", "-1804.7"], "surface_y should be above 0 mm"),
+    (["--n_events", "2", "--segments", "3"], "segments should be at least 1, and at most"),
+    (["--segment", "4", "--segments", "3"], "segment should be from 1 to segments"),
+    (["--segment", "0"], "segment should be from 1 to segments"),
 ])
 def test_options_that_cant_make_pairs_are_refused(option, message):
     with pytest.raises(ValueError, match=message):
@@ -130,3 +136,46 @@ def test_it_writes_two_photons_per_event_and_the_truth(tmp_path):
             assert particle["vertex"] == particle["endpoint"] == list(v)
             # (LCIO keeps momenta as floats)
             np.testing.assert_allclose(particle["momentum"], p, rtol=1e-6)
+
+
+def run_gun(script, folder, *options):
+    """Run a gun as the generate stage does, with the tests' pyLCIO (which
+    writes JSON); the records of the .slcio file it writes and its .h5 file's
+    datasets."""
+    import h5py
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join([os.path.join(FAKES, "python"), REPO]))
+    subprocess.check_call([sys.executable, os.path.join(REPO, script), "--save_dir", str(folder)]
+                          + list(options), env=env, stdout=subprocess.DEVNULL)
+    slcio, = [p for p in os.listdir(str(folder)) if p.endswith(".slcio")]
+    with open(os.path.join(str(folder), slcio)) as stream:
+        records = [json.loads(line) for line in stream]
+    with h5py.File(os.path.join(str(folder), slcio[:-len(".slcio")] + ".h5"), "r") as h5:
+        truth = dict((name, h5[name][:]) for name in h5)
+    return slcio, records, truth
+
+
+@pytest.mark.parametrize("script, options", [
+    ("ILD_Di_Photon_Gun.py", ["--n_events", "10", "--energy", "20", "--seed", "7"]),
+    ("ILD_Particle_Gun.py", ["--n_events", "10", "--energy", "20", "--seed", "7",
+                             "--theta_min_max", "43", "137", "--phi_min_max", "79", "109",
+                             "--distribution", "surface"]),
+])
+def test_a_segment_is_the_whole_inputs_events_at_its_place(tmp_path, script, options):
+    """input.segments: each gun makes every event of the whole input, and
+    writes those of its segment (10 events in 3: 4, 3 and 3), numbered as in
+    the whole, with their truth, so the segments together are the whole."""
+    whole_name, whole, whole_truth = run_gun(script, tmp_path / "whole", *options)
+    events = [record for record in whole if "event" in record]
+    assert [event["event"] for event in events] == list(range(10))
+    start = 0
+    for index, size in enumerate((4, 3, 3), 1):
+        name, records, truth = run_gun(script, tmp_path / ("seg%d" % index), *(
+            options + ["--segment", str(index), "--segments", "3"]))
+        assert name == whole_name[:-len(".slcio")] + "_seg%dof3.slcio" % index
+        # The run header, then the events of the segment, as in the whole
+        assert records[0] == whole[0]
+        assert records[1:] == events[start:start + size]
+        assert sorted(truth) == sorted(whole_truth)
+        for key, values in truth.items():
+            np.testing.assert_array_equal(values, whole_truth[key][start:start + size])
+        start += size

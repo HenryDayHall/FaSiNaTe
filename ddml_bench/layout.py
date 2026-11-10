@@ -26,6 +26,15 @@ simulation of <input> with seed 2 is <input>_simseed2, and of its first N
 events <input>_n<N>_simseed2. (The inputs' own names may have _seed<S>, the
 gun's seed, which this isn't.)
 
+A scenario whose inputs are in segments (input.segments: N) has each of its
+inputs' events in N files of their own, the i-th segment of <whole> named
+<whole>_seg<i>of<N>: the first events of the whole in the first, and so on,
+as evenly as they go (segment_bounds()). Each segment is an input like any
+other, so its simulations and everything made from them are named after it,
+e.g. <whole>_seg2of3_simseed1_REC.edm4hep.root. Files of the whole inputs
+that are split into segments (scripts/split_data.py) go to UNSPLIT_DIR,
+which is hidden, so nothing of the harness looks there.
+
 Inputs given directly (simulate_*.sh --input) are simulated as the scenario
 "custom"; simulations given directly to reconstruct_simulation.sh are
 reconstructed where they belong if they are in sim_output, and to
@@ -74,6 +83,12 @@ SEP = "__"
 
 # What the names of the simulations of a ddsim seed have, before the seed
 SEED_TAG = "_simseed"
+# What the names of an input's segments have, before their number
+SEGMENT_TAG = "_seg"
+# Where scripts/split_data.py moves the files of the whole inputs it splits
+# into segments, and of everything made from them, each at its path in the
+# data folder: hidden, so that nothing of the harness or the manifests sees it
+UNSPLIT_DIR = ".unsplit"
 
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]*$")
 _SAMPLE = re.compile(r"_n\d+$")
@@ -121,6 +136,44 @@ def seed_suffix(seed):
         raise LayoutError("a simulation seed must be a whole number, at least 0, not %r"
                           % (seed,))
     return "%s%d" % (SEED_TAG, seed)
+
+
+def check_segments(segments, what):
+    """The number of segments an input's events are in: a whole number, at
+    least 1 (1 for the whole input in one file)."""
+    if not isinstance(segments, int) or isinstance(segments, bool) or segments < 1:
+        raise LayoutError("%s should be a whole number, at least 1 (the number of files each "
+                          "input's events are in), not %r" % (what, segments))
+    return segments
+
+
+def segment_suffix(index, count):
+    """What the name of the index-th of an input's count segments (from 1)
+    ends in, after the whole input's: _seg<index>of<count>; nothing for a
+    whole input (count 1)."""
+    check_segments(count, "the number of segments")
+    if count == 1:
+        return ""
+    if not isinstance(index, int) or isinstance(index, bool) or not 1 <= index <= count:
+        raise LayoutError("there's no segment %r of %d" % (index, count))
+    return "%s%dof%d" % (SEGMENT_TAG, index, count)
+
+
+def segment_bounds(n_events, count):
+    """[(first, last + 1)] of the events of each of count segments of
+    n_events, in order: the first events in the first segment, and as many in
+    each as can be, the first ones taking one more where they don't divide."""
+    check_segments(count, "the number of segments")
+    if not isinstance(n_events, int) or isinstance(n_events, bool) or n_events < count:
+        raise LayoutError("%r events can't be split into %d segments of at least one event each"
+                          % (n_events, count))
+    size, extra = divmod(n_events, count)
+    bounds, start = [], 0
+    for index in range(count):
+        stop = start + size + (1 if index < extra else 0)
+        bounds.append((start, stop))
+        start = stop
+    return bounds
 
 
 def input_stem(path):

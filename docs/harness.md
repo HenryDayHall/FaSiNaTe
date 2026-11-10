@@ -25,6 +25,7 @@ ddml_bench/
 ├── environment.py      getting into the environment from setup.sh
 ├── manifest.py         the manifests of a data folder's records, for publishing it
 ├── fetch.py            fetching published files instead of making them
+├── split.py            splitting whole inputs' data into segments (scripts/split_data.py)
 ├── process.py          running ddsim, k4run and the gun, with logs and clean-up
 └── cli.py              scripts/ddml-bench, which the shell scripts run
 ```
@@ -73,6 +74,13 @@ from knows which inputs are coming, so that published measurements made
 without a scenario that can't run are still fetched. The jobs of a slurm
 submission run the tasks of `tasks.json`, so they see what the submission saw.
 
+A scenario with `input.segments` has its inputs' segments as its inputs
+(`scenarios.scenario_inputs()` gives each its `whole` input and `segment`),
+each with the seeds of its whole input. `make_plan()` refuses to plan while a
+whole input of such a scenario, or a simulation or reconstruction made from
+one, is there without all its segments (`graph.unsplit()`): the run would make
+them all anew, where `scripts/split_data.py` (`split.py`) splits them.
+
 ## The layout
 
 `layout.py` names every file under `paths.data_dir`: inputs (each scenario's in
@@ -91,6 +99,12 @@ records its seed (`null` for those without one of their own), and the
 observables record each reconstructed file's seed in the `.npz`. Records of
 files, such as the reconstructed files in a `.npz`, are relative to the data
 folder (`Layout.relative`), so they hold when the data is copied elsewhere.
+The segments of an input (`input.segments`) are inputs named
+`<input>_seg<i>of<N>` (`segment_suffix()`, with their events from
+`segment_bounds()`), so everything made from one is named after it, e.g.
+`<input>_seg2of3_simseed1_REC.edm4hep.root`; `split.py` moves the files of
+whole inputs it splits to `.unsplit/` (`UNSPLIT_DIR`), which nothing else
+looks in.
 
 ## The stage registry
 

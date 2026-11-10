@@ -109,6 +109,9 @@ assert files == ["/data/in/p22_th90_ph90_en20_seed0_ip.slcio"], files
 files = di_photon_gun_files([["python3", "ILD_Di_Photon_Gun.py", "--energy", "100", "--seed", "1",
                               "--save_dir", "/data/in"]])
 assert files == ["/data/in/diphoton_en100_sep90_x0_z70_r10_seed1.slcio"], files
+files = di_photon_gun_files([["python3", "ILD_Di_Photon_Gun.py", "--seed", "1", "--segment", "2",
+                              "--segments", "3", "--save_dir", "/data/in"]])
+assert files == ["/data/in/diphoton_en20_sep90_x0_z70_r10_seed1_seg2of3.slcio"], files
 heavy = [m for m in ("yaml", "numpy", "pyLCIO", "h5py", "particle") if m in sys.modules]
 assert not heavy, heavy
 """ % REPO
@@ -126,3 +129,29 @@ def test_each_scenarios_inputs_go_in_a_folder_of_the_data_folder():
                             (".hidden", "not '.hidden'")):
         with pytest.raises(LayoutError, match=re.escape(message)):
             check_input_folder(folder, "scenarios.s.input.folder")
+
+
+def test_an_inputs_segments_are_its_events_in_order():
+    """input.segments: the events of an input in N files, as evenly as they
+    go, the first ones one longer, each named after the whole input."""
+    from ddml_bench.layout import segment_bounds, segment_suffix
+    assert segment_bounds(15000, 3) == [(0, 5000), (5000, 10000), (10000, 15000)]
+    assert segment_bounds(6791, 3) == [(0, 2264), (2264, 4528), (4528, 6791)]
+    assert segment_bounds(10, 3) == [(0, 4), (4, 7), (7, 10)]
+    assert segment_bounds(7, 1) == [(0, 7)]
+    assert segment_bounds(3, 3) == [(0, 1), (1, 2), (2, 3)]
+    assert segment_suffix(2, 3) == "_seg2of3" and segment_suffix(1, 1) == ""
+    for args, message in (((2, 3), "can't be split into 3 segments"),
+                          ((10, 0), "at least 1"), ((10, True), "at least 1")):
+        with pytest.raises(LayoutError, match=message):
+            segment_bounds(*args)
+    with pytest.raises(LayoutError, match="there's no segment 4 of 3"):
+        segment_suffix(4, 3)
+    # Everything made from a segment is named after it, as after any input
+    layout = Layout("/data")
+    segment = "/data/input_single_particle_gun/diphoton_en20_seed0" + segment_suffix(2, 3) \
+        + ".slcio"
+    assert layout.simulation("di_photon", "geant4", segment, 1) == \
+        "/data/sim_output/di_photon/geant4/diphoton_en20_seed0_seg2of3_simseed1.edm4hep.root"
+    assert layout.reconstruction_base("di_photon", "geant4", segment, 1) == \
+        "/data/rec_output/di_photon/geant4/diphoton_en20_seed0_seg2of3_simseed1"

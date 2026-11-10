@@ -40,6 +40,13 @@ and won't be made this time); unneeded (an intermediate one that isn't there,
 but that nothing still to be made needs); or unselected (not chosen by
 --stages, the simulators, --scenario or the files given).
 
+A scenario whose inputs are in segments (input.segments) has a task of each
+stage per segment. Data made before it had segments, from its whole inputs,
+must first be split into them (scripts/split_data.py), or the pipeline would
+make the segments, and everything from them, all over again: make_plan()
+refuses to plan while any whole input, or a simulation or reconstruction made
+from one, is there without its segments (unsplit()).
+
 The scenarios disabled in the configuration (enabled: false) aren't in the
 plan. A scenario whose inputs are made elsewhere (input type external) runs
 only with all of them: a graph leaves out a scenario any of whose inputs isn't
@@ -279,7 +286,51 @@ def make_plan(simulators=(), scenarios=(), stages=(), events=None, force=(), inp
     # every scenario (those that a run will leave out too, as their inputs may
     # be fetched first)
     Graph(plan, keep_unavailable=True)
+    left = unsplit(plan)
+    if left:
+        raise PlanError(
+            "the inputs of %s are in segments now (input.segments), but %d file(s) made from "
+            "whole inputs before aren't split into them yet, e.g. %s: split them with "
+            "scripts/split_data.py first (or move them away, to make everything anew), as "
+            "this run would otherwise make the segments, and everything made from them, all "
+            "over again" % (" and ".join(sorted({scenario for scenario, _, _ in left})),
+                            len(left), layout.relative(left[0][1])))
     return plan
+
+
+def unsplit(plan):
+    """[(scenario, a whole file, its segments that aren't there)] of the
+    scenarios whose inputs are in segments (input.segments): the whole inputs
+    there without their segments, and the simulations and reconstructions made
+    from them by the simulators of the plan, of the full samples (whatever -n
+    the run has). scripts/split_data.py splits them."""
+    layout = Layout(plan["data_dir"])
+    done_suffix = plan["reconstruction"]["done_suffix"]
+    simulators = [plan["reference"]["name"]] + [model["name"] for model in plan["models"]]
+    found = []
+    for group in plan["scenarios"]:
+        scenario = group["scenario"]
+        segments = {}  # whole input: its segments' entries
+        for entry in group["inputs"]:
+            if "whole" in entry:
+                segments.setdefault(entry["whole"], []).append(entry)
+        for whole, entries in segments.items():
+            pairs = [(whole, [entry["file"] for entry in entries])]
+            for simulator in simulators:
+                for seed in entries[0]["seeds"]:
+                    pairs.append((layout.simulation(scenario, simulator, whole, seed),
+                                  [layout.simulation(scenario, simulator, entry["file"], seed)
+                                   for entry in entries]))
+                    pairs.append((layout.reconstruction_base(scenario, simulator, whole, seed)
+                                  + done_suffix,
+                                  [layout.reconstruction_base(scenario, simulator,
+                                                              entry["file"], seed) + done_suffix
+                                   for entry in entries]))
+            for path, parts in pairs:
+                missing = [part for part in parts if not os.path.exists(part)]
+                if missing and os.path.exists(path):
+                    found.append((scenario, path, missing))
+    return found
 
 
 def missing_inputs(plan, coming=()):
@@ -299,9 +350,10 @@ def missing_inputs(plan, coming=()):
     return found
 
 
-def missing_reason(missing, total):
+def missing_reason(missing, total, wholes=()):
     """Which of a scenario's inputs made elsewhere aren't there, and what to
-    do, in words."""
+    do, in words; wholes are the whole inputs they are segments of, if they
+    are segments (input.segments)."""
     folders = sorted({os.path.dirname(path) for path in missing})
     one = len(missing) == 1
     if total == 1:
@@ -310,11 +362,24 @@ def missing_reason(missing, total):
         which = "its %d inputs" % total
     else:
         which = "%d of its %d inputs" % (len(missing), total)
-    return ("%s, made outside this repository, %s in %s (%s); put %s there, or publish %s in a "
-            "record of `published`, to run it"
+    split = ""
+    if wholes:
+        split = (" (or the whole file%s %s, and split %s into segments with "
+                 "scripts/split_data.py)" % ("" if len(wholes) == 1 else "s",
+                                             ", ".join(os.path.basename(p) for p in wholes),
+                                             "it" if len(wholes) == 1 else "them"))
+    return ("%s, made outside this repository, %s in %s (%s); put %s there%s, or publish %s "
+            "in a record of `published`, to run it"
             % (which, "isn't" if one else "aren't", " or ".join(folders),
                ", ".join(os.path.basename(path) for path in missing),
-               "it" if one else "them", "it" if one else "them"))
+               "it" if one else "them", split, "it" if one else "them"))
+
+
+def wholes_of(group, paths):
+    """The whole inputs that the paths, inputs of a scenario, are segments
+    of, in order (none if they aren't segments)."""
+    whole = dict((entry["file"], entry.get("whole")) for entry in group["inputs"])
+    return [p for p in dict.fromkeys(whole.get(path) for path in paths) if p]
 
 
 def published_settings(config):
@@ -394,7 +459,8 @@ class Graph(object):
             if scenario in self.plan["only_scenarios"] or any(
                     os.path.realpath(path) in self.plan["only_inputs"] for path in files):
                 raise PlanError("the scenario %s can't run: %s"
-                                % (scenario, missing_reason(missing, len(files))))
+                                % (scenario, missing_reason(missing, len(files),
+                                                            wholes_of(group, missing))))
 
     def left_out_reasons(self):
         """Why each scenario left out is, a sentence each."""
@@ -403,7 +469,8 @@ class Graph(object):
             group = next(g for g in self.plan["scenarios"] if g["scenario"] == scenario)
             reasons.append("the scenario %s is left out of this run, with the observables "
                            "measured on it alone: %s"
-                           % (scenario, missing_reason(missing, len(group["inputs"]))))
+                           % (scenario, missing_reason(missing, len(group["inputs"]),
+                                                       wholes_of(group, missing))))
         return reasons
 
     def add(self, stage, output, needs, scenario=None, simulator=None, name=None, inputs=(),
