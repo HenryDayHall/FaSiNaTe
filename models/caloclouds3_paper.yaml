@@ -59,7 +59,7 @@ ddml:
   # above 10 GeV entering the ECal barrel, except near the ends of the barrel
   # and the joins between its staves. Only the barrel, as for the other models:
   # CC3_ENDCAP would add the endcaps, which the scenarios don't reach.
-  presets: [CC3_BARREL]
+  presets: [CC3_BARREL, CC3_ENDCAP]
   # The weights the preset loads, relative to the DDML clone (building DDML
   # downloads them), and their md5 sum, which simulate_models.sh checks.
   weights: models/CC3_paper_checkpoint.pt

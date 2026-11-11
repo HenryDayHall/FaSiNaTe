@@ -64,13 +64,18 @@ ddml:
     - preset: CC3_BARREL_PY_INTERFACE
       plugin_properties:
         PythonModule: caloclouds3_recompiled
+        triggers: {gamma: 10}
+    - preset: CC3_ENDCAP_PY_INTERFACE
+      plugin_properties:
+        PythonModule: caloclouds3_recompiled
+        triggers: {gamma: 10}
   # for this model, the weights live here in FaSiNaTe
   weights_in: fasinate
   # The weights the module loads (it reads them from here)
   # from FaSiNaTe's weights folder, and their md5 sum, which
   # simulate_models.sh checks
   weights: models/weights/CC3_recompiled.pt
-  weights_md5: "ee692a5f5da2fb221ba564b199da0427"
+  weights_md5: "b67b626f8121ce587d59b50785b340de"
 
 # How plot_observables.sh draws this model: a colour and a line style
 # (matplotlib's: here a dash pattern, offset and lengths)
