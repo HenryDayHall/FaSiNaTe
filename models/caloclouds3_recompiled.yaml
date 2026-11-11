@@ -64,11 +64,9 @@ ddml:
     - preset: CC3_BARREL_PY_INTERFACE
       plugin_properties:
         PythonModule: caloclouds3_recompiled
-        triggers: {gamma: 10}
     - preset: CC3_ENDCAP_PY_INTERFACE
       plugin_properties:
         PythonModule: caloclouds3_recompiled
-        triggers: {gamma: 10}
   # for this model, the weights live here in FaSiNaTe
   weights_in: fasinate
   # The weights the module loads (it reads them from here)
