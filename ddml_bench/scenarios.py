@@ -23,13 +23,27 @@ Each scenario's input.type in the configuration says how its input is made:
 A scenario with enabled: false is left out of everything; scenario_inputs()
 gives it all the same, marked so (the manifests describe its inputs).
 
+Any input type may have its events in segments: with input.segments: N, each
+input (each energy of a gun, each file made elsewhere) is N files of its
+events instead of one, named after the whole input with _seg<i>of<N>
+(ddml_bench/layout.py), each an input of its own, so that each simulation
+and reconstruction is a job of 1/N of the events. A gun makes
+each segment itself, by making the whole input's events and writing those of
+the segment (--segment i --segments N), so the segments are the same events
+as the whole input, in the same order. The segments of inputs made elsewhere
+are made from the whole files by scripts/split_data.py, which also splits
+whatever was made from whole inputs before their scenario had segments
+(ddml_bench/split.py).
+
 Besides its input, a scenario may list simulation_seeds: each input is then
 simulated once with each of these ddsim seeds, so that the spread of what is
 measured over them can be taken. With one_seed_per_input, each input is
 simulated once, with the seed in the same place in the list instead (one seed
 for each input, in the order of the inputs). Without seeds, each input is
 simulated once, with ddsim's own random seed ([None]). scenario_inputs() gives
-each input the seeds it is simulated with.
+each input the seeds it is simulated with. The seeds are those of the whole
+inputs: every segment of an input is simulated with the seeds of that input,
+so that the figures put the segments of a seed together, as one sample.
 
 A new input type needs an entry in INPUT_TYPES: for inputs made here, a
 function giving the commands, one giving the file each command makes (without
@@ -53,7 +67,10 @@ import sys
 
 from .config import REPO_DIR, ConfigError, load_config
 from .layout import INPUT_DIR, PHYSICS_INPUT_DIR, Layout, LayoutError, check_input_folder, \
-    check_name
+    check_name, check_segments, input_stem, segment_suffix
+
+# The options of the guns that make a segment of an input (input.segments)
+SEGMENT_OPTIONS = ("--segment", "--segments")
 
 GUN_SCRIPT = os.path.join(REPO_DIR, "ILD_Particle_Gun.py")
 DI_PHOTON_SCRIPT = os.path.join(REPO_DIR, "ILD_Di_Photon_Gun.py")
@@ -80,16 +97,46 @@ class InputType(object):
         self.made_here = not external
 
     def inputs(self, name, options, folder):
-        """[(file, command)] of a scenario's inputs, in the folder given; the
-        command is None for inputs made elsewhere."""
+        """[(file, command, whole, segment)] of a scenario's inputs, in the
+        folder given: the command is None for inputs made elsewhere; with
+        input.segments, whole is the input the file is a segment of and
+        segment its (number, of how many), and otherwise both are None."""
+        segments = options.pop("segments", 1)
+        try:
+            check_segments(segments, "scenarios.%s.input.segments" % name)
+        except LayoutError as error:
+            raise ConfigError(str(error))
         if not self.made_here:
-            return [(path, None) for path in external_files(name, options, folder)]
-        commands = self.commands(name, options, folder)
-        files = self.files(commands)
-        if len(files) != len(commands):
-            raise ConfigError("scenario %s: %d commands make %d files"
-                              % (name, len(commands), len(files)))
-        return list(zip(files, commands))
+            wholes = [(path, None) for path in external_files(name, options, folder)]
+        else:
+            commands = self.commands(name, options, folder)
+            files = self.files(commands)
+            if len(files) != len(commands):
+                raise ConfigError("scenario %s: %d commands make %d files"
+                                  % (name, len(commands), len(files)))
+            wholes = list(zip(files, commands))
+        if segments == 1:
+            return [(path, command, None, None) for path, command in wholes]
+        found = []
+        for path, command in wholes:
+            for index in range(1, segments + 1):
+                where = (index, segments)
+                if command is None:
+                    folder_of, file_name = os.path.split(path)
+                    found.append((os.path.join(folder_of, input_stem(file_name)
+                                               + segment_suffix(index, segments)
+                                               + os.path.splitext(file_name)[1]),
+                                  None, path, where))
+                    continue
+                part = command + [SEGMENT_OPTIONS[0], str(index), SEGMENT_OPTIONS[1],
+                                  str(segments)]
+                made, = self.files([part])
+                if made == path:
+                    raise ConfigError("scenarios.%s.input.segments: %s names a segment of an "
+                                      "input as the whole input, so it can't make segments"
+                                      % (name, os.path.basename(command[1])))
+                found.append((made, part, path, where))
+        return found
 
 
 def gun_commands(script):
@@ -148,6 +195,10 @@ def gun_files(module):
             except SystemExit:
                 raise ConfigError("%s.py doesn't accept the options %s"
                                   % (module, " ".join(shlex.quote(a) for a in command[2:])))
+            segments = getattr(args, "segments", 1)
+            if segments > getattr(args, "n_events", segments):
+                raise ConfigError("%s.py can't put %d events in %d segments (input.segments): "
+                                  "each needs at least one" % (module, args.n_events, segments))
             found.append(os.path.abspath(gun.get_file_name(args)))
         return found
     files.__doc__ = "The .slcio files that %s.py's commands write." % module
@@ -249,7 +300,9 @@ def scenario_inputs(config, layout, names=()):
     named, whether enabled or not: folder is the folder of paths.data_dir its
     inputs are in, an input's command is None if it is made elsewhere, and its
     seeds are those it is simulated with (the group's seeds are all of them,
-    simulation_seeds())."""
+    simulation_seeds()). The segments of a scenario with input.segments are
+    its inputs, each with "whole", the input it is a segment of, and
+    "segment", [its number, of how many]; their seeds are their whole input's."""
     scenarios = config["scenarios"] or {}
     result = []
     for name in names or scenarios:
@@ -278,11 +331,18 @@ def scenario_inputs(config, layout, names=()):
             raise ConfigError(str(error))
         inputs = INPUT_TYPES[kind].inputs(name, options, layout.inputs(folder))
         seeds = simulation_seeds(name, settings.get("simulation_seeds"))
-        each = seeds_of_inputs(name, seeds, len(inputs), settings.get("one_seed_per_input", False))
+        # The seeds are the whole inputs', in their order
+        wholes = list(dict.fromkeys(whole or path for path, _, whole, _ in inputs))
+        each = dict(zip(wholes, seeds_of_inputs(name, seeds, len(wholes),
+                                                settings.get("one_seed_per_input", False))))
+        entries = []
+        for path, command, whole, segment in inputs:
+            entry = {"file": path, "command": command, "seeds": each[whole or path]}
+            if segment is not None:
+                entry.update(whole=whole, segment=list(segment))
+            entries.append(entry)
         result.append({"scenario": name, "type": kind, "enabled": enabled, "folder": folder,
-                       "inputs": [{"file": path, "command": command, "seeds": input_seeds}
-                                  for (path, command), input_seeds in zip(inputs, each)],
-                       "seeds": seeds})
+                       "inputs": entries, "seeds": seeds})
     return result
 
 
@@ -311,9 +371,11 @@ def main(argv=None):
             ", disabled (enabled: false)" if not group["enabled"] else ""))
         for entry in group["inputs"]:
             if entry["command"] is None:
-                print("# made elsewhere: %s (%s)" % (entry["file"], "there"
-                                                     if os.path.isfile(entry["file"])
-                                                     else "not there"))
+                print("# made elsewhere: %s (%s%s)" % (
+                    entry["file"], "there" if os.path.isfile(entry["file"]) else "not there",
+                    ", segment %d of %d of %s" % (entry["segment"][0], entry["segment"][1],
+                                                 os.path.basename(entry["whole"]))
+                    if "segment" in entry else ""))
             else:
                 print(" ".join(shlex.quote(arg) for arg in entry["command"]))
     return 0

@@ -4,7 +4,9 @@ The inputs made elsewhere (input type external) are tasks too, done when they
 are there, so that the inputs of every scenario go through the same graph and
 can be fetched (ddml_bench/fetch.py); but nothing makes them here, so forcing
 the stage leaves them alone, and a scenario without all of them is left out
-of a run (ddml_bench/graph.py).
+of a run (ddml_bench/graph.py). With input.segments, each segment is an input
+and a task: the guns make it themselves, and the segments of inputs made
+elsewhere are split from them by scripts/split_data.py.
 """
 
 import os
@@ -36,9 +38,12 @@ class Generate(Stage):
                 path = entry["file"]
                 task = graph.by_key.get("%s:%s" % (self.name, path))
                 if task is None:
+                    params = {"type": group["type"], "command": entry["command"]}
+                    if "whole" in entry:
+                        # A segment of this input (input.segments)
+                        params["whole"] = entry["whole"]
                     task = graph.add(self.name, path, [], scenario=group["scenario"],
-                                     name=input_stem(path), input_file=path,
-                                     params={"type": group["type"], "command": entry["command"]})
+                                     name=input_stem(path), input_file=path, params=params)
                     task["scenarios"] = []
                 elif task["params"]["command"] != entry["command"]:
                     if None in (task["params"]["command"], entry["command"]):
@@ -58,6 +63,12 @@ class Generate(Stage):
 
     def nothing_to_use(self, task):
         if not made_here(task) and not os.path.exists(task["output"]):
+            whole = task["params"].get("whole")
+            if whole:
+                return ("it is a segment of %s, which is made outside this repository, so it "
+                        "can't be made here: put that there and split it into segments with "
+                        "scripts/split_data.py, or put this at %s, or publish it in a record of "
+                        "`published`" % (whole, task["output"]))
             return ("it is made outside this repository, so it can't be made here: put it at %s, "
                     "or publish it in a record of `published`" % task["output"])
         return None

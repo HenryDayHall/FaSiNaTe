@@ -6,11 +6,12 @@
 #
 # It keeps the scenarios, their observables and every model in models/, but
 # with two energies of 10 photons each for single_photon, and one energy of
-# 10 photon pairs, simulated with two seeds, for di_photon. That is 3 inputs,
-# each simulated by Geant4 and by each model (di_photon's twice each), each
+# 10 photon pairs for di_photon, in its three segments (of 4, 3 and 3 pairs,
+# input.segments), each simulated with two seeds. That is 5 inputs, each
+# simulated by Geant4 and by each model (di_photon's twice each), each
 # simulation reconstructed, then the measurements of each simulator and the
 # plots: at least one job of each kind, and each kind of dependency between
-# them (94 jobs with the nine models of models/, 22 with CaloClouds3 alone).
+# them (74 jobs with the three models of models/, 40 with one).
 # Its data goes to a folder of its own, so it never mixes with the full
 # samples, and its jobs ask for short time limits, so that they start sooner.
 # The software (DDML, ILDConfig, the container) is the one the full run uses.

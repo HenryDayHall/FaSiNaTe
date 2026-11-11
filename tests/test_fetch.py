@@ -309,3 +309,27 @@ def test_inputs_made_elsewhere_are_fetched_when_published(bench):
             os.path.join(folder, name))
     status, output = bench.run("pipeline.sh", "--dry-run")
     assert "would fetch" not in output and "left out" not in output, output
+
+
+def test_inputs_in_segments_dont_fetch_the_published_whole_ones(bench, published):
+    """Once di_photon's inputs are in segments (input.segments), no task makes
+    the published whole input, and the published measurements were measured
+    on other reconstructions: only single_photon's inputs, which are the same,
+    are fetched, and the segments are made here."""
+    fetching(bench, published)
+    bench.with_segments(3)
+    status, output = bench.run("pipeline.sh", "--dry-run")
+    assert "would fetch 2 published file(s)" in output, output
+    for simulator in ("geant4", "caloclouds3_paper"):
+        assert "the published %s.npz (Zenodo record 123) isn't used, as they were measured " \
+            "on other reconstructions of di_photon" % simulator in output, output
+    status, output = bench.run("pipeline.sh")
+    assert "fetching 2 published file(s)" in output, output
+    names = bench.files("input_single_particle_gun")
+    assert DI_PHOTON_INPUT + ".slcio" not in names
+    assert [name for name in names if name.startswith(DI_PHOTON_INPUT)] == sorted(
+        "%s_seg%dof3%s" % (DI_PHOTON_INPUT, i, ending) for i in (1, 2, 3)
+        for ending in (".h5", ".slcio"))
+    for name in INPUTS:
+        assert digest(bench.path("input_single_particle_gun", name + ".slcio")) == \
+            digest(os.path.join(published["data"], "input_single_particle_gun", name + ".slcio"))

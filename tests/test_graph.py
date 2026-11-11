@@ -483,3 +483,118 @@ def test_inputs_made_elsewhere_take_only_their_files():
     assert group["folder"] == "input_physics_samples" and group["enabled"]
     assert group["inputs"] == [{"file": "/data/input_physics_samples/a.slcio", "command": None,
                                 "seeds": [None]}]
+
+
+# ---------------------------------------------------------------------------
+# Inputs in segments (input.segments)
+
+
+@pytest.fixture
+def segmented(configured, monkeypatch):
+    """di_photon and tau_pairs with their inputs in three segments, without
+    tau_pairs' inputs."""
+    configured.with_tau_pairs(write=False)
+    configured.with_segments(3)
+    monkeypatch.setenv("FASINATE_CONFIG", configured.env["FASINATE_CONFIG"])
+    return configured
+
+
+def test_each_segment_is_an_input_simulated_with_the_seeds_of_its_whole(segmented,
+                                                                        monkeypatch):
+    data = segmented.data
+    taus = [os.path.join(data, "input_physics_samples", "taus_%s_seg%dof3.slcio" % (name, i))
+            for name in "ab" for i in (1, 2, 3)]
+    # Without them, tau_pairs is left out, saying what makes them
+    graph = Graph(make_plan())
+    assert graph.left_out == {"tau_pairs": taus}
+    reason, = graph.left_out_reasons()
+    assert "its 6 inputs, made outside this repository, aren't in" in reason, reason
+    assert "put them there (or the whole files taus_a.slcio, taus_b.slcio, and split them " \
+        "into segments with scripts/split_data.py)" in reason, reason
+    touch(*taus)
+    monkeypatch.setenv("DDML_SOURCE_DIR", "/ddml")
+    graph = Graph(make_plan()).find_status()
+    assert graph.left_out == {}
+    # The gun makes each segment of di_photon's input, with --segment
+    inputs = [task for task in graph.list
+              if task["stage"] == "generate" and task["scenario"] == "di_photon"]
+    whole = "diphoton_en20_sep90_x0_z70_r10_seed0"
+    assert [task["name"] for task in inputs] == [whole + "_seg%dof3" % i for i in (1, 2, 3)]
+    for index, task in enumerate(inputs, 1):
+        command = task["params"]["command"]
+        assert command[-4:] == ["--segment", str(index), "--segments", "3"], command
+        assert task["params"]["whole"] == os.path.join(data, "input_single_particle_gun",
+                                                       whole + ".slcio")
+    # Each segment simulated with the seeds of its whole input: di_photon's
+    # each with every seed, tau_pairs' each with its file's
+    names = sorted((task["scenario"], task["name"], task["seed"]) for task in graph.list
+                   if task["stage"] == "geant4" and task["scenario"] != "single_photon")
+    assert names == sorted(
+        [("di_photon", "%s_seg%dof3_simseed%d" % (whole, i, s), s) for i in (1, 2, 3)
+         for s in (1, 2)]
+        + [("tau_pairs", "taus_%s_seg%dof3_simseed%d" % (n, i, s), s)
+           for n, s in (("a", 42), ("b", 1764)) for i in (1, 2, 3)])
+    for task in graph.list:
+        if task["stage"] == "observables":
+            assert task["params"]["seeds"]["di_photon"] == [1, 2] * 3
+            assert task["params"]["seeds"]["tau_pairs"] == [42] * 3 + [1764] * 3
+    # Forcing the generate stage remakes the gun's segments, not those made elsewhere
+    graph = Graph(make_plan(force=["generate"])).find_status()
+    assert collections.Counter((task["scenario"], task["status"]) for task in graph.list
+                               if task["stage"] == "generate") == {
+        ("single_photon", TODO): 2, ("di_photon", TODO): 3, ("tau_pairs", DONE): 6}
+
+
+def test_whole_files_left_unsplit_stop_the_plan(segmented):
+    """What was made from whole inputs before they were in segments would be
+    made again for the segments: the plan says to split it first."""
+    data = segmented.data
+    segments = [os.path.join(data, "input_physics_samples", "taus_%s_seg%dof3.slcio" % (name, i))
+                for name in "ab" for i in (1, 2, 3)]
+    touch(*segments)
+    make_plan()
+    # A whole input whose segments are all there costs nothing
+    whole = os.path.join(data, "input_physics_samples", "taus_a.slcio")
+    touch(whole)
+    make_plan()
+    # but without them, it would be made anew (of any sample, -n too)
+    os.remove(segments[1])
+    with pytest.raises(PlanError, match=re.escape(
+            "the inputs of tau_pairs are in segments now (input.segments), but 1 file(s) made "
+            "from whole inputs before aren't split into them yet, e.g. "
+            "input_physics_samples/taus_a.slcio: split them with scripts/split_data.py first")):
+        make_plan(events=10)
+    os.remove(whole)
+    touch(segments[1])
+    # a simulation of a whole input, or a reconstruction, as well
+    name = "diphoton_en20_sep90_x0_z70_r10_seed0"
+    simulation = os.path.join(data, "sim_output", "di_photon", "geant4",
+                              name + "_simseed2.edm4hep.root")
+    touch(simulation)
+    with pytest.raises(PlanError, match="di_photon are in segments now .* e.g. sim_output/"
+                                        "di_photon/geant4/%s_simseed2.edm4hep.root" % name):
+        make_plan()
+    touch(*[os.path.join(data, "sim_output", "di_photon", "geant4",
+                         name + "_seg%dof3_simseed2.edm4hep.root" % i) for i in (1, 2, 3)])
+    make_plan()
+    reconstruction = os.path.join(data, "rec_output", "di_photon", "caloclouds3_paper",
+                                  name + "_simseed1_REC.edm4hep.root")
+    touch(reconstruction)
+    with pytest.raises(PlanError, match="1 file\\(s\\) made from whole inputs"):
+        make_plan()
+
+
+@pytest.mark.parametrize("settings, message", [
+    ("  di_photon:\n    input:\n      segments: 0\n", "di_photon.input.segments should be a "
+                                                     "whole number, at least 1"),
+    ("  di_photon:\n    input:\n      segments: 31\n", "can't put 30 events in 31 segments"),
+    ("  tau_pairs:\n    simulation_seeds: [42]\n", "tau_pairs has 2 inputs but 1 "
+                                                   "simulation_seeds"),
+])
+def test_segments_are_checked(segmented, monkeypatch, settings, message):
+    override = os.path.join(segmented.tmp, "more.yaml")
+    with open(override, "w") as stream:
+        stream.write("scenarios:\n" + settings)
+    monkeypatch.setenv("FASINATE_CONFIG", segmented.env["FASINATE_CONFIG"] + ":" + override)
+    with pytest.raises(ConfigError, match=re.escape(message)):
+        make_plan()

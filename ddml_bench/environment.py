@@ -19,17 +19,19 @@ def in_environment():
     return bool(os.environ.get("DDML_SOURCE_DIR")) and bool(os.environ.get("KEY4HEP_STACK"))
 
 
-def launcher_command(args, binds=()):
-    """The command running `ddml-bench ARGS` in the environment, with the
-    folders binds mounted in the container too (it mounts the repository, the
-    data folder, the software and the configuration files already)."""
+def launcher_command(args, binds=(), entry=ENTRY):
+    """The command running `ddml-bench ARGS` (or another script of the
+    repository, entry) in the environment, with the folders binds mounted in
+    the container too (it mounts the repository, the data folder, the
+    software and the configuration files already)."""
     command = [LAUNCHER]
     for folder in binds:
         command += ["--bind", folder]
-    return command + ["--", "python3", ENTRY] + list(args)
+    return command + ["--", "python3", entry] + list(args)
 
 
-def run_in_environment(args, binds=()):
-    """Run `ddml-bench ARGS` in the environment; return its exit status."""
+def run_in_environment(args, binds=(), entry=ENTRY):
+    """Run `ddml-bench ARGS` (or entry ARGS) in the environment; return its
+    exit status."""
     with process.interruptible():
-        return process.run(launcher_command(args, binds), env=dict(os.environ))
+        return process.run(launcher_command(args, binds, entry), env=dict(os.environ))

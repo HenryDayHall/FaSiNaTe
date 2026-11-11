@@ -16,7 +16,9 @@ scenario and simulator:
     rec_output/<scenario>/<simulator>/<sample>.log      3  reconstruction
 
 Test samples (<input>_n<N>, from -n N) and the scenario "custom" (files given
-directly) are left out.  A log is rewritten each time its output is made
+directly) are left out, and so are the logs of segments split from a whole
+job's output by scripts/split_data.py, which didn't take time of their own:
+the whole jobs' logs are in <data_dir>/.unsplit, which --data-dir can name.  A log is rewritten each time its output is made
 again, so it times the latest attempt.
 
 The other steps are timed from the slurm logs, every *.out file under the given
@@ -143,6 +145,9 @@ OUTPUT_STARTED_RE = re.compile(
 OUTPUT_END_RE = re.compile(r"^# (?P<what>finished|FAILED|INTERRUPTED)\b", re.M)
 OUTPUT_FINISHED_RE = re.compile(
     r"# finished\s+(?P<time>\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d), after (?P<seconds>\d+(?:\.\d+)?) s")
+# The log of a segment split from a whole job's output by scripts/split_data.py,
+# which has that job's header but no time of its own
+OUTPUT_SEGMENT_RE = re.compile(r"^# segment\s", re.M)
 TEST_SAMPLE = re.compile(r"(?:^|_)n\d+(?=_|$)")  # <input>_n<N>, from -n N
 CUSTOM_SCENARIO = "custom"
 
@@ -336,6 +341,10 @@ def output_logs(data_dirs, args, parse_time, skip):
                     head, tail = read_ends(path)
                 except OSError as exc:
                     skip(f"unreadable ({exc.strerror})", log)
+                    continue
+                if OUTPUT_SEGMENT_RE.search(head):
+                    skip("split from a whole job's output by split_data.py, so not timed (the "
+                         "whole job's log is in .unsplit: --data-dir <data_dir>/.unsplit)", log)
                     continue
                 ends = list(OUTPUT_END_RE.finditer(tail))
                 if not ends:

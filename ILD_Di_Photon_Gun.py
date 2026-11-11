@@ -20,6 +20,12 @@ Each run writes <name>.slcio, two MC particles of generator status 1 per
 event, and <name>.h5 of the truth: energy [event] (of each photon, GeV),
 input_p_global [event, photon, xyz] (GeV), input_gun_position [event, photon,
 xyz] (mm) and separation [event] (mm, on the face).
+
+With --segments N, the events are in N files, and a run writes the one that
+--segment says (from 1), <name>_seg<i>of<N>: it makes all n_events pairs, as
+without segments, and writes those of the segment, numbered as they are in
+the whole set (ddml_bench/layout.py's segment_bounds()), so the segments are
+the whole set of pairs, split.
 """
 
 import argparse
@@ -31,6 +37,7 @@ from array import array
 # used, so that the file names (get_parser and get_file_name) can be worked out
 # with any Python, as ddml_bench does when it plans the pipeline.
 from ILD_Particle_Gun import default_save_dir
+from ddml_bench.layout import segment_bounds, segment_suffix
 
 # The front face of the top stave of ILD_l5_o1_v02's ECAL barrel, mm
 SURFACE_Y = 1804.7
@@ -56,6 +63,8 @@ def get_parser():
         ("save_dir", str, None,
          "Directory to save the LCIO file (default: input_single_particle_gun in the "
          "configured paths.data_dir)"),
+        ("segment", int, 1, "Write only this segment of the events, from 1"),
+        ("segments", int, 1, "The number of segments the events are split into, each a file"),
     ]
     for name, kind, default, help_text in options:
         parser.add_argument("--" + name, action="store", type=kind, default=default,
@@ -75,6 +84,10 @@ def check_args(parsed_args):
         raise ValueError("centre_radius should be at least 0 mm")
     if not parsed_args.surface_y > 0:
         raise ValueError("surface_y should be above 0 mm, so that photons from the IP reach it")
+    if not 1 <= parsed_args.segments <= parsed_args.n_events:
+        raise ValueError("segments should be at least 1, and at most n_events")
+    if not 1 <= parsed_args.segment <= parsed_args.segments:
+        raise ValueError("segment should be from 1 to segments")
 
 
 def get_file_name(parsed_args):
@@ -84,6 +97,7 @@ def get_file_name(parsed_args):
     if parsed_args.surface_y != SURFACE_Y:
         base_name += "_y%g" % parsed_args.surface_y
     base_name += "_seed%d" % parsed_args.seed
+    base_name += segment_suffix(parsed_args.segment, parsed_args.segments)
     save_dir = parsed_args.save_dir or default_save_dir()
     return os.path.join(save_dir, base_name + ".slcio")
 
@@ -123,9 +137,9 @@ def pick_pairs(n_events, energy, max_separation, centre_radius, centre_x, centre
     return vertex, momentum, separation
 
 
-def pairs_to_lcio(outfile, energy, vertex, momentum, separation):
-    """Write the pairs to an LCIO file, two MC particles per event, and their
-    truth to an .h5 file next to it."""
+def pairs_to_lcio(outfile, energy, vertex, momentum, separation, first_event=0):
+    """Write the pairs to an LCIO file, two MC particles per event, numbered
+    from first_event, and their truth to an .h5 file next to it."""
     import h5py
     import numpy as np
     from pyLCIO import EVENT, IOIMPL, IMPL
@@ -144,7 +158,7 @@ def pairs_to_lcio(outfile, energy, vertex, momentum, separation):
     for event_n in range(len(vertex)):
         col = IMPL.LCCollectionVec(EVENT.LCIO.MCPARTICLE)
         evt = IMPL.LCEventImpl()
-        evt.setEventNumber(event_n)
+        evt.setEventNumber(first_event + event_n)
         evt.addCollection(col, "MCParticle")
         for photon in range(2):
             mcp = IMPL.MCParticleImpl()
@@ -177,10 +191,13 @@ def run(parse_args):
         parse_args.n_events, parse_args.energy, parse_args.max_separation,
         parse_args.centre_radius, parse_args.centre_x, parse_args.centre_z,
         parse_args.surface_y, rng)
+    # Of all the pairs, those of the segment
+    start, stop = segment_bounds(parse_args.n_events, parse_args.segments)[parse_args.segment - 1]
     outfile = get_file_name(parse_args)
     os.makedirs(os.path.dirname(os.path.abspath(outfile)), exist_ok=True)
     print(f"Writing to {outfile}")
-    pairs_to_lcio(outfile, parse_args.energy, vertex, momentum, separation)
+    pairs_to_lcio(outfile, parse_args.energy, vertex[start:stop], momentum[start:stop],
+                  separation[start:stop], first_event=start)
 
 
 if __name__ == "__main__":

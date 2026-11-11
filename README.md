@@ -28,6 +28,7 @@ The models are those DDML runs: CaloClouds3, both through DDML's embedded Python
   - [5. Measure the observables](#5-measure-the-observables)
   - [6. Plot](#6-plot)
 - [Where the data goes](#where-the-data-goes)
+  - [Inputs in segments](#inputs-in-segments)
 - [Reusing published measurements](#reusing-published-measurements)
 - [Timing](#timing)
 - [The models](#the-models)
@@ -220,6 +221,8 @@ The `di_photon_gun` type runs [`ILD_Di_Photon_Gun.py`](ILD_Di_Photon_Gun.py) in 
 
 Each scenario's inputs go in the folder its `input.folder` names, under `paths.data_dir`: `input_single_particle_gun` for the guns, unless it says otherwise.
 
+An input's events can be in several files, so that each simulation and reconstruction is a shorter job: with `input.segments: N`, each input (each energy of a gun, each file made elsewhere) is N files of its events, `<input>_seg<i>of<N>.slcio`, the first events in the first and so on, as evenly as they go, and each segment is an input of its own at every stage. A gun makes all of an input's events, as without segments, and writes those of one segment (`--segment i --segments N`), so the segments together are the whole input. `di_photon` has its inputs in 3 segments of 5000 pairs, and `tau_pairs` its files in 3 of 2264, 2264 and 2263 events; `single_photon`'s are whole (`segments: 1`). See [Inputs in segments](#inputs-in-segments) for data made before.
+
 The `external` type is for inputs that can't be made in this repository, such as the physics samples of ILD's MC production. `input.files` names the files (LCIO, `.slcio`) in the scenario's folder, by default `input_physics_samples`, and nothing makes them: an input that is there is used as it is (`generate_input.sh -f` leaves it alone), and one that isn't is fetched from a published record that has it ([Reusing published measurements](#reusing-published-measurements)). A scenario runs with all of its inputs or not at all: without them, a run leaves it out, and the observables measured on it alone, says which files to put where, and runs everything else as usual (exiting 0). Asking for it by name (`-s`, `--file`) is then an error. The default `tau_pairs` scenario is the paper's τ physics dataset: e⁺e⁻ → τ⁺τ⁻ at 250 GeV from ILD's MC-2020 production, in three files of 6791 events, kept for having a π⁰ from a τ decay with both photons above 5 GeV in the models' trigger region:
 
 ```
@@ -228,7 +231,7 @@ The `external` type is for inputs that can't be made in this repository, such as
 <data_dir>/input_physics_samples/gen_tau_pi0_250-SetA_2f_leptonic_eL_pR_74088.slcio
 ```
 
-These aren't published yet, so put them there by hand to run it. Its events are a generator's, so their reconstruction isn't told they are a particle gun's, and they reach the whole detector: the models simulate the photons their presets trigger on, and Geant4 everything else.
+These aren't published yet, so put them there by hand, then split each into its segments, the files the pipeline takes, with `python3 scripts/split_data.py --apply` (which moves the whole files to `<data_dir>/.unsplit/`; [Inputs in segments](#inputs-in-segments)). Its events are a generator's, so their reconstruction isn't told they are a particle gun's, and they reach the whole detector: the models simulate the photons their presets trigger on, and Geant4 everything else.
 
 ### 2. Simulate with Geant4
 
@@ -261,7 +264,7 @@ Before simulating, it checks that the DDML libraries, the `ddml` Python package 
 
 Both simulation scripts accept `-i FILE` to simulate an arbitrary input file (written under the scenario name `custom`), `--file FILE` to simulate just that one of the scenarios' inputs, and `-f/--force` to redo existing outputs (and make those that [nothing needs](#the-whole-pipeline-at-once), e.g. for measurements that are up to date). `ddsim` writes to a hidden file that is renamed only on success, so an output that exists is always complete. An input that isn't made yet is an error, unless nothing needs its simulation.
 
-A scenario with `simulation_seeds` (`di_photon` has `[1, 2, 3]`) has each of its inputs simulated once with each seed, passed to `ddsim` as `--random.seed`, each a task of its own named `<input>_simseed<S>`, so that the plots can take the spread over the seeds. With `one_seed_per_input: true`, each input is simulated once instead, with the seed in the same place in the list (one for each input, in order): `tau_pairs` simulates each of its three files with the seed it is named after, as `ddsim --random.seed=42` for `..._42.slcio`. Otherwise `ddsim` chooses the seed, and writes it in its log.
+A scenario with `simulation_seeds` (`di_photon` has `[1, 2, 3]`) has each of its inputs simulated once with each seed, passed to `ddsim` as `--random.seed`, each a task of its own named `<input>_simseed<S>`, so that the plots can take the spread over the seeds. With `one_seed_per_input: true`, each input is simulated once instead, with the seed in the same place in the list (one for each input, in order): `tau_pairs` simulates each of its three files with the seed it is named after, as `ddsim --random.seed=42` for `..._42.slcio`. Otherwise `ddsim` chooses the seed, and writes it in its log. The segments of an input ([1. Generate the inputs](#1-generate-the-inputs)) are each simulated with that input's seeds, and the figures put the segments of a seed together, as one sample.
 
 ### 4. Reconstruct
 
@@ -390,15 +393,29 @@ Everything is written under `paths.data_dir`:
     └── pipeline_<time>/           # submissions of slurm_pipeline.sh (slurm.log_dir)
 ```
 
-One module, [`ddml_bench/layout.py`](ddml_bench/layout.py), names all of these; each scenario's inputs are in the folder its `input.folder` names. Test runs with `-n N` add `_n<N>` to every file name after the inputs, the simulations of a scenario's `simulation_seeds` add `_simseed<S>` after that, and files simulated with `-i` go under the scenario `custom` (reconstructions of files outside `sim_output` go to `rec_output/custom/files/`).
+One module, [`ddml_bench/layout.py`](ddml_bench/layout.py), names all of these; each scenario's inputs are in the folder its `input.folder` names. The segments of a scenario with `input.segments` are inputs named `<input>_seg<i>of<N>`. Test runs with `-n N` add `_n<N>` to every file name after the inputs, the simulations of a scenario's `simulation_seeds` add `_simseed<S>` after that, and files simulated with `-i` go under the scenario `custom` (reconstructions of files outside `sim_output` go to `rec_output/custom/files/`).
+
+### Inputs in segments
+
+When a scenario's inputs go into segments (`input.segments`), what was made from its whole inputs is the same events, so it is split rather than made again, by [`scripts/split_data.py`](scripts/split_data.py), before the pipeline runs with the new configuration (until then a run stops, saying so, rather than simulating every segment anew):
+
+```bash
+python3 scripts/split_data.py               # says what it would split, changing nothing
+python3 scripts/split_data.py --apply       # splits
+./slurm_pipeline.sh --dry-run               # only the measurements and the plots to do
+```
+
+It splits, for each whole input of each scenario with segments, the input (and the gun's `.h5` truth), and every simulation and reconstruction of it in `sim_output/` and `rec_output/`, of every simulator there, event by event, into the segments' files the pipeline expects (ddsim and the reconstruction keep their input's events in order, so segment i of a simulation is the simulation of the input's segment i). Each segment's log has the header of its whole job's log (the software, the command), which the manifests read, and a line saying which of its events it has, but no time, so [`scripts/plot_step_times.py`](scripts/plot_step_times.py) leaves it out. `_AIDA.root` and `_PfoAnalysis.root`, histograms of the whole job, are kept whole. Each segment is written to a hidden file and checked against the whole (its events, every category of podio frames, and some of its events collection by collection and value by value) before it goes in place; then the whole file moves to `<data_dir>/.unsplit/`, at the same path, so nothing is deleted, and nothing of the harness looks there. A file that doesn't have as many events as its input, or whose segments fail a check, is left as it is with its log, and said so. It can be run again at any time: segments there already are checked rather than made, so after an interruption it does what is left. It needs the environment from `setup.sh` (pyLCIO, podio, h5py and uproot), and goes there itself.
+
+The measurements record the reconstructions they were made from, so after the split every simulator is measured again from the segments, which gives the same numbers: `--apply` first copies `observables/*.npz` and the metrics to `.unsplit/observables/`, to compare. Then delete `.unsplit` (it holds the space of the whole files; its logs keep the times the whole jobs took: `scripts/plot_step_times.py --data-dir <data_dir>/.unsplit`). Splitting reads and writes everything once: on the full data (about 400 GB), run it as a job, e.g. `sbatch --time=1-00:00:00 --wrap "python3 scripts/split_data.py --apply"`, or in parallel by simulator, the inputs first: `--only inputs`, then a job for each `--only <simulator>`.
 
 ## Reusing published measurements
 
 The benchmark's inputs and the measurements of Geant4 and CaloClouds3 are published on Zenodo: [FaSiNaTe essential data](https://doi.org/10.5281/zenodo.23670827), version 0.1.0, with its manifest. Every run fetches from it what it would otherwise make, so a model can be compared with them without running anything of theirs again. (Version 0.1.0's measurements were made before the intrinsic angle had a bounding box, so a run fetches them only with `bounding_box: null` under `observables.intrinsic_angle` in `configs/local.yaml`; otherwise it makes the references' measurements itself, simulating and reconstructing them first.) In a fresh data folder:
 
 ```bash
-./pipeline.sh --dry-run    # would fetch the 12 inputs and 2 measurements, and make the plots
-./pipeline.sh              # fetches them, then plots
+./pipeline.sh --dry-run    # would fetch the inputs and measurements, and make the plots
+./pipeline.sh              # fetches them, then plots (but see below: 0.1.0 predates the segments)
 # add your model to models/, then
 ./slurm_pipeline.sh        # simulates, reconstructs and measures only your model, and plots
 ```
@@ -411,6 +428,8 @@ Before working out what is to do, a run reads the manifests of the records in th
 Each file is checked against the sha256 and size in the manifest before it is put in place, and the manifest against the md5 sum Zenodo gives it, pinned in the configuration. Nothing that is there is replaced, a forced stage (`--force`) fetches nothing, and a run says why a published file isn't used, e.g. after changing an observable's settings. Measurements that are up to date need no simulation or reconstruction, so those of the references aren't made (`not needed` in the report). `slurm_pipeline.sh` fetches on the login node, before submitting, so the jobs need no internet. `--no-fetch` (or `published.enabled: false`) makes a run make everything itself, and a record that can't be read stops the run, rather than quietly making everything (hundreds of GB for the references).
 
 The inputs are chosen first and the measurements then, for the scenarios that will run: a scenario whose inputs made elsewhere are neither here nor published is left out, and so are its observables, so the published measurements made without it are still fetched. Once its inputs are there, every simulator is measured again with it, and measuring a simulator needs its reconstructions of every scenario: one whose measurements were fetched is then simulated and reconstructed again for the other scenarios too, until published measurements include the new scenario.
+
+Version 0.1.0 predates `di_photon`'s segments, so only `single_photon`'s inputs are fetched from it: no task makes its whole `di_photon` inputs, and its measurements were made from the whole inputs' reconstructions (a run says so). A new version with the segments' inputs and measurements will replace it.
 
 The configuration should be the one the published data was made with: its `scenarios` and `observables`, and to compare like with like the software, `key4hep.release`, `ddml.commit` and `detector_configs.ildconfig.commit`; a run that fetches measurements says which of these differ from what made them. A new version of a record is used once its id (and its manifest's md5) replaces the old one in `published.records`.
 
@@ -523,7 +542,7 @@ The module keeps DDML's contract for embedded Python, `run_inference(inputs)`, a
 
 ### Adding a scenario
 
-Add an entry under `scenarios` with an `input` section, in `configs/default.yaml` (override files can change a scenario, and disable it with `enabled: false`, but not add one). Input types are defined in `INPUT_TYPES` in [`ddml_bench/scenarios.py`](ddml_bench/scenarios.py) (currently `particle_gun`, `di_photon_gun` and `external`); a new type of inputs made here needs a function that returns the commands making the inputs, one that names the files they produce without running them, the option that makes a command write into a given folder, the Python modules its commands need, whether its events are a particle gun's (for `--usingParticleGun`), and the folder its inputs go in by default. Inputs made elsewhere need no new type: list the files under an `external` input. To simulate each input several times with different `ddsim` seeds, list them in the scenario's `simulation_seeds` (with `one_seed_per_input: true`, each input once with its own). List the scenario under the `scenarios` of each observable that should be measured on it.
+Add an entry under `scenarios` with an `input` section, in `configs/default.yaml` (override files can change a scenario, and disable it with `enabled: false`, but not add one). Input types are defined in `INPUT_TYPES` in [`ddml_bench/scenarios.py`](ddml_bench/scenarios.py) (currently `particle_gun`, `di_photon_gun` and `external`); a new type of inputs made here needs a function that returns the commands making the inputs, one that names the files they produce without running them, the option that makes a command write into a given folder, the Python modules its commands need, whether its events are a particle gun's (for `--usingParticleGun`), and the folder its inputs go in by default. Inputs made elsewhere need no new type: list the files under an `external` input. To simulate each input several times with different `ddsim` seeds, list them in the scenario's `simulation_seeds` (with `one_seed_per_input: true`, each input once with its own). For shorter jobs, put each input's events in several files with `input.segments` (a new gun needs `--segment` and `--segments` options for it, as the two guns have). List the scenario under the `scenarios` of each observable that should be measured on it.
 
 ### Adding an observable
 

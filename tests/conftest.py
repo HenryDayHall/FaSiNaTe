@@ -3,8 +3,9 @@ own, and a fake software stack for the environment the pipeline runs in.
 
 The copy (so that the tests never touch the real data/ or configs/local.yaml)
 is configured by test.yaml: a small single_photon scenario of two energies and
-a small di_photon one of one energy simulated with two seeds, the tau_pairs
-scenario disabled (Bench.with_tau_pairs() enables it, with inputs of its own),
+a small di_photon one of one energy simulated with two seeds, its input whole
+(Bench.with_segments() puts the inputs in segments), the tau_pairs scenario
+disabled (Bench.with_tau_pairs() enables it, with inputs of its own),
 a data folder of its own, no container, ILDConfig cloned from a local
 repository and no patches.
 Its "DDML build" is a folder with the files setup.sh and the
@@ -85,6 +86,7 @@ scenarios:
     input:
       energies: [20]
       n_events: 30
+      segments: 1
     simulation_seeds: [1, 2]
   tau_pairs:
     enabled: false
@@ -105,7 +107,18 @@ scenarios:
     enabled: true
     input:
       files: [{files}]
+      segments: {segments}
     simulation_seeds: [{seeds}]
+"""
+# The segments of the inputs of di_photon and tau_pairs (Bench.with_segments())
+SEGMENTS_CONFIG = """\
+scenarios:
+  di_photon:
+    input:
+      segments: {segments}
+  tau_pairs:
+    input:
+      segments: {segments}
 """
 
 ENV_FILE = """\
@@ -345,17 +358,27 @@ class Bench(object):
             _write(path, pattern + "\n")
 
     def with_tau_pairs(self, inputs=TAU_INPUTS, events=12, write=True):
-        """Enable the tau_pairs scenario, with these inputs, each simulated with
-        its own seed (TAU_SEEDS), and (with write) write them into its folder,
-        of so many events each; returns the configuration file it adds after
-        the others."""
+        """Enable the tau_pairs scenario, with these inputs, whole, each
+        simulated with its own seed (TAU_SEEDS), and (with write) write them
+        into its folder, of so many events each; returns the configuration file
+        it adds after the others."""
         override = os.path.join(self.tmp, "tau_pairs.yaml")
         seeds = ", ".join(str(seed) for seed in TAU_SEEDS[:len(inputs)])
-        _write(override, TAU_CONFIG.format(files=", ".join(inputs), seeds=seeds))
+        _write(override, TAU_CONFIG.format(files=", ".join(inputs), seeds=seeds, segments=1))
         self.env["FASINATE_CONFIG"] = self.env["FASINATE_CONFIG"] + ":" + override
         if write:
             for number, name in enumerate(inputs):
                 write_tau_input(self.path("input_physics_samples", name), events, number)
+        return override
+
+    def with_segments(self, segments=3):
+        """Put the inputs of di_photon and tau_pairs in so many segments
+        each, as the default configuration does; returns the configuration
+        file it adds after the others."""
+        override = os.path.join(self.tmp, "segments.yaml")
+        _write(override, SEGMENTS_CONFIG.format(segments=segments))
+        if override not in self.env["FASINATE_CONFIG"].split(":"):
+            self.env["FASINATE_CONFIG"] = self.env["FASINATE_CONFIG"] + ":" + override
         return override
 
     def path(self, *parts):
