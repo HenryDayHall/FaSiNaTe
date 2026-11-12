@@ -6,8 +6,8 @@
 #
 # Usage: ./observables_from_reconstruction.sh [options] [SIMULATOR ...]
 #
-#   SIMULATOR          measure only these: models in models/, or geant4
-#                      (default: all of them)
+#   SIMULATOR          measure only these: models in models/, geant4, or
+#                      geant4_2, its second sample (default: all of them)
 #   -n, --events N     measure the test sample of the first N events of each
 #                      input (<input>_n<N>_REC.edm4hep.root, as
 #                      reconstruct_simulation.sh -n N writes), writing

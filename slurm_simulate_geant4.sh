@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Simulate the benchmark scenarios with full Geant4 on a slurm cluster, one
-# input per job: what slurm_pipeline.sh --stages geant4 does, which this runs.
+# input per job, twice (the reference, and its second sample, geant4_2; see
+# simulate_geant4.sh): what slurm_pipeline.sh --stages geant4 does, which this
+# runs.
 # Inputs whose output already exists are left out, as are those that nothing
 # still to be made needs (see simulate_geant4.sh), so run this again to
 # resubmit what failed or timed out.

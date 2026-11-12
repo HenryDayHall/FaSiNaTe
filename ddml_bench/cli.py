@@ -161,7 +161,8 @@ def command_run(argv):
     parser = argparse.ArgumentParser(
         prog="ddml-bench run", description="Run the pipeline, or some of its stages.")
     parser.add_argument("simulators", nargs="*", metavar="SIMULATOR",
-                        help="only these simulators: models in models/, or geant4")
+                        help="only these simulators: models in models/, geant4, or geant4_2, "
+                             "its second sample")
     parser.add_argument("-s", "--scenario", action="append", default=[], metavar="NAME",
                         help="only this scenario (repeatable)")
     parser.add_argument("--stages", action="append", default=[], metavar="LIST",
@@ -207,7 +208,8 @@ def stage_parser(name):
     elif name == "observables":
         positional = "simulators"
         parser.add_argument("simulators", nargs="*", metavar="SIMULATOR",
-                            help="only these simulators: models in models/, or geant4")
+                            help="only these simulators: models in models/, geant4, or "
+                                 "geant4_2, its second sample")
     if name in ("geant4", "models", "reconstruct"):
         parser.add_argument("-s", "--scenario", action="append", default=[], metavar="NAME",
                             help="only this scenario (repeatable)")

@@ -3,7 +3,12 @@
 # models are compared to, as simulate_models.sh does for the models: ddsim with
 # DDML's steering file from the build by scripts/build_ddml.sh, but without
 # DDML's fast simulation (scripts/ddsim_steer_geant4.py), in the environment
-# that setup.sh gives.
+# that setup.sh gives. Every input is simulated twice: as the reference
+# (geant4), and as its second sample (geant4_2), the same but for the ddsim
+# seed, which is the first's plus 1000000, or 1000000 where the first has
+# ddsim's own. The second is measured and compared with the first as the models
+# are, which gives Geant4's own distance from itself, where the Pareto fronts
+# draw Geant4. Files given with --input are simulated once.
 #
 # Usage: ./simulate_geant4.sh [options]
 #
@@ -22,15 +27,17 @@
 #
 # Each simulation writes
 #   <paths.data_dir>/sim_output/<scenario>/geant4/<input name>.edm4hep.root
-# (<input name>_n<N>.edm4hep.root with --events), with its log next to it, and
-# is skipped if that output exists, or if nothing still to be made needs it:
-# if its reconstruction is there, or the measurements made from it are up to
-# date (observables/geant4.npz records what it was made from), e.g. as that
-# was fetched with the inputs. ddsim writes to a hidden file that is only
-# renamed once ddsim succeeds, so an output is always complete. The inputs are
-# simulated one after another; for many, or long, simulations, use
-# slurm_pipeline.sh --stages geant4, which runs one input per slurm job. An
-# input that isn't made yet is an error: make it with ./generate_input.sh.
+#   <paths.data_dir>/sim_output/<scenario>/geant4_2/<input name>_simseed<S>.edm4hep.root
+# (<input name>_n<N>... with --events), with its log next to it, and is
+# skipped if that output exists, or if nothing still to be made needs it: if
+# its reconstruction is there, or the measurements made from it are up to
+# date (observables/geant4.npz, or geant4_2.npz, records what it was made
+# from), e.g. as that was fetched with the inputs. ddsim writes to a hidden
+# file that is only renamed once ddsim succeeds, so an output is always
+# complete. The inputs are simulated one after another; for many, or long,
+# simulations, use slurm_pipeline.sh --stages geant4, which runs one input per
+# slurm job. An input that isn't made yet is an error: make it with
+# ./generate_input.sh.
 #
 # In a shell that has sourced setup.sh, this simulates right there. Anywhere
 # else it first builds what setup.sh needs, if needed, then runs in a clean

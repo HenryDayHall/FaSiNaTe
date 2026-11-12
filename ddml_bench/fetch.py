@@ -253,7 +253,8 @@ def measurements_match(task, published, plan):
             return False, "they were measured on other reconstructions of %s" % scenario
     stack = published.get("stack") or {}
     model = next((m for m in plan["models"] if m["name"] == task["simulator"]), None)
-    simulator = model or plan["reference"]
+    simulator = model or next((s for s in (plan["reference"], plan["second_geant4"])
+                               if s["name"] == task["simulator"]), plan["reference"])
     compact = stack.get("compact")
     if isinstance(compact, str) and compact != simulator["compact_file"]:
         return False, "they were simulated in %s, not %s" % (compact, simulator["compact_file"])

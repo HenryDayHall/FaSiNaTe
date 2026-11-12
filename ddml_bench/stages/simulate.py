@@ -1,5 +1,15 @@
-"""Stages 2 and 3: simulate every input with Geant4, and with each model in
-models/, one task per input and simulator.
+"""Stages 2 and 3: simulate every input with Geant4, twice, and with each model
+in models/, one task per input and simulator.
+
+The geant4 stage simulates each input of the scenarios with Geant4 as the
+reference (geant4), and again as its second sample (geant4_2), the same in
+every way but the ddsim seed: each of the second's simulations has one of its
+own, the first's plus 1000000, or 1000000 where the first has ddsim's own
+(layout.second_sample_seed()). So the two are independent samples of the
+same events, and how far the second is from the first (it is measured and
+compared as the models are) is how far apart two Geant4 samples are, which
+the Pareto fronts draw Geant4 at. Inputs given directly (the scenario custom),
+which nothing measures, are simulated once.
 
 Both run ddsim as DDML's README does: with DDML's steering file from the DDML
 build that setup.sh sets up, from its scripts/ folder (presets can give model
@@ -34,6 +44,7 @@ import time
 
 from .. import ddml_configs, process
 from ..config import REPO_DIR
+from ..layout import CUSTOM_SCENARIO, SECOND_GEANT4, second_sample_seed
 from ..models import description_sha256_now, python_code, python_module_file, python_summary
 from .base import Stage, StageError, compact_problems, resolve_compact
 
@@ -60,12 +71,17 @@ class Simulate(Stage):
                 "events": -1 if events is None else events,
                 "seed": seed}
 
+    def seeds(self, simulator, scenario, seeds):
+        """The ddsim seeds a simulator simulates an input of a scenario with,
+        given the input's (None for ddsim's own): those."""
+        return seeds
+
     def add_tasks(self, graph):
         layout = graph.layout
         for simulator in self.simulators(graph):
             for scenario, path, source, seeds in graph.inputs:
                 # Once with each of the input's seeds, or once with ddsim's own
-                for seed in seeds:
+                for seed in self.seeds(simulator, scenario, seeds):
                     task = graph.add(
                         self.name, layout.simulation(scenario, simulator["name"], path, seed),
                         [source["key"]] if source else [], scenario=scenario,
@@ -175,7 +191,17 @@ class Geant4(Simulate):
     name = "geant4"
 
     def simulators(self, graph):
-        return [graph.plan["reference"]]
+        """Geant4, and its second sample (layout.SECOND_GEANT4)."""
+        return [graph.plan["reference"], graph.plan["second_geant4"]]
+
+    def seeds(self, simulator, scenario, seeds):
+        """The second sample's seed for each of the input's (its own, which no
+        simulation of the first has: layout.second_sample_seed()); none of the
+        inputs given directly, which nothing measures. The first's are the
+        input's."""
+        if simulator["name"] != SECOND_GEANT4:
+            return seeds
+        return [] if scenario == CUSTOM_SCENARIO else [second_sample_seed(s) for s in seeds]
 
     def command(self, task, compact, partial):
         params = task["params"]
@@ -186,7 +212,9 @@ class Geant4(Simulate):
                  "--numberOfEvents=%d" % params["events"]] + self.seed_args(params))
 
     def header(self, task):
-        return ["# ddml-bench geant4: Geant4 on %s" % task["scenario"]]
+        return ["# ddml-bench geant4: %s on %s" % (
+            "Geant4's second sample (%s)" % SECOND_GEANT4 if task["simulator"] == SECOND_GEANT4
+            else "Geant4", task["scenario"])]
 
     def ddml_line(self, source):
         return "# DDML      %s, steering from %s" % (
@@ -208,13 +236,14 @@ class Geant4(Simulate):
         return problems
 
     def describe(self, task):
-        return "the Geant4 simulation of %s" % task["name"]
+        return "the %s simulation of %s" % (
+            "second Geant4" if task["simulator"] == SECOND_GEANT4 else "Geant4", task["name"])
 
     def job_name(self, task):
-        return "geant4"
+        return task["simulator"]
 
     def log_name(self, task):
-        return [self.name, task["scenario"], task["name"]]
+        return [task["simulator"], task["scenario"], task["name"]]
 
 
 class Models(Simulate):

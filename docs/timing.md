@@ -32,6 +32,9 @@ scenario's `simulation_seeds`, if it has any. With the default configuration
 that is 15 inputs (10 single-photon energies, 2 di-photon energies, 3 τ
 files). On the `cpu` nodes all 5 simulators are timed, which is 75 tasks. On
 the `gpu` nodes the 2 models that can use the GPU are timed, which is 30 tasks.
+Geant4's second sample (`geant4_2`, which the pipeline simulates beside the
+reference with other seeds) isn't timed: it is Geant4, so its time is
+Geant4's.
 
 The task simulates the input's first `timing.warmup_events` + `timing.events`
 events (10 + 200 by default), plus one more, whose start ends the last event
@@ -194,7 +197,9 @@ events) on that kind of node, and Geant4's the same on that kind of node, or
 else on the `cpu` nodes. Its accuracy in each metric is its Jensen–Shannon
 distance, or its Wasserstein distance, from Geant4 (the χ² for the energy
 figures and the π⁰ categories), divided by the mean of the models', so that
-every metric is on the same scale.
+every metric is on the same scale. Geant4 is drawn at its own time and at its
+own distance from itself: that of its second sample, `geant4_2`, divided by
+the same mean.
 The README's [Pareto fronts](../README.md#the-pareto-fronts) section has the
 details. The pipeline draws the plots again when the table is newer than
 `metrics.csv`.

@@ -75,9 +75,12 @@ def fetched(configured, monkeypatch):
 
 def test_a_task_per_file_each_after_what_it_needs(configured):
     graph = Graph(make_plan())
-    # single_photon's 2 inputs, and di_photon's 1, simulated with 2 seeds
+    # single_photon's 2 inputs, and di_photon's 1, simulated with 2 seeds, by
+    # Geant4 twice (its second sample) and by the model
     assert collections.Counter(task["stage"] for task in graph.list) == {
-        "generate": 3, "geant4": 4, "models": 4, "reconstruct": 8, "observables": 2, "plot": 1}
+        "generate": 3, "geant4": 8, "models": 4, "reconstruct": 12, "observables": 3, "plot": 1}
+    assert collections.Counter(task["simulator"] for task in graph.list
+                               if task["stage"] == "geant4") == {"geant4": 4, "geant4_2": 4}
     seen = set()
     for task in graph.list:
         assert set(task["needs"]) <= seen, "%s comes before what it needs" % task["key"]
@@ -112,9 +115,9 @@ def test_what_is_on_disk_is_done(configured):
     touch(*outputs(graph, "generate") + outputs(graph, "geant4"))
     graph.find_status()
     assert status(graph, "generate") == {DONE: 3}
-    assert status(graph, "geant4") == {DONE: 4}
+    assert status(graph, "geant4") == {DONE: 8}
     assert status(graph, "models") == {TODO: 4}
-    assert status(graph, "reconstruct") == {TODO: 8}
+    assert status(graph, "reconstruct") == {TODO: 12}
 
 
 def test_forcing_a_stage_remakes_what_is_made_from_it(configured):
@@ -122,27 +125,33 @@ def test_forcing_a_stage_remakes_what_is_made_from_it(configured):
     touch(*[path for stage in ("generate", "geant4", "models", "reconstruct")
             for path in outputs(graph, stage)])
     graph = Graph(make_plan(force=["geant4"])).find_status()
-    assert status(graph, "geant4") == {TODO: 4}
+    assert status(graph, "geant4") == {TODO: 8}
     assert all(task["redo"] for task in graph.list if task["stage"] == "geant4")
     remade = [task for task in graph.list if task["stage"] == "reconstruct" and task["redo"]]
-    assert sorted(task["simulator"] for task in remade) == ["geant4"] * 4
+    assert sorted(task["simulator"] for task in remade) == ["geant4"] * 4 + ["geant4_2"] * 4
     assert all("is made again" in task["why"] for task in remade)
     assert status(graph, "models") == {DONE: 4}
     measured = dict((task["simulator"], task) for task in graph.list
                     if task["stage"] == "observables")
     assert measured["geant4"]["why"].endswith("is made again")
+    assert measured["geant4_2"]["why"].endswith("is made again")
     assert measured["caloclouds3_paper"]["why"] == "no caloclouds3_paper.npz yet"
 
 
 def test_what_isnt_selected_isnt_run(configured):
     graph = Graph(make_plan(simulators=["geant4"])).find_status()
     assert status(graph, "models") == {UNSELECTED: 4}
-    assert status(graph, "geant4") == {TODO: 4}
+    assert status(graph, "geant4", "geant4") == {TODO: 4}
+    # Its second sample is a simulator of its own
+    assert status(graph, "geant4", "geant4_2") == {UNSELECTED: 4}
     # The plots are of what there is, so they don't wait for the models
     assert graph.list[-1]["status"] == TODO
+    graph = Graph(make_plan(simulators=["geant4_2"])).find_status()
+    assert status(graph, "geant4", "geant4_2") == {TODO: 4}
+    assert status(graph, "geant4", "geant4") == {UNSELECTED: 4}
 
     graph = Graph(make_plan(stages=["geant4"])).find_status()
-    assert status(graph, "geant4") == {BLOCKED: 4}
+    assert status(graph, "geant4") == {BLOCKED: 8}
     assert all("isn't selected to run" in task["why"] for task in graph.list
                if task["stage"] == "geant4")
 
@@ -152,9 +161,10 @@ def test_up_to_date_measurements_need_no_simulations_or_reconstructions(fetched)
     reconstruct or measure, only the plots."""
     graph = Graph(make_plan()).find_status()
     assert status(graph, "generate") == {DONE: 3}
-    assert status(graph, "geant4") == status(graph, "models") == {UNNEEDED: 4}
-    assert status(graph, "reconstruct") == {UNNEEDED: 8}
-    assert status(graph, "observables") == {DONE: 2}
+    assert status(graph, "geant4") == {UNNEEDED: 8}
+    assert status(graph, "models") == {UNNEEDED: 4}
+    assert status(graph, "reconstruct") == {UNNEEDED: 12}
+    assert status(graph, "observables") == {DONE: 3}
     plot, = [task for task in graph.list if task["stage"] == "plot"]
     assert plot["status"] == TODO and plot["after"] == []
     for task in graph.list:
@@ -172,12 +182,12 @@ def test_a_model_added_runs_only_its_own_tasks(fetched, monkeypatch):
                     os.path.join(folder, name + ".yaml"))
     monkeypatch.setattr(models, "MODELS_DIR", folder)
     graph = Graph(make_plan()).find_status()
-    assert status(graph, "geant4") == {UNNEEDED: 4}
+    assert status(graph, "geant4") == {UNNEEDED: 8}
     assert status(graph, "models", "caloclouds3_paper") == {UNNEEDED: 4}
     assert status(graph, "models", "newmodel") == {TODO: 4}
     assert status(graph, "reconstruct", "newmodel") == {TODO: 4}
-    assert status(graph, "reconstruct") == {UNNEEDED: 8, TODO: 4}
-    assert status(graph, "observables") == {DONE: 2, TODO: 1}
+    assert status(graph, "reconstruct") == {UNNEEDED: 12, TODO: 4}
+    assert status(graph, "observables") == {DONE: 3, TODO: 1}
     plot, = [task for task in graph.list if task["stage"] == "plot"]
     assert plot["status"] == TODO and plot["after"] == [
         task["key"] for task in graph.list
@@ -186,14 +196,16 @@ def test_a_model_added_runs_only_its_own_tasks(fetched, monkeypatch):
 
 def test_forcing_a_stage_makes_what_isnt_there_and_what_is_made_from_it(fetched):
     graph = Graph(make_plan(force=["geant4"])).find_status()
-    assert status(graph, "geant4") == {TODO: 4}
+    assert status(graph, "geant4") == {TODO: 8}
     assert not any(task["redo"] for task in graph.list if task["stage"] == "geant4")
     assert status(graph, "reconstruct", "geant4") == {TODO: 4}
+    assert status(graph, "reconstruct", "geant4_2") == {TODO: 4}
     assert all(task["why"].endswith("is made again") for task in graph.list
-               if task["stage"] == "reconstruct" and task["simulator"] == "geant4")
+               if task["stage"] == "reconstruct" and task["simulator"] in ("geant4", "geant4_2"))
     measured = dict((task["simulator"], task) for task in graph.list
                     if task["stage"] == "observables")
     assert measured["geant4"]["status"] == TODO and measured["geant4"]["redo"]
+    assert measured["geant4_2"]["status"] == TODO and measured["geant4_2"]["redo"]
     # CaloClouds3's measurements are up to date, so its tasks aren't needed
     assert measured["caloclouds3_paper"]["status"] == DONE
     assert status(graph, "models") == {UNNEEDED: 4}
@@ -207,22 +219,23 @@ def test_measurements_out_of_date_need_their_reconstructions(fetched, monkeypatc
     monkeypatch.setenv("FASINATE_CONFIG", fetched.config + ":" + override)
     graph = Graph(make_plan()).find_status()
     assert [task["why"] for task in graph.list if task["stage"] == "observables"] == [
-        "the settings of energy changed"] * 2
-    assert status(graph, "geant4") == status(graph, "models") == {TODO: 4}
-    assert status(graph, "reconstruct") == {TODO: 8}
+        "the settings of energy changed"] * 3
+    assert status(graph, "geant4") == {TODO: 8}
+    assert status(graph, "models") == {TODO: 4}
+    assert status(graph, "reconstruct") == {TODO: 12}
 
 
 def test_whichever_stages_run_what_isnt_needed_isnt_made(fetched):
     """The stage scripts (e.g. simulate_geant4.sh) make only what is needed
     too, unless forced."""
     graph = Graph(make_plan(stages=["geant4"])).find_status()
-    assert status(graph, "geant4") == {UNNEEDED: 4}
-    assert status(graph, "reconstruct") == {UNSELECTED: 8}
+    assert status(graph, "geant4") == {UNNEEDED: 8}
+    assert status(graph, "reconstruct") == {UNSELECTED: 12}
     # Not blocked, though their simulations aren't there
     graph = Graph(make_plan(stages=["reconstruct"])).find_status()
-    assert status(graph, "reconstruct") == {UNNEEDED: 8}
+    assert status(graph, "reconstruct") == {UNNEEDED: 12}
     graph = Graph(make_plan(stages=["geant4"], force=["geant4"])).find_status()
-    assert status(graph, "geant4") == {TODO: 4}
+    assert status(graph, "geant4") == {TODO: 8}
 
 
 def test_the_inputs_and_a_simulation_given_are_made_whatever_needs_them(fetched):
@@ -233,7 +246,7 @@ def test_the_inputs_and_a_simulation_given_are_made_whatever_needs_them(fetched)
         os.remove(path)
     graph.find_status()
     assert status(graph, "generate") == {TODO: 3}
-    assert status(graph, "geant4") == {UNNEEDED: 4}
+    assert status(graph, "geant4") == {UNNEEDED: 8}
     simulation = outputs(graph, "geant4")[0]
     touch(simulation)
     graph = Graph(make_plan(stages=["reconstruct"], simulations=[simulation])).find_status()
@@ -245,7 +258,7 @@ def test_with_nothing_measured_a_stage_run_on_its_own_makes_all_of_it(configured
     graph = Graph(make_plan())
     touch(*outputs(graph, "generate"))
     graph = Graph(make_plan(stages=["geant4"])).find_status()
-    assert status(graph, "geant4") == {TODO: 4}
+    assert status(graph, "geant4") == {TODO: 8}
 
 
 def test_simulations_deleted_once_reconstructed_arent_made_again(configured, monkeypatch):
@@ -256,14 +269,14 @@ def test_simulations_deleted_once_reconstructed_arent_made_again(configured, mon
     for path in outputs(graph, "geant4"):
         os.remove(path)
     graph = Graph(make_plan()).find_status()
-    assert status(graph, "geant4") == {UNNEEDED: 4}
+    assert status(graph, "geant4") == {UNNEEDED: 8}
     assert status(graph, "models") == {DONE: 4}
-    assert status(graph, "reconstruct") == {DONE: 8}
-    assert status(graph, "observables") == {DONE: 2}
+    assert status(graph, "reconstruct") == {DONE: 12}
+    assert status(graph, "observables") == {DONE: 3}
     for task in graph.list:
         if task["stage"] == "geant4":
-            assert task["why"] == "what it is for is done: the reconstruction of the geant4 " \
-                "simulation of %s" % task["name"]
+            assert task["why"] == "what it is for is done: the reconstruction of the %s " \
+                "simulation of %s" % (task["simulator"], task["name"])
 
 
 def test_only_the_inputs_named(configured):
@@ -271,49 +284,92 @@ def test_only_the_inputs_named(configured):
     inputs = outputs(graph, "generate")
     touch(*inputs)
     graph = Graph(make_plan(stages=["geant4"], files=[inputs[1]])).find_status()
-    selected = [task["input_file"] for task in graph.list
+    selected = [(task["simulator"], task["input_file"]) for task in graph.list
                 if task["stage"] == "geant4" and task["status"] == TODO]
-    assert selected == [inputs[1]]
+    assert selected == [("geant4", inputs[1]), ("geant4_2", inputs[1])]
     with pytest.raises(PlanError, match="isn't an input of any scenario"):
         make_plan(files=[os.path.join(configured.tmp, "test.yaml")])
 
 
+def test_inputs_given_directly_are_simulated_once(configured):
+    """Simulated as the scenario custom, which nothing measures, so not as
+    Geant4's second sample."""
+    given = os.path.join(configured.tmp, "mine.slcio")
+    touch(given)
+    graph = Graph(make_plan(stages=["geant4"], inputs=[given])).find_status()
+    assert [(task["simulator"], task["seed"]) for task in graph.list
+            if task["stage"] == "geant4" and task["scenario"] == "custom"] == [("geant4", None)]
+
+
 def test_each_seed_of_a_scenario_is_a_simulation_of_its_own(configured, monkeypatch):
     """di_photon's input is simulated once with each of its simulation_seeds,
-    and everything made from each simulation carries its seed on."""
+    and everything made from each simulation carries its seed on; the second
+    Geant4 sample has seeds of its own, the first's plus 1000000."""
     monkeypatch.setenv("DDML_SOURCE_DIR", "/ddml")  # where the models' steering file is
     graph = Graph(make_plan())
     simulations = [task for task in graph.list
                    if task["stage"] in ("geant4", "models") and task["scenario"] == "di_photon"]
     assert sorted((task["simulator"], task["seed"]) for task in simulations) == [
-        ("caloclouds3_paper", 1), ("caloclouds3_paper", 2), ("geant4", 1), ("geant4", 2)]
+        ("caloclouds3_paper", 1), ("caloclouds3_paper", 2), ("geant4", 1), ("geant4", 2),
+        ("geant4_2", 1000001), ("geant4_2", 1000002)]
     for task in simulations:
         assert task["name"].endswith("_seed0_simseed%d" % task["seed"])
         assert os.path.basename(task["output"]).startswith(task["name"] + ".")
         assert task["params"]["log"].endswith(task["name"] + ".log")
         command = BY_NAME[task["stage"]].command(task, "/detector.xml", "/out/.partial.root")
         assert command[-1] == "--random.seed=%d" % task["seed"]
-    # single_photon's inputs are simulated once, with ddsim's own seed
+    # single_photon's inputs are simulated once, with ddsim's own seed, and
+    # again for the second sample, with the seed 1000000
     for task in graph.list:
         if task["stage"] == "geant4" and task["scenario"] == "single_photon":
-            assert task["seed"] is None and "_simseed" not in task["output"]
             command = BY_NAME["geant4"].command(task, "/detector.xml", "/out/.partial.root")
-            assert not any(arg.startswith("--random.seed") for arg in command)
+            if task["simulator"] == "geant4":
+                assert task["seed"] is None and "_simseed" not in task["output"]
+                assert not any(arg.startswith("--random.seed") for arg in command)
+            else:
+                assert task["seed"] == 1000000
+                assert task["output"].endswith("_simseed1000000.edm4hep.root")
+                assert command[-1] == "--random.seed=1000000"
     for task in graph.list:
         if task["stage"] == "reconstruct":
             simulation = graph.by_key[task["needs"][0]]
             assert task["seed"] == simulation["seed"]
             assert task["output"].endswith(simulation["name"] + "_REC.edm4hep.root")
-    measuring = [task for task in graph.list if task["stage"] == "observables"]
-    for task in measuring:
-        assert task["params"]["seeds"] == {"single_photon": [None, None], "di_photon": [1, 2]}
+    measuring = dict((task["simulator"], task) for task in graph.list
+                     if task["stage"] == "observables")
+    for name, seeds in (("geant4", {"single_photon": [None, None], "di_photon": [1, 2]}),
+                        ("caloclouds3_paper", {"single_photon": [None, None],
+                                               "di_photon": [1, 2]}),
+                        ("geant4_2", {"single_photon": [1000000, 1000000],
+                                      "di_photon": [1000001, 1000002]})):
+        task = measuring[name]
+        assert task["params"]["seeds"] == seeds
         assert [os.path.basename(f) for f in task["params"]["files"]["di_photon"]] == [
             "diphoton_en20_sep90_x0_z70_r10_seed0_simseed%d_REC.edm4hep.root" % seed
-            for seed in (1, 2)]
+            for seed in seeds["di_photon"]]
+    assert measuring["geant4_2"]["params"]["simulator"] == {
+        "name": "geant4_2", "label": "Geant4 (2nd sample)", "color": "#1a1a1a",
+        "linestyle": "--", "compact_file": measuring["geant4"]["params"]["simulator"][
+            "compact_file"]}
+    # Its simulations are the geant4 stage's, run as the first's are, which
+    # say which they are
+    second = next(task for task in simulations if task["simulator"] == "geant4_2")
+    first = next(task for task in simulations if task["simulator"] == "geant4"
+                 and task["seed"] == second["seed"] - 1000000)
+    stage = BY_NAME["geant4"]
+    assert stage.command(second, "/d.xml", "/o.root")[:-1] == \
+        stage.command(first, "/d.xml", "/o.root")[:-1]
+    assert stage.describe(second) == "the second Geant4 simulation of %s" % second["name"]
+    assert stage.header(second) == [
+        "# ddml-bench geant4: Geant4's second sample (geant4_2) on di_photon"]
+    assert (stage.job_name(second), stage.job_name(first)) == ("geant4_2", "geant4")
 
 
 @pytest.mark.parametrize("seeds, message", [
     ("[0, 1]", "simulation_seeds should be a list of ddsim's random seeds"),
+    # (the second Geant4 sample takes each seed plus 1000000)
+    ("[1, 1000000]", "below 1000000 .* the second Geant4 sample is simulated with each plus "
+                     "1000000"),
     ("3", "simulation_seeds should be a list of ddsim's random seeds"),
     ("[]", "simulation_seeds should be a list of ddsim's random seeds"),
     ("[1, 2, 1]", "simulation_seeds has a seed twice: 1, 2, 1"),
@@ -382,7 +438,9 @@ def test_inputs_made_elsewhere_are_done_and_each_simulated_with_its_own_seed(tau
                    if task["stage"] in ("geant4", "models") and task["scenario"] == "tau_pairs"]
     assert sorted((task["simulator"], task["name"], task["seed"]) for task in simulations) == [
         (simulator, name, seed) for simulator in ("caloclouds3_paper", "geant4")
-        for name, seed in (("taus_a_simseed42", 42), ("taus_b_simseed1764", 1764))]
+        for name, seed in (("taus_a_simseed42", 42), ("taus_b_simseed1764", 1764))] + [
+        ("geant4_2", "taus_a_simseed1000042", 1000042),
+        ("geant4_2", "taus_b_simseed1001764", 1001764)]
     for task in simulations:
         command = BY_NAME[task["stage"]].command(task, "/detector.xml", "/out/.partial.root")
         assert command[-1] == "--random.seed=%d" % task["seed"]
@@ -393,7 +451,8 @@ def test_inputs_made_elsewhere_are_done_and_each_simulated_with_its_own_seed(tau
     measuring = [task for task in graph.list if task["stage"] == "observables"]
     for task in measuring:
         assert task["params"]["observables"]["pi0"]["scenarios"] == ["tau_pairs"]
-        assert task["params"]["seeds"]["tau_pairs"] == [42, 1764]
+        assert task["params"]["seeds"]["tau_pairs"] == (
+            [1000042, 1001764] if task["simulator"] == "geant4_2" else [42, 1764])
     # Forcing the generate stage remakes the guns' inputs, not these
     graph = Graph(make_plan(force=["generate"])).find_status()
     assert collections.Counter((task["scenario"], task["status"]) for task in graph.list
@@ -526,18 +585,23 @@ def test_each_segment_is_an_input_simulated_with_the_seeds_of_its_whole(segmente
         assert task["params"]["whole"] == os.path.join(data, "input_single_particle_gun",
                                                        whole + ".slcio")
     # Each segment simulated with the seeds of its whole input: di_photon's
-    # each with every seed, tau_pairs' each with its file's
-    names = sorted((task["scenario"], task["name"], task["seed"]) for task in graph.list
+    # each with every seed, tau_pairs' each with its file's (and by Geant4's
+    # second sample with those plus 1000000)
+    names = sorted((task["simulator"], task["scenario"], task["name"], task["seed"])
+                   for task in graph.list
                    if task["stage"] == "geant4" and task["scenario"] != "single_photon")
+    samples = (("geant4", 0), ("geant4_2", 1000000))
     assert names == sorted(
-        [("di_photon", "%s_seg%dof3_simseed%d" % (whole, i, s), s) for i in (1, 2, 3)
-         for s in (1, 2)]
-        + [("tau_pairs", "taus_%s_seg%dof3_simseed%d" % (n, i, s), s)
-           for n, s in (("a", 42), ("b", 1764)) for i in (1, 2, 3)])
+        [(simulator, "di_photon", "%s_seg%dof3_simseed%d" % (whole, i, s + plus), s + plus)
+         for simulator, plus in samples for i in (1, 2, 3) for s in (1, 2)]
+        + [(simulator, "tau_pairs", "taus_%s_seg%dof3_simseed%d" % (n, i, s + plus), s + plus)
+           for simulator, plus in samples for n, s in (("a", 42), ("b", 1764))
+           for i in (1, 2, 3)])
     for task in graph.list:
         if task["stage"] == "observables":
-            assert task["params"]["seeds"]["di_photon"] == [1, 2] * 3
-            assert task["params"]["seeds"]["tau_pairs"] == [42] * 3 + [1764] * 3
+            plus = 1000000 if task["simulator"] == "geant4_2" else 0
+            assert task["params"]["seeds"]["di_photon"] == [1 + plus, 2 + plus] * 3
+            assert task["params"]["seeds"]["tau_pairs"] == [42 + plus] * 3 + [1764 + plus] * 3
     # Forcing the generate stage remakes the gun's segments, not those made elsewhere
     graph = Graph(make_plan(force=["generate"])).find_status()
     assert collections.Counter((task["scenario"], task["status"]) for task in graph.list
@@ -581,6 +645,14 @@ def test_whole_files_left_unsplit_stop_the_plan(segmented):
                                   name + "_simseed1_REC.edm4hep.root")
     touch(reconstruction)
     with pytest.raises(PlanError, match="1 file\\(s\\) made from whole inputs"):
+        make_plan()
+    # and Geant4's second sample's, with its own seeds
+    os.remove(reconstruction)
+    second = os.path.join(data, "sim_output", "di_photon", "geant4_2",
+                          name + "_simseed1000002.edm4hep.root")
+    touch(second)
+    with pytest.raises(PlanError, match="e.g. sim_output/di_photon/geant4_2/"
+                                        "%s_simseed1000002.edm4hep.root" % name):
         make_plan()
 
 

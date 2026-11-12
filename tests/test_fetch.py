@@ -52,16 +52,17 @@ def fetching(bench, published, md5=None, extra=""):
 def test_a_fresh_data_folder_fetches_what_is_published(bench, published):
     fetching(bench, published)
     status, output = bench.run("pipeline.sh", "--dry-run")
-    assert "would fetch 5 published file(s)" in output, output
+    # (Geant4's second sample's measurements too)
+    assert "would fetch 6 published file(s)" in output, output
     # The inputs and measurements are fetched, nothing is simulated or
     # reconstructed for them, and the plots are made
-    assert "would run 6 task(s)" in output, output
+    assert "would run 7 task(s)" in output, output
     assert "  generate          0        3      0" in output, output
-    assert "  observables       0        2      0" in output, output
+    assert "  observables       0        3      0" in output, output
     assert not os.path.exists(bench.path("observables"))
 
     status, output = bench.run("pipeline.sh")
-    assert "fetching 5 published file(s)" in output and "made 1 of 1" in output, output
+    assert "fetching 6 published file(s)" in output and "made 1 of 1" in output, output
     for folder in ("input_single_particle_gun", "observables"):
         for name in bench.files(folder):
             if name.endswith((".slcio", ".npz")):
@@ -70,7 +71,7 @@ def test_a_fresh_data_folder_fetches_what_is_published(bench, published):
     assert bench.files("input_single_particle_gun") == sorted(
         name + ".slcio" for name in INPUTS + [DI_PHOTON_INPUT])
     assert sorted({row["simulator"] for row in read_metrics(
-        bench.path("observables", "plots", "metrics.csv"))}) == ["caloclouds3_paper"]
+        bench.path("observables", "plots", "metrics.csv"))}) == ["caloclouds3_paper", "geant4_2"]
     status, output = bench.run("pipeline.sh")
     assert "everything selected is done" in output and "fetching" not in output, output
 
@@ -82,16 +83,17 @@ def test_a_fresh_data_folder_fetches_what_is_published(bench, published):
     status, output = bench.run("pipeline.sh")
     assert "made 10 of 10" in output and "fetching" not in output, output
     assert sorted({row["simulator"] for row in read_metrics(
-        bench.path("observables", "plots", "metrics.csv"))}) == ["another", "caloclouds3_paper"]
+        bench.path("observables", "plots", "metrics.csv"))}) == [
+        "another", "caloclouds3_paper", "geant4_2"]
 
 
 def test_slurm_fetches_on_the_login_node_and_submits_the_rest(bench, published):
     fetching(bench, published)
     status, output = bench.run("slurm_pipeline.sh", "--dry-run")
-    assert "would fetch 5 published file(s)" in output, output
+    assert "would fetch 6 published file(s)" in output, output
     assert "would submit 1 job(s)" in output and "plot" in output, output
     status, output = bench.run("slurm_pipeline.sh")
-    assert "fetching 5 published file(s)" in output, output
+    assert "fetching 6 published file(s)" in output, output
     assert "submitting 1 job(s)" in output, output
     plot, = bench.slurm_jobs()
     assert plot["state"] == "COMPLETED" and plot["after"] == []
@@ -105,7 +107,7 @@ def test_published_measurements_of_other_settings_arent_used(bench, published):
         "energy differ from this configuration's" in output, output
     # The inputs are still fetched, and everything else made from them
     assert "would fetch 3 published file(s)" in output, output
-    assert "would run 22 task(s)" in output, output
+    assert "would run 31 task(s)" in output, output
 
 
 def test_published_inputs_made_otherwise_arent_used(bench, published):
@@ -136,7 +138,7 @@ def test_measurements_of_other_inputs_than_yours_arent_used(bench, published):
 def test_what_a_run_makes_itself_isnt_fetched(bench, published):
     fetching(bench, published)
     status, output = bench.run("pipeline.sh", "--dry-run", "--no-fetch")
-    assert "would fetch" not in output and "would run 22 task(s)" in output, output
+    assert "would fetch" not in output and "would run 31 task(s)" in output, output
     status, output = bench.run("pipeline.sh", "--dry-run", "-f", "observables")
     assert "would fetch 3 published file(s)" in output, output
     # -n N: the test sample's measurements aren't published, its inputs are
@@ -255,7 +257,7 @@ def test_published_measurements_of_a_model_described_otherwise_arent_used(bench,
                                                           "\nname: CC3\n")
                      .replace('color: "#1f6fb4"', 'color: "#000000"'))
     status, output = bench.run("pipeline.sh", "--dry-run")
-    assert "would fetch 5 published file(s)" in output, output
+    assert "would fetch 6 published file(s)" in output, output
     # ... but anything else does, e.g. a setting its own code would read
     with open(path, "w") as stream:
         stream.write(text + "energy_rescale: 1.01\n")
@@ -263,7 +265,7 @@ def test_published_measurements_of_a_model_described_otherwise_arent_used(bench,
     assert "the published caloclouds3_paper.npz (Zenodo record 123) isn't used, as the model " \
         "was simulated with another description than models/caloclouds3_paper.yaml" in output, \
         output
-    assert "would fetch 4 published file(s)" in output, output
+    assert "would fetch 5 published file(s)" in output, output
 
 
 def test_a_manifest_sum_read_as_a_number_is_caught(bench, published):

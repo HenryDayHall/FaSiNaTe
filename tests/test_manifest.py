@@ -30,14 +30,14 @@ def test_the_records_of_a_data_folder(bench):
     shutil.copy(bench.path("observables", "geant4.npz"), bench.path("observables", "geant4_n2.npz"))
     out = os.path.join(bench.tmp, "zenodo")
     status, output = bench.run("scripts/ddml-bench", "manifest", "--dry-run")
-    assert "essential: 5 files" in output and "input_truth__di_photon: 1 files" in output, output
+    assert "essential: 6 files" in output and "input_truth__di_photon: 1 files" in output, output
 
     status, output = bench.run("scripts/ddml-bench", "manifest", "--out", out, "--stage")
     assert "warning" not in output, output
     simulations = ["%s__%s__%s" % (stage, scenario, simulator)
                    for stage in ("sim_output", "rec_output")
                    for scenario in ("single_photon", "di_photon")
-                   for simulator in ("geant4", "caloclouds3_paper")]
+                   for simulator in ("geant4", "geant4_2", "caloclouds3_paper")]
     assert sorted(os.listdir(out)) == sorted(
         ["essential", "input_truth__single_photon", "input_truth__di_photon", "other"]
         + simulations)
@@ -50,7 +50,7 @@ def test_the_records_of_a_data_folder(bench):
         "pipeline needs"
     by_name = dict((entry["name"], entry) for entry in essential["files"])
     assert sorted(by_name) == sorted([name + ".slcio" for name in INPUTS + [DI_PHOTON_INPUT]]
-                                     + ["caloclouds3_paper.npz", "geant4.npz"])
+                                     + ["caloclouds3_paper.npz", "geant4.npz", "geant4_2.npz"])
     for name, entry in by_name.items():
         source = bench.path(entry["path"])
         assert entry["sha256"] == digest(source) and entry["size"] == os.path.getsize(source)
@@ -88,6 +88,12 @@ def test_the_records_of_a_data_folder(bench):
     assert len(geant4["stack"]["ildconfig"]) == 40
     assert essential["stack"] == dict((k, v) for k, v in geant4["stack"].items()
                                       if k != "steering")
+    # Geant4's second sample, simulated as Geant4 is, with seeds of its own
+    second = by_name["geant4_2.npz"]
+    assert second["simulator"] == "geant4_2" and second["label"] == "Geant4 (2nd sample)"
+    assert second["up_to_date"] is True and second["stack"] == geant4["stack"]
+    assert [r["seed"] for r in second["reconstructions"]["di_photon"]] == [1000001, 1000002]
+    assert [r["seed"] for r in second["reconstructions"]["single_photon"]] == [1000000] * 2
     caloclouds3 = by_name["caloclouds3_paper.npz"]
     assert caloclouds3["stack"]["presets"] == "CC3_BARREL"
     # What the model is, by its logs and by its description now: DDML's own
@@ -105,6 +111,8 @@ def test_the_records_of_a_data_folder(bench):
     assert sorted(catalogue) == sorted(os.listdir(out))
     assert catalogue["rec_output__di_photon__geant4"]["title"] == \
         "FaSiNaTe benchmark data: Geant4 reconstructions, di_photon"
+    assert catalogue["sim_output__single_photon__geant4_2"]["title"] == \
+        "FaSiNaTe benchmark data: Geant4 (2nd sample) simulations, single_photon"
     assert catalogue["input_truth__di_photon"]["paths"] == [
         "input_single_particle_gun/%s.h5" % DI_PHOTON_INPUT]
 

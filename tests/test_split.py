@@ -60,8 +60,9 @@ def test_whole_data_is_split_into_segments_that_measure_the_same(whole):
     bench = whole
     # The pipeline won't make the segments anew while the whole data is there
     status, output = bench.run("pipeline.sh", "--dry-run", check=False)
+    # (of Geant4, its second sample and the model)
     assert status != 0 and "the inputs of di_photon and tau_pairs are in segments now " \
-        "(input.segments), but 19 file(s) made from whole inputs before aren't split into " \
+        "(input.segments), but 27 file(s) made from whole inputs before aren't split into " \
         "them yet" in output and "split them with scripts/split_data.py first" in output, output
 
     # Without --apply, nothing changes
@@ -80,8 +81,8 @@ def test_whole_data_is_split_into_segments_that_measure_the_same(whole):
 
     # Split
     status, output = bench.run("scripts/split_data.py", "--apply")
-    assert "split_data: split 20 file(s)" in output and "moved 52 file(s)" in output, output
-    assert "copied 4 measurement and metrics file(s) to .unsplit/observables" in output, output
+    assert "split_data: split 28 file(s)" in output and "moved 76 file(s)" in output, output
+    assert "copied 5 measurement and metrics file(s) to .unsplit/observables" in output, output
     unsplit = bench.path(".unsplit")
     gun = "input_single_particle_gun"
     assert bench.files(gun) == sorted(
@@ -142,10 +143,10 @@ def test_whole_data_is_split_into_segments_that_measure_the_same(whole):
 
     # The measurements are made again from the segments, and nothing else
     status, output = bench.run("pipeline.sh", "--dry-run")
-    assert "would run 3 task(s)" in output and "the reconstructed files of di_photon changed" \
+    assert "would run 4 task(s)" in output and "the reconstructed files of di_photon changed" \
         in output, output
     status, output = bench.run("pipeline.sh")
-    assert "made 3 of 3" in output, output
+    assert "made 4 of 4" in output, output
     # and they measure the same: the metrics are those of the whole data
     assert open(bench.path("observables", "plots", "metrics.csv")).read() == bench.metrics
     assert open(bench.path(".unsplit", "observables", "plots", "metrics.csv")).read() == \
@@ -157,6 +158,12 @@ def test_whole_data_is_split_into_segments_that_measure_the_same(whole):
         assert list(data["di_photon__seeds"]) == [1, 2] * 3
         assert list(data["tau_pairs__seeds"]) == [42] * 3 + [1764] * 3
         assert list(data["tau_pairs__n_events"]) == [4] * 6
+    # Geant4's second sample's segments too, with its own seeds
+    with np.load(bench.path("observables", "geant4_2.npz")) as data:
+        assert list(data["di_photon__files"]) == [
+            "rec_output/di_photon/geant4_2/%s_seg%dof3_simseed%d_REC.edm4hep.root"
+            % (DI_PHOTON, i, seed) for i in (1, 2, 3) for seed in (1000001, 1000002)]
+        assert list(data["tau_pairs__seeds"]) == [1000042] * 3 + [1001764] * 3
 
     # Run again, it has nothing left to do
     status, output = bench.run("scripts/split_data.py", "--apply")
@@ -176,11 +183,11 @@ def test_whole_data_is_split_into_segments_that_measure_the_same(whole):
         return result.stdout, read_csv(out)
 
     output, jobs = step_times(bench.data)
-    assert "skipped    48: split from a whole job's output by split_data.py" in output, output
+    assert "skipped    72: split from a whole job's output by split_data.py" in output, output
     assert {(job["step"], job["scenario"]) for job in jobs} == {("2", "single_photon"),
                                                                 ("3", "single_photon")}
     output, jobs = step_times(unsplit)
-    assert len([job for job in jobs if job["scenario"] == "di_photon"]) == 8, output
+    assert len([job for job in jobs if job["scenario"] == "di_photon"]) == 12, output
 
     # What would be published: the segments' inputs, and nothing of .unsplit
     out = os.path.join(bench.tmp, "records")
@@ -249,8 +256,9 @@ def test_what_doesnt_split_cleanly_is_left_as_it_is(bench):
     with open(os.path.join(folder, DI_PHOTON + "_seg2of3_simseed2.edm4hep.root"), "w") as stream:
         json.dump(dict(simulation, events=simulation["events"][10:20]), stream)
     os.remove(leftover)
+    # (with Geant4's second sample's, which --only geant4 left whole)
     status, output = bench.run("scripts/split_data.py", "--apply")
-    assert "split 2 file(s)" in output and "with 1 of their segments there already, checked" \
+    assert "split 4 file(s)" in output and "with 1 of their segments there already, checked" \
         in output, output
     assert bench.files("sim_output", "di_photon", "geant4") == sorted(
         "%s_seg%dof3_simseed%d%s" % (DI_PHOTON, i, seed, ending) for i in (1, 2, 3)
@@ -259,7 +267,7 @@ def test_what_doesnt_split_cleanly_is_left_as_it_is(bench):
     # are done, and the rest is to make
     status, output = bench.run("pipeline.sh", "--dry-run")
     assert "  generate          3      2       0          0            0\n" \
-        "  geant4            6      2       0          0            0" in output, output
+        "  geant4           12      4       0          0            0" in output, output
 
 
 def test_a_fresh_data_folder_takes_the_inputs_in_segments(bench):
@@ -273,14 +281,15 @@ def test_a_fresh_data_folder_takes_the_inputs_in_segments(bench):
     status, output = bench.run("scripts/split_data.py", "--apply")
     assert "split 2 file(s)" in output and "moved 2 file(s)" in output, output
     status, output = bench.run("pipeline.sh")
-    # 5 inputs made, 14 simulations by each simulator, each reconstructed, 2
-    # measurements and the plots
-    assert "made 64 of 64" in output, output
+    # 5 inputs made, 14 simulations by each simulator (Geant4's second sample
+    # too), each reconstructed, 3 measurements and the plots
+    assert "made 93 of 93" in output, output
     assert bench.files("input_single_particle_gun").count(DI_PHOTON + "_seg3of3.h5") == 1
     rows = read_csv(bench.path("observables", "plots", "metrics.csv"))
     assert {row["observable"] for row in rows} >= {"photon_separation", "pi0"}
     # The JS of the separation between seeds, each of its three segments
-    js, = [row for row in rows if row["observable"] == "photon_separation"]
+    js, = [row for row in rows if row["observable"] == "photon_separation"
+           and row["metric"] == "JS" and row["simulator"] == "caloclouds3_paper"]
     assert float(js["uncertainty"]) > 0
 
 

@@ -137,6 +137,17 @@ def test_a_model_runs_with_presets_or_model_configurations(tmp_path, monkeypatch
     assert ddml_configs.option(dict(reversed(list(GAN.items())))) == ddml_configs.option(GAN)
 
 
+@pytest.mark.parametrize("name, what", [("geant4", "the Geant4 reference"),
+                                        ("geant4_2", "the second Geant4 sample")])
+def test_a_model_cant_be_named_after_geant4(tmp_path, monkeypatch, name, what):
+    describe(tmp_path, monkeypatch)
+    folder = tmp_path / "models"
+    (folder / ("%s.yaml" % name)).write_text((folder / "model.yaml").read_text())
+    with pytest.raises(models.ModelError, match="'%s' names %s, so it can't be a model name"
+                       % (name, what)):
+        models.load_model(name)
+
+
 @pytest.mark.parametrize("ddml, settings, message", [
     ({"weights": "models/x.pt"}, {},
      "ddml should have one of these: presets, DDML's own"),
@@ -596,11 +607,11 @@ def test_a_compiled_model_is_its_python_twins_closure_test(bench):
     assert twin["models"][0]["plugin"].startswith(
         "CaloCloudsTwoAngleModelPolyhedraBarrelPyEmbeddedModel")
 
-    # Both are compared with Geant4 (as the bench's model is), and with each
-    # other in closure/
+    # Both are compared with Geant4 (as the bench's model and Geant4's second
+    # sample are), and with each other in closure/
     plots = bench.path("observables", "plots")
     assert {row["simulator"] for row in read_csv(os.path.join(plots, "metrics.csv"))} == {
-        "caloclouds3_paper", "caloclouds3_recompiled", "caloclouds3_libtorch"}
+        "caloclouds3_paper", "caloclouds3_recompiled", "caloclouds3_libtorch", "geant4_2"}
     closure = os.path.join(plots, "closure", "caloclouds3_libtorch")
     rows = read_csv(os.path.join(closure, "metrics.csv"))
     assert rows and {row["simulator"] for row in rows} == {"caloclouds3_libtorch"}

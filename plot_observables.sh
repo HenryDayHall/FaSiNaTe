@@ -3,8 +3,10 @@
 # the simulators that have it on the same axes, as in the shower-profile figures
 # of the benchmark paper: Geant4 as a grey filled histogram, each model as a
 # line with its statistical uncertainty, and each model's relative deviation
-# from Geant4 below. The legend gives each model's distance from Geant4 (the
-# observable's metric in the configuration). The reconstructed energy gives
+# from Geant4 below. Geant4's second sample (geant4_2: Geant4 again, with other
+# seeds) is drawn as a model is, a black dashed line, so its distance from
+# Geant4 is Geant4's own. The legend gives each model's distance from Geant4
+# (the observable's metric in the configuration). The reconstructed energy gives
 # the energy linearity (mu90 against the true energy, fitted with a straight
 # line) and resolution (sigma90/mu90, fitted with a + b/sqrt(E) + c/E), from
 # the central 90% of the events at each energy. The intrinsic angles give the
@@ -15,8 +17,8 @@
 #
 # Usage: ./plot_observables.sh [options] [SIMULATOR ...]
 #
-#   SIMULATOR          plot only these simulators, and Geant4 (default: every
-#                      measurement found)
+#   SIMULATOR          plot only these simulators, and Geant4 with its second
+#                      sample (default: every measurement found)
 #   -n, --events N     plot the measurements of the first N events
 #                      (<simulator>_n<N>.npz)
 #   -d, --dir DIR      the folder with the .npz files (default: observables in
@@ -48,8 +50,8 @@
 # kind of node, pareto_js_<node>__<scenario>.<format> and
 # pareto_wasserstein_<node>__<scenario>.<format>: every metric on one axis, a
 # marker each, each model's JS or Wasserstein distance (or the chi^2) from
-# Geant4, divided by the models' mean, against its time per event, with
-# pareto.csv. dashboard.html has
+# Geant4, divided by the models' mean, against its time per event, and Geant4
+# at its own distance, its second sample's, at its time, with pareto.csv. dashboard.html has
 # every figure in one page, with a menu to show or hide each model in all of
 # them, or in one by clicking its legend entry. It runs with this shell's
 # python3 if that has numpy and matplotlib, and otherwise in the environment

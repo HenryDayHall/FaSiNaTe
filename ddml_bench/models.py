@@ -1,4 +1,6 @@
-"""The simulators: Geant4, the reference, and the models described in models/.
+"""The simulators: Geant4, the reference, with its second sample (Geant4 again,
+with other seeds, whose distance from the first is Geant4's own), and the
+models described in models/.
 
 Each model has a description, models/<name>.yaml (see models/caloclouds3.yaml
 for a commented one); its file name names the model in commands and folders.
@@ -31,14 +33,16 @@ import re
 
 from .config import REPO_DIR
 from .ddml_configs import ModelConfigError, check as check_model_config
-from .layout import GEANT4, LayoutError, check_name
+from .layout import GEANT4, SECOND_GEANT4, LayoutError, check_name
 
 MODELS_DIR = os.path.join(REPO_DIR, "models")
 
-# How the plots draw Geant4, and the models without plot settings in their
-# description: the fixed order of the paper's colours, each with a line style
-# of its own.
+# How the plots draw Geant4, its second sample (as a line, nearly black and
+# dashed, over the first's grey histogram), and the models without plot
+# settings in their description: the fixed order of the paper's colours, each
+# with a line style of its own.
 GEANT4_STYLE = {"label": "Geant4", "color": "#9a9a9a", "linestyle": "-"}
+SECOND_GEANT4_STYLE = {"label": "Geant4 (2nd sample)", "color": "#1a1a1a", "linestyle": "--"}
 FALLBACK_STYLES = [("#e8710a", "-"), ("#1f6fb4", "--"), ("#2a9a3a", "-."),
                    ("#a8329e", ":"), ("#0095aa", (0, (5, 1, 1, 1, 1, 1)))]
 # What of a description only the plots use (its label, its style, the model it
@@ -81,9 +85,10 @@ def load_model(name):
         check_name(name, "model")
     except LayoutError as error:
         raise ModelError("%s: %s" % (source, error))
-    if name == GEANT4:
-        raise ModelError("%s: '%s' names the Geant4 reference, so it can't be a model name"
-                         % (source, GEANT4))
+    if name in (GEANT4, SECOND_GEANT4):
+        raise ModelError("%s: '%s' names %s, so it can't be a model name"
+                         % (source, name, "the Geant4 reference" if name == GEANT4
+                            else "the second Geant4 sample"))
     try:
         import yaml
     except ImportError:
@@ -214,6 +219,14 @@ def load_models(names=None):
 def reference(config):
     """Geant4, as the models are described: its detector and how it is drawn."""
     return dict(GEANT4_STYLE, name=GEANT4, compact_file=config["geant4"]["compact"])
+
+
+def second_reference(config):
+    """Geant4's second sample (layout.SECOND_GEANT4), as the models are
+    described: Geant4 in Geant4's detector, drawn as a line of its own. The
+    geant4 stage simulates every input with it too, with seeds of its own
+    (layout.second_sample_seed())."""
+    return dict(SECOND_GEANT4_STYLE, name=SECOND_GEANT4, compact_file=config["geant4"]["compact"])
 
 
 # ---------------------------------------------------------------------------

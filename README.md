@@ -62,13 +62,13 @@ flowchart TD
 | Stage | Script | Reads | Writes (under `paths.data_dir`) |
 |---|---|---|---|
 | 1 | `generate_input.sh` | `scenarios` in the configuration | `input_single_particle_gun/*.slcio` (+ `.h5` truth); the physics samples, made elsewhere, are taken as they are from `input_physics_samples/` |
-| 2 | `simulate_geant4.sh` | scenario inputs | `sim_output/<scenario>/geant4/*.edm4hep.root` |
+| 2 | `simulate_geant4.sh` | scenario inputs | `sim_output/<scenario>/geant4/*.edm4hep.root`, and Geant4's second sample in `sim_output/<scenario>/geant4_2/` |
 | 3 | `simulate_models.sh` | scenario inputs, `models/*.yaml` | `sim_output/<scenario>/<model>/*.root` |
 | 4 | `reconstruct_simulation.sh` | everything in `sim_output/` | `rec_output/<scenario>/<simulator>/*_REC.edm4hep.root` |
 | 5 | `observables_from_reconstruction.sh` | finished reconstructions | `observables/<simulator>.npz` |
 | 6 | `plot_observables.sh` | `observables/*.npz` | `observables/plots/*.{pdf,png}`, `dashboard.html`, `metrics.csv`, `fits.csv` |
 
-Stages 2 and 3 are independent of each other; a "simulator" below means either Geant4 or one of the models. [`pipeline.sh`](#the-whole-pipeline-at-once) runs all six stages in one go, and on a slurm cluster [`slurm_pipeline.sh`](#the-whole-pipeline-at-once) runs them as jobs of one file each.
+Stages 2 and 3 are independent of each other; a "simulator" below means either Geant4 (`geant4`, or its second sample, `geant4_2`) or one of the models. [`pipeline.sh`](#the-whole-pipeline-at-once) runs all six stages in one go, and on a slurm cluster [`slurm_pipeline.sh`](#the-whole-pipeline-at-once) runs them as jobs of one file each.
 
 ## Quick start
 
@@ -112,13 +112,13 @@ Every script takes `--help`, and stages 1–5 also take `--dry-run`, showing wha
 | Stage | One task (job) for each | Waiting for |
 |---|---|---|
 | generate | input file still to make | |
-| geant4 | input still to simulate with Geant4 | the task making its input |
+| geant4 | input still to simulate with Geant4, and again for its second sample | the task making its input |
 | models | input and model still to simulate | the task making its input |
 | reconstruct | simulation still to reconstruct | the task simulating it |
 | observables | simulator whose measurements aren't up to date | the tasks reconstructing its simulations |
 | plot | (one task) | the measurement tasks |
 
-Try it first with [`configs/pipeline_test.yaml`](configs/pipeline_test.yaml), a very light test of every stage: two inputs of 10 photons each and one of 10 photon pairs, simulated with two seeds, in a data folder of its own, with short time limits. With the nine models in `models/`, that is 94 tasks (22 with CaloClouds3 alone).
+Try it first with [`configs/pipeline_test.yaml`](configs/pipeline_test.yaml), a very light test of every stage: two inputs of 10 photons each and one of 10 photon pairs in three segments, each simulated with two seeds, in a data folder of its own, with short time limits. With the four models in `models/`, and Geant4's second sample, that is 108 tasks (57 with one model).
 
 ```bash
 ./slurm_pipeline.sh --config configs/pipeline_test.yaml --dry-run  # what is done, and what would be submitted
@@ -237,13 +237,15 @@ These aren't published yet, so put them there by hand, then split each into its 
 
 Full Geant4 is the reference the models are compared with. `simulate_geant4.sh` runs `ddsim` with DDML's steering file but without DDML's fast simulation ([`scripts/ddsim_steer_geant4.py`](scripts/ddsim_steer_geant4.py)), so every other setting (physics list, crossing angle, filters, …) matches the model simulations, in the detector `geant4.compact`.
 
+Every input is simulated with Geant4 twice. The first simulation is the reference (`geant4`); the second (`geant4_2`) is the same in every way but the `ddsim` seed, which is the first's plus 1 000 000, or 1 000 000 where the first has `ddsim`'s own (single photons). The second sample is then reconstructed, measured and compared with the first as the models are, so its distance from Geant4 is Geant4's own: how far apart two Geant4 samples of the same events are, the statistical floor that the models' distances can be read against. The figures draw it as a black dashed line, "Geant4 (2nd sample)", with its distance in the legend, and the [Pareto fronts](#the-pareto-fronts) draw Geant4 at it. A scenario's `simulation_seeds` must therefore be below 1 000 000. Files given with `-i` are simulated once.
+
 ```bash
 ./simulate_geant4.sh --dry-run                    # what's left to do
 ./simulate_geant4.sh -s single_photon             # one scenario, all inputs in sequence
 ./simulate_geant4.sh --file <input>.slcio         # a single input
 ```
 
-Geant4 is slow, so on a slurm cluster use `slurm_pipeline.sh --stages geant4`, which submits one job per input (`slurm_simulate_geant4.sh` now runs just that):
+Geant4 is slow, so on a slurm cluster use `slurm_pipeline.sh --stages geant4`, which submits one job per input and sample (`slurm_simulate_geant4.sh` now runs just that):
 
 ```bash
 ./slurm_pipeline.sh --stages geant4                         # one job per input still to simulate
@@ -264,7 +266,7 @@ Before simulating, it checks that the DDML libraries, the `ddml` Python package 
 
 Both simulation scripts accept `-i FILE` to simulate an arbitrary input file (written under the scenario name `custom`), `--file FILE` to simulate just that one of the scenarios' inputs, and `-f/--force` to redo existing outputs (and make those that [nothing needs](#the-whole-pipeline-at-once), e.g. for measurements that are up to date). `ddsim` writes to a hidden file that is renamed only on success, so an output that exists is always complete. An input that isn't made yet is an error, unless nothing needs its simulation.
 
-A scenario with `simulation_seeds` (`di_photon` has `[1, 2, 3]`) has each of its inputs simulated once with each seed, passed to `ddsim` as `--random.seed`, each a task of its own named `<input>_simseed<S>`, so that the plots can take the spread over the seeds. With `one_seed_per_input: true`, each input is simulated once instead, with the seed in the same place in the list (one for each input, in order): `tau_pairs` simulates each of its three files with the seed it is named after, as `ddsim --random.seed=42` for `..._42.slcio`. Otherwise `ddsim` chooses the seed, and writes it in its log. The segments of an input ([1. Generate the inputs](#1-generate-the-inputs)) are each simulated with that input's seeds, and the figures put the segments of a seed together, as one sample.
+A scenario with `simulation_seeds` (`di_photon` has `[1, 2, 3]`) has each of its inputs simulated once with each seed, passed to `ddsim` as `--random.seed`, each a task of its own named `<input>_simseed<S>`, so that the plots can take the spread over the seeds. With `one_seed_per_input: true`, each input is simulated once instead, with the seed in the same place in the list (one for each input, in order): `tau_pairs` simulates each of its three files with the seed it is named after, as `ddsim --random.seed=42` for `..._42.slcio`. Otherwise `ddsim` chooses the seed, and writes it in its log. The segments of an input ([1. Generate the inputs](#1-generate-the-inputs)) are each simulated with that input's seeds, and the figures put the segments of a seed together, as one sample. Geant4's [second sample](#2-simulate-with-geant4) takes each of these seeds plus 1 000 000.
 
 ### 4. Reconstruct
 
@@ -306,7 +308,7 @@ The cellID encoding is read from the reconstructed file, or failing that from th
 
 ```bash
 ./plot_observables.sh                                     # everything found, to observables/plots/
-./plot_observables.sh caloclouds3                         # just this model against Geant4
+./plot_observables.sh caloclouds3                         # just this model (and Geant4's second sample) against Geant4
 ./plot_observables.sh -d copied/observables -o figures    # e.g. on a laptop, from copied .npz files
 ./plot_observables.sh --format pdf                        # default is pdf,png
 ./plot_observables.sh --no-dashboard                      # without dashboard.html
@@ -344,15 +346,15 @@ The energy figures and the π⁰ categories aren't distributions, so both versio
 
 - **The same scale for every metric.** The models' mean is at 1 for each one, which puts them all on one axis. A model has the same values on the CPU and the GPU nodes, as the mean is over every model measured, timed there or not. Every figure of a version also has the same range of distance, so the scenarios can be compared side by side. Neither the square root nor the division changes which models are on a front. The legend gives each metric's mean itself, so the Wasserstein distances can be read in mm, degrees or GeV.
 - **The time** is the summary's row of the scenario over all its inputs (input `all`): the mean of the inputs' mean wall-clock times per event, each input weighing the same, with its standard error. Every metric of a scenario has the same times, so each di-photon energy has the time of both energies. A model's metrics are drawn side by side, a few points apart about its time, so that they and their error bars don't hide each other.
-- **Geant4** is the grey circle at no distance, at its own time. Where it wasn't timed on the figure's kind of node, such as the GPU nodes, it is drawn at its time on the CPU nodes, as the summary's speed-ups are, and its legend entry says so.
-- **The fronts**: each metric has its own. A model's point is on it if no other point of that metric, Geant4's included, is both as fast and as close (and better in one), by their central values. Points on their metric's front are filled; the others are hollow. The legend gives each model's speed-up on Geant4.
+- **Geant4** is drawn at its own time and at its own distance, which is its [second sample's](#2-simulate-with-geant4) distance from the first, a point for each metric like a model's, as "Geant4 (2nd sample)". So it sits at the statistical floor of each metric rather than at 0. Its distances are divided by the models' mean like the models', which leaves the second sample out. Where it wasn't timed on the figure's kind of node, such as the GPU nodes, it is drawn at its time on the CPU nodes, as the summary's speed-ups are, and its legend entry says so. Where the second sample hasn't been measured, Geant4 isn't drawn on those fronts, and the plots say so.
+- **The fronts**: each metric has its own. A point, Geant4's or a model's, is on it if no other point of that metric is both as fast and as close (and better in one), by their central values. Points on their metric's front are filled; the others are hollow. Geant4 is off a front only where a faster model is as close to it as its own second sample. The legend gives each model's speed-up on Geant4.
 - **The error bars** are the times' standard errors and, where `metrics.csv` has one (the spread over the seeds of the separation and the π⁰s), the metric's uncertainty. The JS uncertainty is carried to the distance as σ/(2√JSD).
 
-`pareto.csv` has every point of every metric of each figure: the version, the node, the figure, the time and the distance with their uncertainties (and the distance's unit), the metric's mean distance, the speed-up, and whether the point is on its metric's front. The closure tests get no front. In the dashboard, each version is its own observable, `pareto_js` and `pareto_wasserstein`, so the menu can show one at a time. `--timing FILE` takes another timing table (e.g. one copied with the `.npz` files), and `--no-pareto` leaves the fronts out. In the pipeline, the plots are drawn again when the timing table is newer than `metrics.csv`.
+`pareto.csv` has every point of every metric of each figure: the version, the node, the figure, the time and the distance with their uncertainties (and the distance's unit), the metric's mean distance, the speed-up, and whether the point is on its metric's front. Geant4's rows have its second sample's distances. The closure tests get no front. In the dashboard, each version is its own observable, `pareto_js` and `pareto_wasserstein`, so the menu can show one at a time. `--timing FILE` takes another timing table (e.g. one copied with the `.npz` files), and `--no-pareto` leaves the fronts out. In the pipeline, the plots are drawn again when the timing table is newer than `metrics.csv`.
 
 #### The dashboard
 
-Every run of the plots also writes `dashboard.html` (`dashboard_n<N>.html` for the first *N* events): every figure, the closure tests' too, in one page with a menu of the models. Untick a model to hide it in every figure, or click its entry in a figure's legend to hide or show it in that figure alone (the figure's *Reset* puts it back as the menu has it); *only* next to a model shows it alone. The menu also picks a scenario or an observable, and how many figures go in a row. Geant4, as the reference, is always shown. The figures are the same as the PNG and PDF files, so the axes stay as drawn with every model: hiding one doesn't zoom in on the others. Opened on its own, the page keeps what it hides in its address (`dashboard.html#hide=par04_vae_onnx&scenario=single_photon`), to come back to or to send.
+Every run of the plots also writes `dashboard.html` (`dashboard_n<N>.html` for the first *N* events): every figure, the closure tests' too, in one page with a menu of the models. Untick a model to hide it in every figure, or click its entry in a figure's legend to hide or show it in that figure alone (the figure's *Reset* puts it back as the menu has it); *only* next to a model shows it alone. The menu also picks a scenario or an observable, and how many figures go in a row. Geant4, as the reference, is always shown; its second sample has an entry of its own, like a model's, which hides its lines and its points on the Pareto fronts. The figures are the same as the PNG and PDF files, so the axes stay as drawn with every model: hiding one doesn't zoom in on the others. Opened on its own, the page keeps what it hides in its address (`dashboard.html#hide=par04_vae_onnx&scenario=single_photon`), to come back to or to send.
 
 The page is a single file with nothing to fetch, so it works wherever it is opened:
 
@@ -382,6 +384,7 @@ Everything is written under `paths.data_dir`:
 ├── sim_output/
 │   └── <scenario>/
 │       ├── geant4/                # stage 2: <input>.edm4hep.root + log
+│       ├── geant4_2/              # stage 2, the second sample: <input>_simseed<S>.edm4hep.root + log
 │       └── <model>/               # stage 3: <input>.root + log
 ├── rec_output/
 │   └── <scenario>/<simulator>/    # stage 4: <input>_REC.edm4hep.root, _AIDA.root, _PfoAnalysis.root, .log
@@ -393,7 +396,7 @@ Everything is written under `paths.data_dir`:
     └── pipeline_<time>/           # submissions of slurm_pipeline.sh (slurm.log_dir)
 ```
 
-One module, [`ddml_bench/layout.py`](ddml_bench/layout.py), names all of these; each scenario's inputs are in the folder its `input.folder` names. The segments of a scenario with `input.segments` are inputs named `<input>_seg<i>of<N>`. Test runs with `-n N` add `_n<N>` to every file name after the inputs, the simulations of a scenario's `simulation_seeds` add `_simseed<S>` after that, and files simulated with `-i` go under the scenario `custom` (reconstructions of files outside `sim_output` go to `rec_output/custom/files/`).
+One module, [`ddml_bench/layout.py`](ddml_bench/layout.py), names all of these; each scenario's inputs are in the folder its `input.folder` names. The segments of a scenario with `input.segments` are inputs named `<input>_seg<i>of<N>`. Test runs with `-n N` add `_n<N>` to every file name after the inputs, the simulations of a scenario's `simulation_seeds` add `_simseed<S>` after that (and those of Geant4's second sample always do, as every one has a seed of its own), and files simulated with `-i` go under the scenario `custom` (reconstructions of files outside `sim_output` go to `rec_output/custom/files/`).
 
 ### Inputs in segments
 
@@ -411,11 +414,11 @@ The measurements record the reconstructions they were made from, so after the sp
 
 ## Reusing published measurements
 
-The benchmark's inputs and the measurements of Geant4 and CaloClouds3 are published on Zenodo: [FaSiNaTe essential data](https://doi.org/10.5281/zenodo.23670827), version 0.1.0, with its manifest. Every run fetches from it what it would otherwise make, so a model can be compared with them without running anything of theirs again. (Version 0.1.0's measurements were made before the intrinsic angle had a bounding box, so a run fetches them only with `bounding_box: null` under `observables.intrinsic_angle` in `configs/local.yaml`; otherwise it makes the references' measurements itself, simulating and reconstructing them first.) In a fresh data folder:
+The benchmark's inputs and the measurements of Geant4 and CaloClouds3 are published on Zenodo: [FaSiNaTe essential data](https://doi.org/10.5281/zenodo.23670827), version 0.1.0, with its manifest. Every run fetches from it what it would otherwise make, so a model can be compared with them without running anything of theirs again. Geant4's [second sample](#2-simulate-with-geant4) isn't in that version, so a fresh data folder simulates, reconstructs and measures it once. (Version 0.1.0's measurements were made before the intrinsic angle had a bounding box, so a run fetches them only with `bounding_box: null` under `observables.intrinsic_angle` in `configs/local.yaml`; otherwise it makes the references' measurements itself, simulating and reconstructing them first.) In a fresh data folder:
 
 ```bash
-./pipeline.sh --dry-run    # would fetch the inputs and measurements, and make the plots
-./pipeline.sh              # fetches them, then plots (but see below: 0.1.0 predates the segments)
+./pipeline.sh --dry-run    # would fetch the inputs and measurements, make Geant4's second sample, and plot
+./slurm_pipeline.sh        # fetches them, makes Geant4's second sample, then plots (but see below: 0.1.0 predates the segments)
 # add your model to models/, then
 ./slurm_pipeline.sh        # simulates, reconstructs and measures only your model, and plots
 ```

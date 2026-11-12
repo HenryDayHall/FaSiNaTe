@@ -7,8 +7,8 @@ Everything is written under paths.data_dir:
       input_single_particle_gun, and the physics samples, made elsewhere, in
       input_physics_samples
   sim_output/<scenario>/<simulator>/<input><sample><ending>   each input simulated,
-      with <input><sample>.log; the ending is .edm4hep.root for Geant4 and .root
-      for the models, EDM4hep both
+      with <input><sample>.log; the ending is .edm4hep.root for Geant4 (both
+      its samples, geant4 and geant4_2) and .root for the models, EDM4hep all
   rec_output/<scenario>/<simulator>/<input><sample>_REC.edm4hep.root
       each simulation reconstructed, with _AIDA.root, _PfoAnalysis.root and .log
   observables/<simulator><sample>.npz                         each simulator's measurements
@@ -30,7 +30,11 @@ stage. A scenario whose inputs are simulated with ddsim seeds of its own
 (simulation_seeds) adds _simseed<S> to <sample> for the seed S, likewise: the
 simulation of <input> with seed 2 is <input>_simseed2, and of its first N
 events <input>_n<N>_simseed2. (The inputs' own names may have _seed<S>, the
-gun's seed, which this isn't.)
+gun's seed, which this isn't.) The second Geant4 sample, geant4_2, has a seed
+of its own for every simulation, the first's plus 1000000 (or 1000000 where
+the first has ddsim's own), so its names always end in _simseed<S>: beside
+the first's <input>_simseed2 it has <input>_simseed1000002, and beside the
+first's <input> (ddsim's own seed), <input>_simseed1000000.
 
 A scenario whose inputs are in segments (input.segments: N) has each of its
 inputs' events in N files of their own, the i-th segment of <whole> named
@@ -72,6 +76,14 @@ RESERVED_FOLDERS = (SIM_DIR, REC_DIR, OBSERVABLES_DIR, "slurm", TIMING_DIR)
 
 # The reference simulator, which no model may be named after
 GEANT4 = "geant4"
+# Its second sample, which no model may be named after either: every input
+# simulated with Geant4 again, with other ddsim seeds (second_sample_seed()),
+# so that its distance from the first is how far apart two Geant4 samples of
+# the same events are, Geant4's own (the Pareto fronts draw Geant4 at it)
+SECOND_GEANT4 = "geant4_2"
+# Its simulations' ddsim seeds are the first's plus this, so the scenarios'
+# own seeds are below it (ddml_bench/scenarios.py)
+SECOND_SEED_OFFSET = 1000000
 # The scenario that inputs given directly are simulated as
 CUSTOM_SCENARIO = "custom"
 # rec_output/custom/files: simulations given directly from outside sim_output
@@ -79,7 +91,7 @@ GIVEN_FILES = "files"
 
 # ddsim writes EDM4hep for a .root output file. Geant4's simulations have
 # always been named .edm4hep.root, and the models' .root.
-SIM_ENDINGS = {GEANT4: ".edm4hep.root"}
+SIM_ENDINGS = {GEANT4: ".edm4hep.root", SECOND_GEANT4: ".edm4hep.root"}
 MODEL_SIM_ENDING = ".root"
 # The endings a finished simulation can have, longest first
 SIMULATION_ENDINGS = (".edm4hep.root", ".root")
@@ -185,6 +197,21 @@ def segment_bounds(n_events, count):
         bounds.append((start, stop))
         start = stop
     return bounds
+
+
+def second_sample_of(reference):
+    """The simulator that is a second sample of the reference, simulated as
+    it is: SECOND_GEANT4 of Geant4, None of any other."""
+    return SECOND_GEANT4 if reference == GEANT4 else None
+
+
+def second_sample_seed(seed):
+    """The ddsim seed of the second Geant4 sample's simulation of an input
+    that the first simulates with seed: seed + SECOND_SEED_OFFSET, or the
+    offset alone where the first has ddsim's own (None), so that each of its
+    simulations has a seed of its own, which no simulation of the first
+    has."""
+    return (seed or 0) + SECOND_SEED_OFFSET
 
 
 def input_stem(path):

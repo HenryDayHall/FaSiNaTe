@@ -13,15 +13,22 @@ e.g. pareto_js_cpu__single_photon and pareto_wasserstein_cpu__single_photon.
 Each model is drawn in its colour at its time per event on those nodes, a
 point for each metric of the scenario (a figure of plot.py, e.g. the radial
 profile r30) at its distance from Geant4 there, each metric with a marker of
-its own; Geant4 is a grey circle at no distance, at its own time. The time is
-the table's row of the scenario over all its inputs (input "all", or of
-several numbers of events timed the one of the most events, all_t<N>): the
-mean of the inputs' mean wall-clock times per event, each input weighing the
-same, with its standard error. So every metric of a scenario has the same
+its own. Geant4 is drawn likewise, at its own time and at its own distance:
+that of its second sample (layout.SECOND_GEANT4, geant4_2: every input
+simulated with Geant4 again, with other seeds), which plot.py compares with
+Geant4 as it does the models. So Geant4's point is how far apart two Geant4
+samples of the same events are, the floor that the models' distances are
+read against, and it is drawn as the second sample is, nearly black;
+where the second sample hasn't measured a metric, Geant4 isn't on its front.
+The time is the table's row of the scenario over all its inputs (input "all",
+or of several numbers of events timed the one of the most events, all_t<N>):
+the mean of the inputs' mean wall-clock times per event, each input weighing
+the same, with its standard error. So every metric of a scenario has the same
 times, its di-photon energies too. Geant4 is timed on the CPU nodes only
 (unless timing.devices says otherwise), so where it wasn't timed on the
 figure's kind of node, it is drawn at its time on the CPU nodes, as the
-table's speed-ups are, and its legend entry says so.
+table's speed-ups are, and its legend entry says so. (Its second sample isn't
+timed: it is Geant4, so its time is Geant4's.)
 
 The distance is, in the js version, the Jensen-Shannon distance, the square
 root of the divergence in metrics.csv (JS; a metric in the mathematical sense,
@@ -29,29 +36,30 @@ which the divergence isn't); in the wasserstein version, the Wasserstein
 distance in metrics.csv (W1, plot.wasserstein(), in the units of the figure's
 bins); and in both, of the energy figures and the pi0 categories, the chi^2 in
 metrics.csv (chi2, over the figure's points, with the uncertainties drawn; no
-distance in the mathematical sense, but 0 for Geant4 and growing as a model
-is farther from it). Each metric's distances are divided by their mean over
-its models: every model with that metric in metrics.csv, timed or not. So the
-models' mean is at 1 for every metric, which puts them all on one axis, and
-the figures of the CPU nodes and of the GPU nodes give each model the same
-values. Every figure of a version also has the same range of distance, so
-that they can be compared side by side. (The square root and the division move
-the points, but don't change which are on the front.) Where metrics.csv gives
-a metric an uncertainty (the spread over the seeds, for the separation and the
-pi0s), it is carried to the distance (to first order, sigma / (2
-sqrt(divergence)), for the Jensen-Shannon distance) and divided by the same
-mean.
+distance in the mathematical sense, but growing as a simulator is farther
+from Geant4). Each metric's distances, Geant4's own too, are divided by their
+mean over its models: every model with that metric in metrics.csv, timed or
+not (not Geant4's second sample). So the models' mean is at 1 for every
+metric, which puts them all on one axis, and the figures of the CPU nodes and
+of the GPU nodes give each the same values. Every figure of a version also
+has the same range of distance, so that they can be compared side by side.
+(The square root and the division move the points, but don't change which are
+on the front.) Where metrics.csv gives a metric an uncertainty (the spread
+over the seeds, for the separation and the pi0s), it is carried to the
+distance (to first order, sigma / (2 sqrt(divergence)), for the Jensen-Shannon
+distance) and divided by the same mean.
 
-Each metric has its Pareto front: a model's point is on it when no other point
-of that metric, Geant4's included, is as fast and as close to Geant4 and
+Each metric has its Pareto front: a point, Geant4's or a model's, is on it
+when no other point of that metric is as fast and as close to Geant4 and
 either faster or closer, by their central values. Those on it are filled, the
-others hollow; Geant4, at no distance, is on every front. The legend gives
-each model's speed-up on Geant4 as drawn (Geant4's time over the model's),
-and each metric's marker, with the models' mean distance in it (in the units
-of the bins, for a Wasserstein distance). Everything drawn is in
-pareto<sample>.csv: a row per point of each metric of each figure of each
-version, with the distance and the time, their uncertainties, and whether it
-is on its metric's front.
+others hollow; Geant4 is off a front only where a model faster than it is as
+close to it as its own second sample. The legend gives each model's speed-up
+on Geant4 as drawn (Geant4's time over the model's), and each metric's marker,
+with the models' mean distance in it (in the units of the bins, for a
+Wasserstein distance). Everything drawn is in pareto<sample>.csv: a row per
+point of each metric of each figure of each version, with the distance and
+the time, their uncertainties, and whether it is on its metric's front;
+Geant4's rows have its second sample's distances, at its own time.
 
 The closure tests, which compare a model with its twin, have no front.
 """
@@ -64,7 +72,8 @@ import types
 
 from . import plot
 from .dashboard import DATA
-from .layout import figure_base
+from .layout import figure_base, second_sample_of
+from .models import SECOND_GEANT4_STYLE
 
 NAME = "pareto"
 
@@ -97,16 +106,15 @@ VERSIONS = (
 DISTANCE_NAMES = {"JS": "JS distance", plot.WASSERSTEIN: "Wasserstein distance",
                   plot.CHI2: r"$\chi^2$"}
 # The markers of a scenario's metrics, in the order of its figures in
-# metrics.csv, as different from each other as can be; Geant4 is a circle
+# metrics.csv, as different from each other as can be
 METRIC_MARKERS = ("s", "^", "D", "P", "X", "v", "p", "h", "*", "<", ">", "d")
 MARKER_SIZE = 7.0
 # Markers that look small at the same size, made bigger to look the same
 MARKER_SCALE = {"*": 1.5, "p": 1.15, "h": 1.15, "P": 1.05, "X": 1.05}
-# How far apart, in points, a model's metrics are drawn about its time, so
-# that its points and their error bars don't hide each other (the time is the
-# same for all of them)
+# How far apart, in points, a simulator's metrics are drawn about its time,
+# so that its points and their error bars don't hide each other (the time is
+# the same for all of them)
 DODGE = 3.5
-REFERENCE_MARKER, REFERENCE_SIZE = "o", 9.0
 # The figures are wider than plot.py's, for the legend beside the axes
 FIGURE_SIZE = (7.6, 4.8)
 # The timing table's rows of a scenario over all its inputs: "all", or of each
@@ -178,15 +186,17 @@ def read_metrics(path):
     return groups
 
 
-def relative_distances(values, to_distance=js_distance):
+def relative_distances(values, to_distance=js_distance, leave_out=()):
     """({simulator: (value, distance, its uncertainty, distance / mean, its
     uncertainty)}, mean) of one figure's metrics, {simulator: (value,
-    uncertainty)}: each model's distance (to_distance(), of the metric's value
-    and uncertainty), and divided by the mean of all of theirs (taken as
+    uncertainty)}: each simulator's distance (to_distance(), of the metric's
+    value and uncertainty), and divided by the mean of the models' (all of
+    them but those left out, e.g. the reference's second sample; taken as
     exact). ({}, mean) if the mean isn't above 0."""
     distances = dict((simulator, (value,) + tuple(to_distance(value, uncertainty)))
                      for simulator, (value, uncertainty) in values.items())
-    mean = (sum(d[1] for d in distances.values()) / len(distances)) if distances else 0.0
+    models = [d[1] for simulator, d in distances.items() if simulator not in leave_out]
+    mean = sum(models) / len(models) if models else 0.0
     if not mean > 0:
         return {}, mean
     return (dict((simulator, (value, distance, error, distance / mean,
@@ -212,11 +222,13 @@ def number_text(value):
     return "%.0f" % value if value >= 1000 else "%.3g" % value
 
 
-def style_of(name, simulators):
+def style_of(name, simulators, default=None):
     """The simulator of that name among those drawn (with its label, colour and
-    line style), or a stand-in with plot's defaults."""
+    line style), or a stand-in with the default style ({label, color,
+    linestyle}), or plot's."""
     found = next((s for s in simulators if s.name == name), None)
-    return found or types.SimpleNamespace(name=name, label=name, color="#1f6fb4", linestyle="-")
+    style = dict({"label": name, "color": "#1f6fb4", "linestyle": "-"}, **(default or {}))
+    return found or types.SimpleNamespace(name=name, **style)
 
 
 def node_times(times, node, scenario, reference_name):
@@ -248,25 +260,34 @@ def plan_fronts(groups, times, simulators, reference_name, version=VERSIONS[0]):
     """The figures of one version (of VERSIONS): a dict for each scenario of
     groups (read_metrics()) and kind of node its models are timed on, with the
     scenario, the node, the reference, its time on those nodes or the CPU
-    nodes ("reference_time", (time, where) or None), the models drawn (those
-    timed there, in their order), and its metrics: dicts of the figure
-    (observable, profile), the metric of metrics.csv it is measured by, the
-    unit of its distance, the models' mean distance and their number, its
-    marker, and its points: dicts of simulator, time, its error, the node it
-    was timed on, the metric's value, the distance and the relative distance
-    and their uncertainties, and whether it is on the metric's front (the
-    reference's first, at no distance, if it is timed)."""
+    nodes ("reference_time", (time, where) or None), the simulator its points
+    are drawn as ("own": its second sample, whose distances they are, or
+    None), the models drawn (those timed there, in their order), and its
+    metrics: dicts of the figure (observable, profile), the metric of
+    metrics.csv it is measured by, the unit of its distance, the models' mean
+    distance and their number, its marker, and its points: dicts of name (the
+    simulator it is the point of), simulator (the one it is drawn as),
+    whether it is the reference's, time, its error, the node it was timed on,
+    the metric's value, the distance and the relative distance and their
+    uncertainties, and whether it is on the metric's front (the reference's
+    first, if it is timed, at its second sample's distance, if that is
+    measured)."""
     name, measures = version
     reference = style_of(reference_name, simulators)
+    # The reference's own distance, its second sample's (layout.SECOND_GEANT4),
+    # which isn't one of the models
+    second_name = second_sample_of(reference_name)
+    own = style_of(second_name, simulators, SECOND_GEANT4_STYLE) if second_name else None
+    not_models = (reference_name, second_name)
     order = dict((s.name, k) for k, s in enumerate(
-        s for s in simulators if s.name != reference_name))
+        s for s in simulators if s.name not in not_models))
     scenarios, untimed = {}, []
     for (observable, scenario, profile), metrics in groups.items():
         measure = next((m for m in measures if m[0] in metrics), None)
         if measure is None:
             continue
         metric, to_distance, in_units = measure
-        distances, mean = relative_distances(metrics[metric], to_distance)
+        distances, mean = relative_distances(metrics[metric], to_distance, not_models)
         if not distances:
             plot.say("%s %s of %s: the models' mean %s isn't above 0, so it has no Pareto "
                      "front" % (observable, profile, scenario, metric))
@@ -274,11 +295,30 @@ def plan_fronts(groups, times, simulators, reference_name, version=VERSIONS[0]):
         scenarios.setdefault(scenario, []).append({
             "observable": observable, "profile": profile, "metric": metric,
             "unit": plot.unit_of(observable, profile) if in_units else "", "mean": mean,
-            "models": len(distances), "distances": distances})
+            "models": len([n for n in distances if n not in not_models]),
+            "distances": distances})
+    if second_name is None:
+        plot.say("%s has no second sample, so its own distance isn't known, and it isn't on the "
+                 "%s Pareto fronts" % (reference.label, name))
+    elif scenarios and not any(second_name in m["distances"] for metrics in scenarios.values()
+                               for m in metrics):
+        plot.say("there are no measurements of %s, %s's second sample, whose distance is %s's "
+                 "own, so %s isn't on the %s Pareto fronts" % (
+                     second_name, reference.label, reference.label, reference.label, name))
     planned = []
     for scenario, metrics in scenarios.items():
         nodes = sorted({n for (n, s, simulator) in times if s == scenario
-                        and any(simulator in m["distances"] for m in metrics)})
+                        and any(simulator in m["distances"] for m in metrics)
+                        and simulator not in not_models})
+        # What the second sample hasn't measured, where it has measured
+        # something (else it was said above)
+        lacking = [m for m in metrics if second_name not in m["distances"]]
+        if second_name and lacking and nodes and any(
+                second_name in m["distances"] for ms in scenarios.values() for m in ms):
+            plot.say("%s has no %s of %s, so %s isn't on %s Pareto front%s" % (
+                second_name, ", ".join("%s %s" % (m["observable"], m["profile"])
+                                       for m in lacking), scenario, reference.label,
+                "its" if len(lacking) == 1 else "their", "" if len(lacking) == 1 else "s"))
         if not nodes and scenario not in untimed:
             untimed.append(scenario)
             plot.say("none of the models of %s is timed, so it has no %s Pareto fronts"
@@ -290,41 +330,47 @@ def plan_fronts(groups, times, simulators, reference_name, version=VERSIONS[0]):
                 continue
             model_times, reference_time = node_times(times, node, scenario, reference_name)
             drawn = [style_of(n, simulators) for n in sorted(
-                {n for m in metrics for n in m["distances"] if n in model_times},
+                {n for m in metrics for n in m["distances"]
+                 if n in model_times and n not in not_models},
                 key=lambda n: (order.get(n, len(order)), n))]
             figure_metrics = []
             for k, metric in enumerate(metrics):
                 points = []
-                if reference_time is not None:
+                if reference_time is not None and second_name in metric["distances"]:
+                    # The reference at its time, at its second sample's distance
                     time, timed_on = reference_time
-                    points.append({"simulator": reference, "time": time["time"],
-                                   "time_error": time["error"], "timed_on": timed_on,
-                                   "value": 0.0, "distance": 0.0, "distance_error": None,
-                                   "relative": 0.0, "relative_error": None})
+                    points.append(point(reference_name, own, True, time, timed_on,
+                                        metric["distances"][second_name]))
                 for simulator in drawn:
-                    if simulator.name not in metric["distances"]:
-                        continue
-                    value, distance, error, relative, relative_error = \
-                        metric["distances"][simulator.name]
-                    time = model_times[simulator.name]
-                    points.append({"simulator": simulator, "time": time["time"],
-                                   "time_error": time["error"], "timed_on": node,
-                                   "value": value, "distance": distance,
-                                   "distance_error": error, "relative": relative,
-                                   "relative_error": relative_error})
-                if not any(p["simulator"] is not reference for p in points):
+                    if simulator.name in metric["distances"]:
+                        points.append(point(simulator.name, simulator, False,
+                                            model_times[simulator.name], node,
+                                            metric["distances"][simulator.name]))
+                if all(p["reference"] for p in points):
                     continue
-                for point, on in zip(points, pareto_front([(p["time"], p["relative"])
-                                                            for p in points])):
-                    point["on_front"] = on
+                for p, on in zip(points, pareto_front([(p["time"], p["relative"])
+                                                       for p in points])):
+                    p["on_front"] = on
                 shown = dict((key, value) for key, value in metric.items()
                              if key != "distances")
                 shown.update(marker=METRIC_MARKERS[k % len(METRIC_MARKERS)], points=points)
                 figure_metrics.append(shown)
             planned.append({"version": version, "scenario": scenario, "node": node,
                             "reference": reference, "reference_time": reference_time,
-                            "drawn": drawn, "metrics": figure_metrics})
+                            "own": own, "drawn": drawn, "metrics": figure_metrics})
     return planned
+
+
+def point(name, simulator, is_reference, time, timed_on, distances):
+    """A point of a metric's front: of the simulator named, drawn as simulator,
+    at its time (from read_timing()) on the node it was timed on, at its
+    distances (relative_distances()' (value, distance, its uncertainty,
+    relative distance, its uncertainty))."""
+    value, distance, error, relative, relative_error = distances
+    return {"name": name, "simulator": simulator, "reference": is_reference,
+            "time": time["time"], "time_error": time["error"], "timed_on": timed_on,
+            "value": value, "distance": distance, "distance_error": error,
+            "relative": relative, "relative_error": relative_error}
 
 
 def fronts(out, suffix, formats, simulators, reference_name, timing_path, metrics_path=None):
@@ -375,11 +421,10 @@ def fronts(out, suffix, formats, simulators, reference_name, timing_path, metric
         for row in rows:
             writer.writerow([_cell(row[column]) for column in COLUMNS])
     for row in rows:
-        if row["simulator"] != reference_name:
-            print("%-11s %-6s %-20s %-13s %-10s %-23s %8.3g s, distance %.3g%s" % (
-                row["version"], row["node"], row["observable"], row["scenario"], row["profile"],
-                row["simulator"], row["time_s"], row["relative_distance"],
-                ", on the front" if row["on_front"] else ""))
+        print("%-11s %-6s %-20s %-13s %-10s %-23s %8.3g s, distance %.3g%s" % (
+            row["version"], row["node"], row["observable"], row["scenario"], row["profile"],
+            row["simulator"], row["time_s"], row["relative_distance"],
+            ", on the front" if row["on_front"] else ""))
     plot.say("Pareto fronts, and %s, in %s" % (os.path.basename(path), out))
     return rows
 
@@ -390,11 +435,11 @@ def figure_rows(figure):
     rows = []
     for metric in figure["metrics"]:
         for p in metric["points"]:
-            is_reference = p["simulator"] is figure["reference"]
+            is_reference = p["reference"]
             rows.append({
                 "version": figure["version"][0], "node": figure["node"],
                 "scenario": figure["scenario"], "observable": metric["observable"],
-                "profile": metric["profile"], "simulator": p["simulator"].name,
+                "profile": metric["profile"], "simulator": p["name"],
                 "time_s": p["time"], "time_error_s": p["time_error"], "timed_on": p["timed_on"],
                 "metric": metric["metric"], "value": p["value"], "distance": p["distance"],
                 "distance_error": p["distance_error"], "unit": metric["unit"],
@@ -433,23 +478,16 @@ def plot_fronts(figure, ylim, out, suffix, formats):
     axes = [[ax]]
     every = [p for metric in figure["metrics"] for p in metric["points"]]
     count = len(figure["metrics"])
-    if reference_time is not None:
-        ax.errorbar([reference_time[0]["time"]], [0.0],
-                    xerr=None if reference_time[0]["error"] is None
-                    else [reference_time[0]["error"]],
-                    linestyle="none", marker=REFERENCE_MARKER, markersize=REFERENCE_SIZE,
-                    color=plot.REFERENCE_EDGE, markeredgecolor="white", markeredgewidth=0.9,
-                    elinewidth=1.0, capsize=0, zorder=4)
     for k, metric in enumerate(figure["metrics"]):
         # Each metric a little to the side of the others, in points
         shifted = offset_copy(ax.transData, fig=fig, x=(k - (count - 1) / 2) * DODGE,
                               units="points")
         size = MARKER_SIZE * MARKER_SCALE.get(metric["marker"], 1.0)
         for p in metric["points"]:
+            # On its metric's front: filled, with a white ring; off it: hollow.
+            # (The reference's points are drawn as its second sample, whose
+            # distances they are.)
             simulator, on = p["simulator"], p["on_front"]
-            if simulator is reference:
-                continue
-            # On its metric's front: filled, with a white ring; off it: hollow
             drawn = ax.errorbar(
                 [p["time"]], [p["relative"]],
                 xerr=None if p["time_error"] is None else [p["time_error"]],
@@ -484,15 +522,16 @@ def plot_fronts(figure, ylim, out, suffix, formats):
     ax.set_ylabel("%s to %s / the models' mean" % (
         " or ".join(DISTANCE_NAMES.get(m, m) for m in shown), reference.label), color=plot.INK)
 
-    # The legend, beside the axes: the models' colours, then the metrics' markers
+    # The legend, beside the axes: the reference's colour (its second
+    # sample's) and the models', then the metrics' markers
     entries = []
-    if reference_time is not None:
-        label = reference.label
+    if any(p["reference"] for p in every):
+        own = figure["own"]
+        label = own.label
         if reference_time[1] != figure["node"]:
-            label += " (%s nodes)" % reference_time[1]
-        entries.append((Line2D([], [], linestyle="none", marker=REFERENCE_MARKER,
-                               markersize=REFERENCE_SIZE, color=plot.REFERENCE_EDGE,
-                               markeredgecolor="white"), label, None))
+            label += ", timed on %s nodes" % reference_time[1]
+        entries.append((Line2D([], [], color=own.color, linewidth=5, solid_capstyle="butt"),
+                        label, own))
     for simulator in figure["drawn"]:
         label = simulator.label
         mine = next((p for metric in figure["metrics"] for p in metric["points"]
@@ -514,7 +553,7 @@ def plot_fronts(figure, ylim, out, suffix, formats):
         "%s isn't timed" % reference.label if reference_time is None
         else "×N: speed-up on %s" % reference.label)
     if count > 1:
-        note += "\na model's metrics side by side\nabout its time"
+        note += "\na simulator's metrics side by side\nabout its time"
     if any(p["relative_error"] is not None for p in every):
         note += "\nerrors: the metrics' uncertainties"
     ax.text(1.02, 0.0, note, transform=ax.transAxes, fontsize=8, color=plot.MUTED,

@@ -9,13 +9,17 @@ grey filled histogram and each model as a line in its own colour and line
 style, each with its statistical uncertainty as a band, and below, each model's
 relative deviation from Geant4, its band the uncertainties of the model and of
 Geant4 combined (relative_deviation(); every figure's deviations are drawn
-so). The legend gives each model's distance from Geant4, by the metric of the
-observable in the configuration (jensen_shannon: the Jensen-Shannon
-divergence, natural logarithm, of the fractions of the energy in the bins; l1:
-the mean absolute difference). metrics.csv also has each model's Wasserstein
-distance from Geant4 (W1, wasserstein()) of each distribution drawn (the
-profiles, the intrinsic angles, the separation and the pi0s, in the same bins
-as the metric), in the units of the bins. The figures that aren't of
+so). Geant4's second sample (geant4_2: the same inputs simulated with Geant4
+again, with other seeds) is drawn and compared with Geant4 as a model is, as
+a black dashed line, so its distance from Geant4 is Geant4's own: how far
+apart two Geant4 samples of the same events are, which the models' can be
+read against. The legend gives each model's distance from Geant4, by the
+metric of the observable in the configuration (jensen_shannon: the
+Jensen-Shannon divergence, natural logarithm, of the fractions of the energy in
+the bins; l1: the mean absolute difference). metrics.csv also has each model's
+Wasserstein distance from Geant4 (W1, wasserstein()) of each distribution
+drawn (the profiles, the intrinsic angles, the separation and the pi0s, in the
+same bins as the metric), in the units of the bins. The figures that aren't of
 distributions, the energy figures and the pi0 categories, instead have each
 model's chi^2 from Geant4 (chi2, chi_squared()) over their points, with the
 uncertainties drawn, which their legends give too, as chi^2/ndf.
@@ -81,8 +85,9 @@ Where the timing benchmark has timed the models (<paths.data_dir>/timing/
 summary.csv, or the table --timing gives), every scenario also has its Pareto
 fronts on each kind of node timed (ddml_bench/pareto.py): every metric of the
 scenario on one axis, a marker each, each model's distance from Geant4,
-divided by the mean of the models', against its time per event, Geant4 at no
-distance. There are two versions, by the Jensen-Shannon distance of the
+divided by the mean of the models', against its time per event, and Geant4
+at its own distance, its second sample's, at its time. There are two
+versions, by the Jensen-Shannon distance of the
 distributions, pareto_js_<node>__<scenario>, and by their Wasserstein
 distance, pareto_wasserstein_<node>__<scenario>; both measure the energy
 figures and the pi0 categories by their chi^2. Every point is in pareto.csv;
@@ -125,7 +130,7 @@ from urllib.parse import quote
 from . import dashboard, measure
 from .dashboard import DATA, KEY, MARK, TARGET
 from .layout import (GEANT4, OBSERVABLES_DIR, PLOTS_DIR, SEP, TIMING_DIR, TIMING_SUMMARY,
-                     figure_base, measurement_files, timing_summary_of)
+                     figure_base, measurement_files, second_sample_of, timing_summary_of)
 
 REFERENCE = GEANT4
 REFERENCE_FILL = "#d9d9d9"
@@ -1767,11 +1772,14 @@ def uncertainty_text(row, form="%.6g"):
 
 def draw(folder, out, suffix, formats, observables, wanted=(), reference_name=REFERENCE):
     """Draw every figure of the measurements in folder (<simulator><suffix>.npz;
-    of the simulators wanted, and the reference, or of all of them) into out,
-    with metrics<suffix>.csv and fits<suffix>.csv there, comparing each to the
-    reference. Returns the simulators drawn ([] if there are no measurements)."""
+    of the simulators wanted, and the reference with its second sample, or of
+    all of them) into out, with metrics<suffix>.csv and fits<suffix>.csv there,
+    comparing each to the reference. Returns the simulators drawn ([] if there
+    are no measurements): the reference first, its second sample next, then
+    the others in the order of their files."""
+    second_name = second_sample_of(reference_name)
     paths = [path for name, path in measurement_files(folder, suffix)
-             if not wanted or name in wanted or name == reference_name]
+             if not wanted or name in wanted or name in (reference_name, second_name)]
     if not paths:
         return []
     simulators = [Simulator(p) for p in paths]
@@ -1779,10 +1787,10 @@ def draw(folder, out, suffix, formats, observables, wanted=(), reference_name=RE
     if reference is None:
         say("there's no %s measurement, so there's nothing to compare to; plotting "
             "without deviations" % reference_name)
-    # The reference first, then the models in the order of their files
-    if reference is not None:
-        simulators.remove(reference)
-        simulators.insert(0, reference)
+    second = next((s for s in simulators if s.name == second_name), None)
+    for simulator in reversed([s for s in (reference, second) if s is not None]):
+        simulators.remove(simulator)
+        simulators.insert(0, simulator)
 
     os.makedirs(out, exist_ok=True)
     if collector is not None:
@@ -1987,7 +1995,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Plot the observables measured by observables_from_reconstruction.sh.")
     parser.add_argument("simulators", nargs="*", metavar="SIMULATOR",
-                        help="only these simulators (default: every .npz file found)")
+                        help="only these simulators, and the reference with its second "
+                             "sample (default: every .npz file found)")
     parser.add_argument("--dir", help="the folder with the .npz files "
                                       "(default: observables in paths.data_dir)")
     parser.add_argument("--out", help="where the figures go (default: <dir>/plots)")

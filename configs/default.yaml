@@ -125,6 +125,12 @@ container:
 
 # Full Geant4 simulation of the scenarios, the reference that the models are
 # compared to (the geant4 stage: simulate_geant4.sh, or slurm_pipeline.sh).
+# Every input is simulated twice: as the reference (geant4), and as its second
+# sample (geant4_2), the same but for ddsim's seed, the first's plus 1000000
+# (or 1000000 where the first has ddsim's own). The second is measured and
+# compared with the first as a model is, which gives Geant4's own distance from
+# itself, the statistical floor of each metric, where the Pareto fronts draw
+# Geant4. So simulation_seeds are below 1000000.
 geant4:
   # The detector, relative to k4geo ($k4geo_DIR) unless absolute. Keep it the
   # one the models are simulated in (fixed_at_training.detector.compact_file
@@ -177,8 +183,9 @@ scenarios:
       # The number of files each input's events are in (see di_photon): one,
       # each energy's 3000 events a job of their own.
       segments: 1
-    # Each input is simulated once, with a seed ddsim chooses. List ddsim
-    # seeds here (e.g. [1, 2, 3]) to simulate each input once with each
+    # Each input is simulated once, with a seed ddsim chooses (and once more
+    # for Geant4's second sample, with the seed 1000000). List ddsim seeds here
+    # (e.g. [1, 2, 3], below 1000000) to simulate each input once with each
     # instead, as di_photon does.
     simulation_seeds: null
 

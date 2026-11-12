@@ -63,9 +63,9 @@ import sys
 
 from . import measure
 from .config import REPO_DIR, ConfigError, load_config
-from .layout import (CUSTOM_SCENARIO, GEANT4, REC_SUFFIX, Layout, LayoutError, simulation_stem,
-                     simulations_in)
-from .models import ModelError, load_models, reference
+from .layout import (CUSTOM_SCENARIO, GEANT4, REC_SUFFIX, SECOND_GEANT4, Layout, LayoutError,
+                     second_sample_seed, simulation_stem, simulations_in)
+from .models import ModelError, load_models, reference, second_reference
 from .scenarios import INPUT_TYPES, scenario_inputs
 from .stages import BY_NAME, STAGE_NAMES, STAGES, StageError
 from .stages import reconstruct
@@ -196,7 +196,10 @@ def make_plan(simulators=(), scenarios=(), stages=(), events=None, force=(), inp
     except ModelError as error:
         raise PlanError(str(error))
     geant4 = reference(config)
-    names = [GEANT4] + [model["name"] for model in models]
+    # Geant4's second sample, simulated, reconstructed and measured beside the
+    # first, with seeds of its own (the geant4 stage)
+    second = second_reference(config)
+    names = [GEANT4, SECOND_GEANT4] + [model["name"] for model in models]
     for name in simulators:
         if name not in names:
             raise PlanError("there's no simulator '%s'; the simulators are: %s"
@@ -275,8 +278,9 @@ def make_plan(simulators=(), scenarios=(), stages=(), events=None, force=(), inp
         "custom_inputs": custom_inputs,
         "given_simulations": given,
         "reference": geant4,
+        "second_geant4": second,
         "models": models,
-        "compact": dict((sim["name"], sim["compact_file"]) for sim in [geant4] + models),
+        "compact": dict((sim["name"], sim["compact_file"]) for sim in [geant4, second] + models),
         "reconstruction": reconstruction,
         "observables": {"observables": observables, "scenarios": measured},
         "published": published,
@@ -306,7 +310,10 @@ def unsplit(plan):
     the run has). scripts/split_data.py splits them."""
     layout = Layout(plan["data_dir"])
     done_suffix = plan["reconstruction"]["done_suffix"]
-    simulators = [plan["reference"]["name"]] + [model["name"] for model in plan["models"]]
+    # Each simulator, with the seed it simulates an input with, given the
+    # input's: its own, but for Geant4's second sample
+    simulators = [(plan["reference"]["name"], None), (SECOND_GEANT4, second_sample_seed)] + [
+        (model["name"], None) for model in plan["models"]]
     found = []
     for group in plan["scenarios"]:
         scenario = group["scenario"]
@@ -316,8 +323,9 @@ def unsplit(plan):
                 segments.setdefault(entry["whole"], []).append(entry)
         for whole, entries in segments.items():
             pairs = [(whole, [entry["file"] for entry in entries])]
-            for simulator in simulators:
+            for simulator, seed_of in simulators:
                 for seed in entries[0]["seeds"]:
+                    seed = seed_of(seed) if seed_of else seed
                     pairs.append((layout.simulation(scenario, simulator, whole, seed),
                                   [layout.simulation(scenario, simulator, entry["file"], seed)
                                    for entry in entries]))

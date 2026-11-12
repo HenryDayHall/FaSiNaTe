@@ -84,8 +84,8 @@ import tempfile
 
 from .config import REPO_DIR
 from .ddml_configs import OPTION as ML_CONFIG, canonical
-from .layout import (INPUT_DIR, INPUT_FOLDERS, OBSERVABLES_DIR, REC_DIR, REC_SUFFIX, SEED_TAG,
-                     SEP, SIM_DIR, input_stem)
+from .layout import (GEANT4, INPUT_DIR, INPUT_FOLDERS, OBSERVABLES_DIR, REC_DIR, REC_SUFFIX,
+                     SECOND_GEANT4, SEED_TAG, SEP, SIM_DIR, input_stem)
 
 FORMAT = "fasinate-manifest/2"
 ESSENTIAL, TRUTH, OTHER = "essential", "input_truth", "other"
@@ -165,8 +165,8 @@ def title(record):
     elif words[0] == TRUTH:
         text = "the inputs' generated truth" + (", %s" % words[1] if len(words) > 1 else "")
     elif words[0] in STAGE_WORDS and len(words) == 3:
-        text = "%s %s, %s" % ("Geant4" if words[2] == "geant4" else words[2],
-                              STAGE_WORDS[words[0]], words[1])
+        text = "%s %s, %s" % ({GEANT4: "Geant4", SECOND_GEANT4: "Geant4 (2nd sample)"}.get(
+            words[2], words[2]), STAGE_WORDS[words[0]], words[1])
     else:
         text = "plots, test samples and job logs"
     return "%s: %s%s" % (TITLE, text, " (part %s)" % part if part else "")

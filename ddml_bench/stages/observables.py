@@ -36,7 +36,8 @@ class Observables(Stage):
         observables = graph.observables
         if not observables:
             return
-        for simulator in [plan["reference"]] + plan["models"]:
+        # Geant4, its second sample and the models
+        for simulator in [plan["reference"], plan["second_geant4"]] + plan["models"]:
             name = simulator["name"]
             # The reconstructions of every input of the scenarios measured, with
             # the ddsim seed of each (None if ddsim chose it)

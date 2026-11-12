@@ -97,9 +97,18 @@ input simulated once with each `ddsim` seed (or with `one_seed_per_input`,
 once with its own), and the seed goes into the names
 the same way: `<input>_simseed<S>`, or `<input>_n<N>_simseed<S>`. Every task
 records its seed (`null` for those without one of their own), and the
-observables record each reconstructed file's seed in the `.npz`. Records of
-files, such as the reconstructed files in a `.npz`, are relative to the data
-folder (`Layout.relative`), so they hold when the data is copied elsewhere.
+observables record each reconstructed file's seed in the `.npz`. The geant4
+stage simulates every input of the scenarios twice: as the reference,
+`geant4`, and as its second sample, `geant4_2`, each of whose simulations has
+a seed of its own, the first's plus 1000000, or 1000000 where the first has
+`ddsim`'s own (`layout.second_sample_seed()`), so its names always carry
+`_simseed<S>`, and the scenarios' seeds are below 1000000. The second sample
+is then reconstructed and measured as any simulator is, and the plots compare
+it with Geant4 as they do the models, which gives Geant4's own distance from
+itself: where the Pareto fronts draw Geant4. Inputs given directly (`custom`)
+are simulated once. Records of files, such as the reconstructed files in a
+`.npz`, are relative to the data folder (`Layout.relative`), so they hold when
+the data is copied elsewhere.
 The segments of an input (`input.segments`) are inputs named
 `<input>_seg<i>of<N>` (`segment_suffix()`, with their events from
 `segment_bounds()`), so everything made from one is named after it, e.g.

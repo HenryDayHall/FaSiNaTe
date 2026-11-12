@@ -43,10 +43,11 @@ run's plan.json ("All scenarios" when there are several).  Without a plan.json,
 a log whose name has no scenario takes the scenario of the other logs in its
 run directory.
 
-Only Geant4 and the models described in models/ now (models/<name>.yaml, of
-the repository: --repo, $FASINATE_REPO_DIR, or the one this script is in) are
-plotted, each labelled by its description's name; --all-models plots every
-model found in the logs.  With --since DATE, jobs that started before DATE are
+Only Geant4 (both its samples: geant4, and geant4_2, its second) and the
+models described in models/ now (models/<name>.yaml, of the repository:
+--repo, $FASINATE_REPO_DIR, or the one this script is in) are plotted, each
+labelled by its description's name; --all-models plots every model found in
+the logs.  With --since DATE, jobs that started before DATE are
 left out, e.g. those from before the inputs were split into segments.
 
 All jobs that share step, model and scenario make one point - repeats in other
@@ -107,6 +108,7 @@ STAGE_STEPS = {
 MODELS = {
     "": ("Model-independent", "#6b6b6b"),
     "geant4": ("Geant4", "#0072B2"),
+    "geant4_2": ("Geant4 (2nd sample)", "#88BBDD"),
 }
 # Name in the log names -> (legend label, marker).  Scenarios not listed are
 # picked up from "generate-<scenario>-..." etc. and get a spare marker.
@@ -773,8 +775,9 @@ def main(argv=None):
                   "model in the logs is plotted; give one with --models-dir or --repo",
                   file=sys.stderr)
     elif not args.all_models:
-        allowed = set(labels) | {"geant4"}
-        print(f"models in {models_dir}: {', '.join(labels) or 'none'} (and Geant4)")
+        allowed = set(labels) | {"geant4", "geant4_2"}
+        print(f"models in {models_dir}: {', '.join(labels) or 'none'} (and Geant4, both its "
+              "samples)")
     since = None
     if args.since:
         since = parse_time(f"{args.since:%Y-%m-%d %H:%M:%S}")

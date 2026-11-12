@@ -5,7 +5,8 @@ earlier submissions, and cancelling what needs a job that failed."""
 import glob
 import os
 
-from test_pipeline_local import DI_PHOTON_INPUT, DI_PHOTON_SIMULATIONS, INPUTS, SIMULATORS
+from test_pipeline_local import (DI_PHOTON_INPUT, DI_PHOTON_SIMULATIONS, INPUTS, SECOND,
+                                 SECOND_DI_PHOTON, SIMULATORS)
 
 
 def submissions(bench):
@@ -27,15 +28,15 @@ def by_stage(jobs):
 
 def test_slurm_pipeline_runs_every_stage_as_jobs(bench):
     status, output = bench.run("slurm_pipeline.sh", "--dry-run")
-    assert "would submit 22 job(s)" in output, output
+    assert "would submit 31 job(s)" in output, output
     assert submissions(bench) == [] and bench.slurm_jobs() == []
 
     status, output = bench.run("slurm_pipeline.sh", "--", "--account=test")
-    assert "submitting 22 job(s)" in output, output
+    assert "submitting 31 job(s)" in output, output
     jobs = bench.slurm_jobs()
-    assert [job["state"] for job in jobs] == ["COMPLETED"] * 22, jobs
+    assert [job["state"] for job in jobs] == ["COMPLETED"] * 31, jobs
     folder, = submissions(bench)
-    assert len(records(folder)) == 22
+    assert len(records(folder)) == 31
     for name in ("plan.json", "tasks.json", "job.sh", "report.txt"):
         assert os.path.isfile(os.path.join(folder, name))
     for job in jobs:
@@ -56,12 +57,19 @@ def test_slurm_pipeline_runs_every_stage_as_jobs(bench):
     for option in ("--partition=maxcpu", "--constraint=EPYC&7402", "--time=2-00:00:00",
                    "--nodes=1", "--account=test", "--job-name=fasinate-geant4"):
         assert option in geant4["options"], geant4["options"]
+    # Geant4's second sample is the geant4 stage's too, with jobs named after it
+    second = [job for job in stages["geant4"] if "/%s/" % SECOND in job["args"][0]]
+    assert len(second) == 4
+    assert all("--job-name=fasinate-geant4_2" in job["options"] for job in second)
+    assert all("--partition=maxcpu" in job["options"] for job in second)
     assert ids  # every job ran a task of tasks.json
 
-    for simulator in SIMULATORS:
+    for simulator, names in ((SIMULATORS[0], DI_PHOTON_SIMULATIONS),
+                             (SIMULATORS[1], DI_PHOTON_SIMULATIONS),
+                             (SECOND, SECOND_DI_PHOTON)):
         assert len(bench.files("rec_output", "single_photon", simulator)) == 8
         assert bench.files("rec_output", "di_photon", simulator) == sorted(
-            name + ending for name in DI_PHOTON_SIMULATIONS
+            name + ending for name in names
             for ending in ("_AIDA.root", "_PfoAnalysis.root", "_REC.edm4hep.root", ".log"))
     assert "metrics.csv" in bench.files("observables", "plots")
 
@@ -74,36 +82,39 @@ def test_slurm_pipeline_runs_every_stage_as_jobs(bench):
 def test_slurm_pipeline_waits_for_queued_jobs(bench):
     queue = {"FAKE_SLURM_MODE": "queue"}
     status, output = bench.run("slurm_pipeline.sh", env=queue)
-    assert [job["state"] for job in bench.slurm_jobs()] == ["PENDING"] * 22
+    assert [job["state"] for job in bench.slurm_jobs()] == ["PENDING"] * 31
 
     # The jobs are still queued, so they are waited for, not submitted again
     status, output = bench.run("slurm_pipeline.sh", env=queue)
-    assert "nothing new to submit; 22 job(s) of earlier submissions are still queued" in output, \
+    assert "nothing new to submit; 31 job(s) of earlier submissions are still queued" in output, \
         output
-    assert len(bench.slurm_jobs()) == 22
+    assert len(bench.slurm_jobs()) == 31
 
     bench.run_fake("sbatch", "--drain")
-    assert [job["state"] for job in bench.slurm_jobs()] == ["COMPLETED"] * 22
+    assert [job["state"] for job in bench.slurm_jobs()] == ["COMPLETED"] * 31
     status, output = bench.run("slurm_pipeline.sh")
     assert "everything selected is done" in output, output
 
 
 def test_slurm_pipeline_cancels_what_needs_a_failed_job(bench):
+    # (both of Geant4's samples, which the fake ddsim calls geant4 alike)
     bench.fail_ddsim("geant4 *en80*")
     status, output = bench.run("slurm_pipeline.sh")
     states = dict((job["args"][0], job["state"]) for job in bench.slurm_jobs())
     failed = [key for key, state in states.items() if state == "FAILED"]
     cancelled = sorted(key.split(":", 1)[0] for key, state in states.items()
                        if state == "CANCELLED")
-    assert len(failed) == 1 and failed[0].startswith("geant4:") and "en80" in failed[0]
-    assert cancelled == ["observables", "plot", "reconstruct"], states
-    assert list(states.values()).count("COMPLETED") == 18
+    assert len(failed) == 2 and all(key.startswith("geant4:") and "en80" in key
+                                    for key in failed)
+    assert cancelled == ["observables", "observables", "plot", "reconstruct", "reconstruct"], \
+        states
+    assert list(states.values()).count("COMPLETED") == 24
 
     # Run again: only what failed, or was cancelled, is submitted
     bench.fail_ddsim(None)
     status, output = bench.run("slurm_pipeline.sh")
-    assert "submitting 4 job(s)" in output, output
-    assert [job["state"] for job in bench.slurm_jobs()[22:]] == ["COMPLETED"] * 4
+    assert "submitting 7 job(s)" in output, output
+    assert [job["state"] for job in bench.slurm_jobs()[31:]] == ["COMPLETED"] * 7
     assert "metrics.csv" in bench.files("observables", "plots")
 
 
@@ -126,8 +137,10 @@ def test_slurm_pipeline_test_sample(bench):
 def test_slurm_simulate_geant4_submits_the_geant4_stage(bench):
     bench.run("generate_input.sh")
     status, output = bench.run("slurm_simulate_geant4.sh", "-s", "single_photon")
-    assert "submitting 2 job(s)" in output, output
-    assert [job["options"][0] for job in bench.slurm_jobs()] == ["--job-name=fasinate-geant4"] * 2
+    # Each input, by both of Geant4's samples
+    assert "submitting 4 job(s)" in output, output
+    assert [job["options"][0] for job in bench.slurm_jobs()] == [
+        "--job-name=fasinate-geant4"] * 2 + ["--job-name=fasinate-geant4_2"] * 2
     status, output = bench.run("slurm_simulate_geant4.sh", "-m", "4", check=False)
     assert status == 1 and "is gone" in output
 
@@ -138,4 +151,4 @@ def test_a_scenario_left_out_is_reported_and_the_rest_submitted(bench):
     bench.with_tau_pairs(write=False)
     status, output = bench.run("slurm_pipeline.sh", "--dry-run")
     assert "the scenario tau_pairs is left out of this run" in output, output
-    assert "would submit 22 job(s)" in output, output
+    assert "would submit 31 job(s)" in output, output

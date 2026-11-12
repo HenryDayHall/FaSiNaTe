@@ -43,7 +43,10 @@ for each input, in the order of the inputs). Without seeds, each input is
 simulated once, with ddsim's own random seed ([None]). scenario_inputs() gives
 each input the seeds it is simulated with. The seeds are those of the whole
 inputs: every segment of an input is simulated with the seeds of that input,
-so that the figures put the segments of a seed together, as one sample.
+so that the figures put the segments of a seed together, as one sample. They
+are below 1000000: the second Geant4 sample (geant4_2) is simulated with each
+plus 1000000, or with 1000000 where there are none (ddml_bench/layout.py), so
+that it is independent of the first.
 
 A new input type needs an entry in INPUT_TYPES: for inputs made here, a
 function giving the commands, one giving the file each command makes (without
@@ -66,8 +69,8 @@ import shlex
 import sys
 
 from .config import REPO_DIR, ConfigError, load_config
-from .layout import INPUT_DIR, PHYSICS_INPUT_DIR, Layout, LayoutError, check_input_folder, \
-    check_name, check_segments, input_stem, segment_suffix
+from .layout import INPUT_DIR, PHYSICS_INPUT_DIR, SECOND_SEED_OFFSET, Layout, LayoutError, \
+    check_input_folder, check_name, check_segments, input_stem, segment_suffix
 
 # The options of the guns that make a segment of an input (input.segments)
 SEGMENT_OPTIONS = ("--segment", "--segments")
@@ -249,13 +252,19 @@ INPUT_TYPES = {
 
 def simulation_seeds(name, seeds):
     """The ddsim seeds each input of a scenario is simulated with, once each:
-    its simulation_seeds, or [None] (once, with ddsim's own random seed)."""
+    its simulation_seeds, or [None] (once, with ddsim's own random seed). They
+    are below SECOND_SEED_OFFSET, as the second Geant4 sample is simulated
+    with each plus that (layout.second_sample_seed()), so that none of its
+    simulations has a seed of the first's."""
     if seeds is None:
         return [None]
     if not isinstance(seeds, list) or not seeds or not all(
-            isinstance(s, int) and not isinstance(s, bool) and s >= 1 for s in seeds):
+            isinstance(s, int) and not isinstance(s, bool) and 1 <= s < SECOND_SEED_OFFSET
+            for s in seeds):
         raise ConfigError("scenarios.%s.simulation_seeds should be a list of ddsim's random "
-                          "seeds, whole numbers of at least 1 (e.g. [1, 2, 3]), or null" % name)
+                          "seeds, whole numbers of at least 1 and below %d (e.g. [1, 2, 3]), "
+                          "or null; the second Geant4 sample is simulated with each plus %d"
+                          % (name, SECOND_SEED_OFFSET, SECOND_SEED_OFFSET))
     if len(set(seeds)) != len(seeds):
         raise ConfigError("scenarios.%s.simulation_seeds has a seed twice: %s"
                           % (name, ", ".join(str(s) for s in seeds)))

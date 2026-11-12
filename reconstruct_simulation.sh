@@ -7,7 +7,8 @@
 # Usage: ./reconstruct_simulation.sh [options] [SIMULATOR | FILE ...]
 #
 #   SIMULATOR            reconstruct this simulator's simulations: a model in
-#                        models/, or geant4 (default: all of them)
+#                        models/, geant4, or geant4_2, its second sample
+#                        (default: all of them)
 #   FILE                 reconstruct this simulation file (a .root or
 #                        .edm4hep.root file written by ddsim)
 #   -s, --scenario NAME  reconstruct this scenario's simulations (repeatable;
@@ -27,8 +28,9 @@
 #   -h, --help           show this help
 #
 # It reconstructs the simulations of the scenarios' inputs, by the models in
-# models/ and by Geant4, each in the detector it was simulated in (the model's
-# fixed_at_training.detector.compact_file, or geant4.compact). Each simulation
+# models/ and by Geant4 (both its samples), each in the detector it was
+# simulated in (the model's fixed_at_training.detector.compact_file, or
+# geant4.compact). Each simulation
 #   <paths.data_dir>/sim_output/<scenario>/<simulator>/<name>.root
 # (.edm4hep.root for Geant4) is reconstructed to
 #   <paths.data_dir>/rec_output/<scenario>/<simulator>/<name>_REC.edm4hep.root

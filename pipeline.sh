@@ -4,7 +4,8 @@
 # after the tasks that make what it reads. The tasks, as for slurm_pipeline.sh:
 #
 #   generate     one per input file still to make, with ILD_Particle_Gun.py
-#   geant4       one per input still to simulate with Geant4
+#   geant4       one per input still to simulate with Geant4, and one per
+#                input for its second sample, geant4_2 (other seeds)
 #   models       one per input and model still to simulate
 #   reconstruct  one per simulation still to reconstruct
 #   observables  one per simulator whose measurements aren't up to date, after
@@ -14,8 +15,8 @@
 #
 # Usage: ./pipeline.sh [options] [SIMULATOR ...]
 #
-#   SIMULATOR            only these simulators: models in models/, or geant4
-#                        (default: all of them)
+#   SIMULATOR            only these simulators: models in models/, geant4, or
+#                        geant4_2, its second sample (default: all of them)
 #   -s, --scenario NAME  only this scenario's inputs (repeatable; default:
 #                        every scenario)
 #       --stages LIST    only these stages, separated by commas (default: all)
