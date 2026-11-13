@@ -43,6 +43,12 @@ run's plan.json ("All scenarios" when there are several).  Without a plan.json,
 a log whose name has no scenario takes the scenario of the other logs in its
 run directory.
 
+Only Geant4 and the models described in models/ now (models/<name>.yaml, of
+the repository: --repo, $FASINATE_REPO_DIR, or the one this script is in) are
+plotted, each labelled by its description's name; --all-models plots every
+model found in the logs.  With --since DATE, jobs that started before DATE are
+left out, e.g. those from before the inputs were split into segments.
+
 All jobs that share step, model and scenario make one point - repeats in other
 runs, other seeds and simseeds, other input configurations - with their mean as
 the marker and their spread as the error bar.  Colour = model, marker =
@@ -50,6 +56,7 @@ scenario; steps not tied to one model (input generation, plotting) are grey.
 
 examples, from the data folder:
   python3 plot_step_times.py                            # ./slurm -> step_times.png
+  python3 plot_step_times.py --since 2026-11-12         # only jobs started since then
   python3 plot_step_times.py slurm/pipeline_* -o step_times.pdf --csv jobs.csv
   python3 plot_step_times.py --repo ~/training/analysis/FaSiNaTe
   python3 plot_step_times.py --data-dir /data/dust/user/dayhallh/analysis/data
@@ -95,12 +102,11 @@ STAGE_STEPS = {
 }
 
 # Name in the log names -> (legend label, colour).  Dict order = legend order.
-# Models not listed are picked up from "models-<model>-..." log names and get a
-# spare colour.  "" is for steps that are not tied to one model.
+# The models of models/ get the spare colours in order of their names, and the
+# name in their description as label.  "" is for steps not tied to one model.
 MODELS = {
     "": ("Model-independent", "#6b6b6b"),
     "geant4": ("Geant4", "#0072B2"),
-    "caloclouds3": ("CaloClouds3", "#D55E00"),
 }
 # Name in the log names -> (legend label, marker).  Scenarios not listed are
 # picked up from "generate-<scenario>-..." etc. and get a spare marker.
@@ -112,7 +118,11 @@ SCENARIOS = {
 }
 ALL, UNKNOWN = "<all>", "<unknown>"  # logs whose name and run give no single scenario
 PSEUDO_SCENARIOS = {ALL: ("All scenarios", "D"), UNKNOWN: ("Scenario unknown", "X")}
-SPARE_COLOURS = ["#009E73", "#CC79A7", "#E69F00", "#56B4E9", "#000000"]
+# (in this order, neighbours stay apart for colour-blind readers too)
+SPARE_COLOURS = ["#D55E00", "#009E73", "#E69F00", "#CC79A7", "#56B4E9", "#000000"]
+# The repository this script is in, whose models/ and configuration are used
+# unless --repo or $FASINATE_REPO_DIR names another
+SCRIPT_REPO = Path(__file__).resolve().parent.parent
 SPARE_MARKERS = ["o", "^", "v", "P", "h", "*", "<", ">"]
 
 ERROR_TEXT = {
@@ -277,7 +287,51 @@ def config_data_dir(repo, config_files):
     return Path(result.stdout.strip().splitlines()[-1]), ""
 
 
-def find_data_dirs(args, run_dirs):
+def find_repo(args, run_dirs):
+    """The FaSiNaTe repository: --repo, $FASINATE_REPO_DIR, the one this script
+    is in, or the one most of the runs' plan.json name; None if none is found."""
+    if args.repo or os.environ.get("FASINATE_REPO_DIR"):
+        return Path(args.repo or os.environ["FASINATE_REPO_DIR"]).expanduser()
+    if (SCRIPT_REPO / "scripts" / "fasinate_config.py").is_file():
+        return SCRIPT_REPO
+    repos = Counter(p["repo_dir"] for p in map(read_plan, run_dirs)
+                    if isinstance(p.get("repo_dir"), str))
+    return Path(repos.most_common(1)[0][0]) if repos else None
+
+
+NAME_LINE = re.compile(r"^name:[ \t]*(?P<name>.*?)[ \t]*(?:[ \t]#.*)?$", re.M)
+
+
+def current_models(models_dir):
+    """{model: legend label} of the models described in models_dir now
+    (<model>.yaml; the label is its top-level name:), or None if there is no
+    such folder."""
+    if not models_dir.is_dir():
+        return None
+    found = {}
+    for path in sorted(models_dir.glob("*.yaml")):
+        if path.name.startswith(".") or not path.is_file():
+            continue
+        try:
+            match = NAME_LINE.search(path.read_text(errors="replace"))
+        except OSError:
+            match = None
+        label = match["name"].strip("'\"") if match and match["name"] else ""
+        found[path.stem] = label or path.stem
+    return found
+
+
+def since_arg(text):
+    for form in ("%Y-%m-%d", "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(text.strip().replace("T", " "), form)
+        except ValueError:
+            pass
+    raise argparse.ArgumentTypeError(
+        f"expected a date, YYYY-MM-DD or 'YYYY-MM-DD HH:MM', got {text!r}")
+
+
+def find_data_dirs(args, run_dirs, repo):
     """[(data folder, where it came from)]: those given, or the configuration's
     and those in the runs' plan.json."""
     if args.data_dir:
@@ -286,9 +340,6 @@ def find_data_dirs(args, run_dirs):
         plans = [read_plan(r) for r in run_dirs]
         found = [(Path(p["data_dir"]), "plan.json") for p in plans
                  if isinstance(p.get("data_dir"), str)]
-        repos = Counter(p["repo_dir"] for p in plans if isinstance(p.get("repo_dir"), str))
-        repo = args.repo or os.environ.get("FASINATE_REPO_DIR") or \
-            (repos.most_common(1)[0][0] if repos else None)
         if repo:
             data_dir, why = config_data_dir(repo, args.fasinate_config)
             if data_dir is None:
@@ -526,11 +577,13 @@ def styles(names, listed, spares):
 
 def print_table(points, unit, model_style, scenario_style):
     k = UNIT_SECONDS[unit]
-    print(f"\n{'step':<26}{'model':<19}{'scenario':<19}{'n':>5}"
+    wm = max([len("model")] + [len(model_style[p.model][0]) for p in points]) + 2
+    ws = max([len("scenario")] + [len(scenario_style[p.scenario][0]) for p in points]) + 2
+    print(f"\n{'step':<26}{'model':<{wm}}{'scenario':<{ws}}{'n':>5}"
           f"{'mean':>9}{'std':>9}{'min':>9}{'max':>9}  [{unit}]")
     for p in points:
         step = f"{p.step} " + STEP_NAMES[p.step].replace("\n", " ")
-        print(f"{step:<26}{model_style[p.model][0]:<19}{scenario_style[p.scenario][0]:<19}"
+        print(f"{step:<26}{model_style[p.model][0]:<{wm}}{scenario_style[p.scenario][0]:<{ws}}"
               f"{p.n:>5}{p.mean / k:>9.2f}{p.std / k:>9.2f}"
               f"{min(p.seconds) / k:>9.2f}{max(p.seconds) / k:>9.2f}")
     print()
@@ -649,8 +702,17 @@ def parse_args(argv=None):
                    help="data folder holding sim_output/ and rec_output/ (repeatable); by "
                         "default the configuration's paths.data_dir and those in plan.json")
     p.add_argument("--repo", metavar="DIR",
-                   help="FaSiNaTe repository whose configuration names the data folder "
-                        "(default: $FASINATE_REPO_DIR, else repo_dir in plan.json)")
+                   help="FaSiNaTe repository whose configuration names the data folder and "
+                        "whose models/ names the models to plot (default: $FASINATE_REPO_DIR, "
+                        "else the one this script is in, else repo_dir in plan.json)")
+    p.add_argument("--since", metavar="DATE", type=since_arg,
+                   help="leave out jobs that started before DATE (YYYY-MM-DD or "
+                        "'YYYY-MM-DD HH:MM', in --tz)")
+    p.add_argument("--models-dir", metavar="DIR", type=Path,
+                   help="plot only Geant4 and the models described in DIR (<model>.yaml) "
+                        "(default: models/ of the repository)")
+    p.add_argument("--all-models", action="store_true",
+                   help="plot every model found in the logs, described in models/ or not")
     p.add_argument("--fasinate-config", metavar="FILE", action="append", default=[],
                    help="configuration file to merge over the repository's, as its scripts' "
                         "--config (repeatable)")
@@ -700,8 +762,26 @@ def main(argv=None):
               "only simulation and reconstruction are timed; run from the directory that "
               "holds slurm/ or pass its path", file=sys.stderr)
 
+    run_dirs = sorted({log.run_dir for log in logs})
+    repo = find_repo(args, run_dirs)
+    models_dir = args.models_dir or (repo / "models" if repo else None)
+    labels = current_models(models_dir) if models_dir else None  # {model: legend label}
+    allowed = None  # the models to plot, None for all
+    if labels is None:
+        if not args.all_models:
+            print(f"warning: no models folder ({models_dir or 'no repository found'}), so every "
+                  "model in the logs is plotted; give one with --models-dir or --repo",
+                  file=sys.stderr)
+    elif not args.all_models:
+        allowed = set(labels) | {"geant4"}
+        print(f"models in {models_dir}: {', '.join(labels) or 'none'} (and Geant4)")
+    since = None
+    if args.since:
+        since = parse_time(f"{args.since:%Y-%m-%d %H:%M:%S}")
+        print(f"only jobs started since {since:%Y-%m-%d %H:%M} ({args.tz or 'local time'})")
+
     # 1. Simulation and reconstruction, from the logs next to their outputs.
-    data_dirs = find_data_dirs(args, sorted({log.run_dir for log in logs}))
+    data_dirs = find_data_dirs(args, run_dirs, repo)
     for data_dir, source in data_dirs:
         print(f"data folder {data_dir}  (from the {source})")
     out_jobs = output_logs(data_dirs, args, parse_time, skip)
@@ -763,6 +843,18 @@ def main(argv=None):
             jobs.append(Job(log, seconds, status, t0, t1, start["host"], start["job"],
                             start["task"].strip()))
 
+    # 4. Only the models described now, and only the jobs started since --since.
+    kept = []
+    for job in jobs:
+        if allowed is not None and job.log.model and job.log.model not in allowed:
+            skip(f"model {job.log.model} has no description in models/ now", job.log)
+        elif since is not None and job.start < since:
+            skip(f"started before {since:%Y-%m-%d %H:%M} (--since)", job.log)
+        else:
+            kept.append(job)
+    jobs = kept
+    out_jobs = [j for j in jobs if j.log.step in OUTPUT_STEPS.values()]
+
     n_runs = len({log.run_dir for log in logs})
     n_slurm = len(jobs) - len(out_jobs)
     print(f"{n_out_logs} simulation/reconstruction logs + {len(logs)} slurm logs in "
@@ -779,11 +871,13 @@ def main(argv=None):
     if not jobs:
         sys.exit("No finished jobs to plot.")
 
-    # 4. Pool, report and plot.
+    # 5. Pool, report and plot.
     points = summarise(jobs, args.error)
     unit = auto_unit(points) if args.unit == "auto" else args.unit
     model_style = styles(sorted({p.model for p in points}, key=model_rank), MODELS,
                          SPARE_COLOURS)
+    model_style = {m: ((labels or {}).get(m, label), colour)
+                   for m, (label, colour) in model_style.items()}
     scenario_style = styles(sorted({p.scenario for p in points}, key=scenario_rank),
                             {**SCENARIOS, **PSEUDO_SCENARIOS}, SPARE_MARKERS)
     print_table(points, unit, model_style, scenario_style)
