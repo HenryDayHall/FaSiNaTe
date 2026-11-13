@@ -310,7 +310,9 @@ class Bench(object):
             if not os.path.exists(path):
                 _write(path, "fake weights: %s\n" % weights)
             md5 = hashlib.md5(open(path, "rb").read()).hexdigest()
-            text = re.sub(r'weights_md5: "[0-9a-f]{32}"', 'weights_md5: "%s"' % md5, text)
+            # (quoted or not, as yaml.safe_dump writes it)
+            text = re.sub(r"""weights_md5: *["']?[0-9a-f]{32}["']?""", 'weights_md5: "%s"' % md5,
+                          text)
         _write(os.path.join(self.repo, "models", name + ".yaml"), text)
         for entry in ddml.get("model_configs") or []:
             module = ((entry.get("plugin_properties") or {}).get("PythonModule")
@@ -318,6 +320,13 @@ class Bench(object):
             source = os.path.join(REPO, folder, "%s.py" % module) if module else None
             if source and os.path.isfile(source):
                 shutil.copy2(source, os.path.join(self.repo, "models", module + ".py"))
+
+    def description(self, name):
+        """The copy's models/<name>.yaml, as read: what a test expects of a
+        model comes from there, so that changing a model's presets or
+        configurations doesn't break the tests."""
+        with open(os.path.join(self.repo, "models", name + ".yaml")) as stream:
+            return yaml.safe_load(stream)
 
     def setting(self, name):
         """A setting from scripts/fasinate_config.py --shell, by its variable."""

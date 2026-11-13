@@ -80,7 +80,8 @@ ddml:
 # How plot_observables.sh draws this model: a colour and a line style
 # (matplotlib's: here a dash pattern, offset and lengths)
 # Every model needs a line style of its own, as well as a colour, so the
-# curves can be told apart without colour.
+# curves can be told apart without colour. (Only how it is drawn: the plot
+# section isn't part of what the model is, its description_sha256.)
 plot:
-  color: "#ff5917"
-  linestyle: [0, [1, 5]]
+  color: "#1a9850"
+  linestyle: [0, [6, 2, 1, 2, 1, 2, 1, 2]]

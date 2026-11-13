@@ -84,10 +84,17 @@ def test_every_model_in_the_repository_is_described_whole():
                 # Relative to DDML's scripts/ folder, where ddsim runs
                 assert entry["plugin_properties"]["ModelPath"] == "../" + model["weights"]
         assert len(model["description_sha256"]) == 64, model["name"]
-        # Its own inference code, if it has any: the module of models/ named
-        # after it (caloclouds3_recompiled's)
-        own = os.path.isfile(os.path.join(REPO, "models", model["name"] + ".py"))
-        assert sorted(model["python"]) == ([model["name"]] if own else []), model["name"]
+        # Its own inference code, if it has any: the modules of models/ that its
+        # configurations run, as their PythonModule (caloclouds3_recompiled's,
+        # which caloclouds3_recompiled_5GeV runs too)
+        named = set((entry.get("plugin_properties") or {}).get("PythonModule")
+                    for entry in model["model_configs"] if isinstance(entry, dict))
+        own = sorted(module for module in named if module and os.path.isfile(
+            os.path.join(REPO, "models", "%s.py" % module)))
+        assert sorted(model["python"]) == own, model["name"]
+        # and a module named after a model is one it runs
+        if os.path.isfile(os.path.join(REPO, "models", model["name"] + ".py")):
+            assert model["name"] in model["python"], model["name"]
         for module, code in model["python"].items():
             assert code["path"] == "models/%s.py" % module
             with open(os.path.join(REPO, code["path"]), "rb") as stream:
@@ -445,46 +452,67 @@ def test_every_model_of_the_repository_runs_in_ddsim(bench):
         kept = bench.repo if ddml.get("weights_in") == "fasinate" else bench.ddml
         assert "%s: weights %s, md5 checked" % (model, os.path.join(kept, ddml["weights"])) \
             in output, output
-        own = os.path.join(bench.repo, "models", model + ".py")
+        # Its presets, or its model configurations, each one a configuration
+        # in ddsim, in order (the barrel's, the endcap's, ...)
+        entries = ([{"preset": preset} for preset in ddml["presets"]] if "presets" in ddml
+                   else [{"preset": entry} if isinstance(entry, str) else entry
+                         for entry in ddml["model_configs"]])
+        # and the modules of models/ these run, its own inference code
+        modules = set((entry.get("plugin_properties") or {}).get("PythonModule")
+                      for entry in entries)
+        own = sorted(module for module in modules if module and os.path.isfile(
+            os.path.join(bench.repo, "models", "%s.py" % module)))
         for name in INPUTS:
             path = bench.path("sim_output", "single_photon", model, name + "_n2.root")
             with open(path) as stream:
                 simulated = json.load(stream)
             log = open(path[:-len(".root")] + ".log").read()
-            config, = simulated["models"]
-            assert config["applicable_particles"] == ["gamma"]
-            assert config["triggers_gev"] == {"gamma": 10.0}
-            assert config["detector"] == "EcalBarrel"
+            assert len(simulated["models"]) == len(entries), simulated["models"]
+            for number, (entry, config) in enumerate(zip(entries, simulated["models"]), 1):
+                assert config["applicable_particles"] == ["gamma"]
+                # photons above the energy its configuration sets, or else
+                # above the 10 GeV of DDML's presets
+                triggers = entry.get("triggers", {"gamma": 10})
+                assert config["triggers_gev"] == dict(
+                    (particle, float(energy)) for particle, energy in triggers.items())
+                # in the part of the ECal of its geometry, or of its preset
+                part = entry.get("geometry") or entry["preset"]
+                assert config["detector"] == ("EcalEndcap" if "ENDCAP" in part else "EcalBarrel")
+                if "presets" in ddml:
+                    assert "--ml-model %s" % entry["preset"] in log
+                else:
+                    assert "model configuration %d:" % number in log
+                    assert config["plugin"] == entry.get("plugin", config["plugin"])
+                    for key, value in entry.get("plugin_properties", {}).items():
+                        assert config["plugin_properties"][key] == value
+                    if "correct_angles" in entry:
+                        assert config["correct_angles"] == entry["correct_angles"]
+                # The plugin loads the weights whose md5 sum was checked, or its
+                # Python module does: DDML's, or the model's own from models/
+                module = (entry.get("plugin_properties") or {}).get("PythonModule")
+                if config["python_module"] is None:
+                    assert config["plugin_properties"]["ModelPath"] == "../" + ddml["weights"]
+                elif module in own:
+                    assert os.path.realpath(config["python_module"]) == os.path.realpath(
+                        os.path.join(bench.repo, "models", module + ".py"))
+                else:
+                    assert config["python_module"].startswith(os.path.join(bench.ddml, "python"))
             if "presets" in ddml:
-                assert "--ml-model %s" % ddml["presets"][0] in log
                 assert "/DDML/scripts/ddsim_steer.py" in log
-                assert simulated["simulator"] == ddml["presets"][0]
+                assert simulated["simulator"] == "+".join(ddml["presets"])
             else:
-                entry, = ddml["model_configs"]
                 assert "scripts/ddsim_steer_models.py --compactFile" in log
-                assert "--ml-config " in log and "model configuration 1:" in log
-                assert config["plugin"] == entry.get("plugin", config["plugin"])
-                for key, value in entry.get("plugin_properties", {}).items():
-                    assert config["plugin_properties"][key] == value
-                if "correct_angles" in entry:
-                    assert config["correct_angles"] == entry["correct_angles"]
-            # The plugin loads the weights whose md5 sum was checked, or its
-            # Python module does: DDML's, or the model's own from models/
-            if config["python_module"] is None:
-                assert config["plugin_properties"]["ModelPath"] == "../" + ddml["weights"]
-            elif os.path.isfile(own):
-                assert os.path.realpath(config["python_module"]) == os.path.realpath(own)
-            else:
-                assert config["python_module"].startswith(os.path.join(bench.ddml, "python"))
+                assert "--ml-config " in log
             # The log says what the model is, as ddsim started
             assert "# model     %s, of models/%s.yaml as read" % (
                 models.description_sha256(described), model) in log, log
-            if os.path.isfile(own):
-                with open(own, "rb") as stream:
-                    sha256 = hashlib.sha256(stream.read()).hexdigest()
-                assert "# python    %s:%s, from models/%s.py\n" % (model, sha256, model) in log
-            else:
-                assert "# python    none, the model runs no module of models/\n" in log
+            code = []
+            for module in own:
+                with open(os.path.join(bench.repo, "models", module + ".py"), "rb") as stream:
+                    code.append("%s:%s" % (module, hashlib.sha256(stream.read()).hexdigest()))
+            where = ("from " + ", ".join("models/%s.py" % module for module in own) if own
+                     else "the model runs no module of models/")
+            assert "# python    %s, %s\n" % (" ".join(code) or "none", where) in log, log
 
 
 def test_the_environment_check_finds_what_a_model_gets_wrong(bench):
@@ -515,10 +543,10 @@ def test_the_environment_check_finds_what_a_model_gets_wrong(bench):
         stream.write("def run_inference(inputs):\n    return inputs[0]\n")
     # and a model of presets, which runs DDML's own even so: here a preset of
     # DDML's embedded-Python plugin
-    paper = open(os.path.join(REPO, "models", "caloclouds3_paper.yaml")).read()
-    assert "  presets: [CC3_BARREL]\n" in paper
-    bench.add_model("python_preset", paper.replace("  presets: [CC3_BARREL]\n",
-                                                   "  presets: [CC3_BARREL_PY_INTERFACE]\n"))
+    with open(os.path.join(REPO, "models", "caloclouds3_paper.yaml")) as stream:
+        paper = yaml.safe_load(stream)
+    paper["ddml"]["presets"] = ["CC3_BARREL_PY_INTERFACE"]
+    bench.add_model("python_preset", yaml.safe_dump(paper))
     # Weights kept in this repository (ddml.weights_in: fasinate), checked
     # there: ones that aren't there, and ones that aren't what their md5 sum says
     assert "\n  weights_in: fasinate\n" in own
