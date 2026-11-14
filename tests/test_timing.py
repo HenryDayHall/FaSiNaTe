@@ -14,6 +14,7 @@ import sys
 import types
 
 import pytest
+import yaml
 
 from conftest import REPO, _write
 
@@ -60,6 +61,17 @@ def with_torch(bench, gpu=True, cuda_built=True):
     if not cuda_built:
         control(bench, "cuda_not_built")
     control(bench, "ddsim_run_inference")
+
+
+def with_python_preset(bench, name="caloclouds3_python"):
+    """A model of DDML's own embedded-Python preset of CaloClouds3, which runs
+    DDML's module, python/examples/cc3_sf_2a_wrapper.py: caloclouds3_paper with
+    the preset CC3_BARREL_PY_INTERFACE and the weights that module loads."""
+    described = bench.description("caloclouds3_paper")
+    described["name"] = "CaloClouds3 (DDML's Python module)"
+    described["ddml"]["presets"] = ["CC3_BARREL_PY_INTERFACE"]
+    described["ddml"]["weights"] = "models/CC3_SF_2A.pt"
+    bench.add_model(name, yaml.safe_dump(described))
 
 
 def result(bench, device, scenario, simulator, name):
@@ -185,8 +197,10 @@ def test_a_models_inference_runs_on_the_gpu_and_is_timed(monkeypatch, tmp_path, 
     # As it is, on the CPU
     assert module.run_inference(inputs)[-1] == 50.0
 
+    # Once, though the model's configurations both run it (its barrel's and
+    # its endcap's)
     done = inference.prepare({"FASINATE_TIMED_INFERENCE": "cuda",
-                              "FASINATE_TIMED_PYTHON_MODULES": "fake_cc3"})
+                              "FASINATE_TIMED_PYTHON_MODULES": "fake_cc3,fake_cc3"})
     assert done == ["fake_cc3._model"]
     assert isinstance(module._model, inference.Timed) and module._model.device == "cuda:0"
     assert module.not_a_model == 3
@@ -309,10 +323,10 @@ def test_timing_here_on_the_cpu(timing):
     assert "would time 6 task(s)" in output, output
     assert not os.path.exists(bench.path("timing", "cpu"))
 
-    # Geant4 and CaloClouds3 on the 3 inputs
+    # Geant4 and the bench's model, caloclouds3_paper, on the 3 inputs
     status, output = bench.run("timing.sh", "-n", "3", "--warmup", "1")
     assert "timed 6 of 6" in output, output
-    for simulator in ("geant4", "caloclouds3"):
+    for simulator in ("geant4", "caloclouds3_paper"):
         assert bench.files("timing", "cpu", "single_photon", simulator) == sorted(
             "%s_t3%s" % (name, ending) for name in SINGLE_PHOTON
             for ending in (".events.csv", ".json", ".log"))
@@ -320,31 +334,38 @@ def test_timing_here_on_the_cpu(timing):
         assert bench.files("timing", "cpu", "di_photon", simulator) == sorted(
             DI_PHOTON + "_simseed1_t3" + ending for ending in (".events.csv", ".json", ".log"))
     name = SINGLE_PHOTON[0] + "_t3"
-    found = result(bench, "cpu", "single_photon", "caloclouds3", name)
+    found = result(bench, "cpu", "single_photon", "caloclouds3_paper", name)
     assert found["wall"]["n"] == 3 and found["wall"]["mean"] > 0
     assert found["cpu"]["n"] == 3
     # 1 of warm-up, 3 timed, and the one more simulated whose start ended them
     assert found["events"] == {"requested": 3, "warmup": 1, "ended": 4, "begun": 5, "timed": 3,
                                "input_ended": False, "timed_fewer": False}
     assert found["model_calls"]["mean"] == 0  # the fake ddsim calls no inference here
+    # DDML's line for the shower its barrel's configuration places (its
+    # endcap's places none: the fake ddsim's particles all enter the barrel)
     assert found["barrel_showers"]["mean"] == 1
     assert found["inference"]["on"] == "cpu"
-    assert found["inference"]["backends"] == [{
-        "plugin": "CaloCloudsTwoAngleModelPolyhedraBarrelPyEmbeddedModel/BarrelModelPython",
-        "backend": "embedded Python", "python_module": "cc3_sf_2a_wrapper"}]
+    # DDML's presets of it, as its description has them, each run by a
+    # LibTorch plugin of DDML's
+    presets = bench.description("caloclouds3_paper")["ddml"]["presets"]
+    assert [(backend["backend"], backend["python_module"])
+            for backend in found["inference"]["backends"]] == [("LibTorch", None)] * len(presets)
+    assert "CaloCloudsTwoAngleModelPolyhedraBarrelTorchModel/BarrelModelTorch" in [
+        backend["plugin"] for backend in found["inference"]["backends"]]
     assert found["run"]["pinned_cpu"] is not None and found["run"]["line_buffered"]
     assert found["run"]["steering"].endswith(os.path.join("DDML", "scripts", "ddsim_steer.py"))
     assert "--ml-model" in found["run"]["command"]
     assert found["run"]["command"][found["run"]["command"].index("--steeringFile") + 1] \
         .endswith(os.path.join("ddml_timing", "ddsim_steer_timing.py"))
     assert "--numberOfEvents=5" in found["run"]["command"]
-    assert found["identity"]["simulator"]["presets"] == ["CC3_BARREL_PY_INTERFACE"]
+    assert found["identity"]["simulator"]["presets"] == presets
     assert found["node"]["cpu_model"] and found["software"]["key4hep"] == "2026-04-08"
-    rows = events_csv(bench, "cpu", "single_photon", "caloclouds3", name)
+    rows = events_csv(bench, "cpu", "single_photon", "caloclouds3_paper", name)
     assert [row["warmup"] for row in rows] == ["1", "0", "0", "0"]
     assert [row["event"] for row in rows] == ["1", "2", "3", "4"]
-    log = open(bench.path("timing", "cpu", "single_photon", "caloclouds3", name + ".log")).read()
-    assert log.startswith("# ddml-timing: caloclouds3 on single_photon, on a cpu node")
+    log = open(bench.path("timing", "cpu", "single_photon", "caloclouds3_paper",
+                          name + ".log")).read()
+    assert log.startswith("# ddml-timing: caloclouds3_paper on single_photon, on a cpu node")
     assert "# model     " in log and "+++ Initializing event 4." in log
     assert "# finished" in log
     geant4 = result(bench, "cpu", "single_photon", "geant4", name)
@@ -366,7 +387,7 @@ def test_timing_here_on_the_cpu(timing):
     with open(bench.path("timing", "summary.csv")) as stream:
         rows = list(csv.DictReader(stream))
     assert len(rows) == 6 + 4  # each result, and each simulator over each scenario's inputs
-    assert all(row["speedup"] for row in rows if row["simulator"] == "caloclouds3")
+    assert all(row["speedup"] for row in rows if row["simulator"] == "caloclouds3_paper")
 
 
 def test_an_input_that_runs_out_is_timed_to_its_end(timing):
@@ -391,15 +412,17 @@ def test_a_scenario_without_its_inputs_is_blocked(timing):
 
 def test_slurm_timing_on_cpu_and_gpu_nodes(timing):
     bench = timing
-    # Besides caloclouds3, a model DDML runs with LibTorch, and one that runs
-    # its own inference code (models/caloclouds3_rescaled.py)
-    bench.add_model("caloclouds3_paper")
-    bench.add_model("caloclouds3_rescaled")
+    # Besides the bench's caloclouds3_paper, which DDML runs with LibTorch, a
+    # model that runs its own inference code (models/caloclouds3_recompiled.py,
+    # in its barrel's and its endcap's configurations), and one of DDML's
+    # embedded-Python presets, which runs DDML's module
+    bench.add_model("caloclouds3_recompiled")
+    with_python_preset(bench)
     with_torch(bench)
     bench.run("generate_input.sh")
     status, output = bench.run("slurm_timing.sh", "--dry-run", "-n", "2", "--warmup", "1")
-    # cpu: geant4 and the 3 models on 3 inputs; gpu: caloclouds3 and
-    # caloclouds3_rescaled (caloclouds3_paper runs with LibTorch, so is skipped)
+    # cpu: geant4 and the 3 models on 3 inputs; gpu: caloclouds3_python and
+    # caloclouds3_recompiled (caloclouds3_paper runs with LibTorch, so is skipped)
     assert "would submit 18 job(s)" in output, output
     assert "gpu: caloclouds3_paper (3 tasks, di_photon, single_photon): DDML runs its inference " \
         "with LibTorch, on the CPU only" in output, output
@@ -427,7 +450,7 @@ def test_slurm_timing_on_cpu_and_gpu_nodes(timing):
         assert "with status 0" in open(job["output"]).read()
 
     name = SINGLE_PHOTON[1] + "_t2"
-    on_gpu = result(bench, "gpu", "single_photon", "caloclouds3", name)
+    on_gpu = result(bench, "gpu", "single_photon", "caloclouds3_python", name)
     assert on_gpu["inference"]["on"] == "cuda"
     assert on_gpu["inference"]["models"] == [{
         "model": "cc3_sf_2a_wrapper._model", "device": "cuda:0",
@@ -435,14 +458,15 @@ def test_slurm_timing_on_cpu_and_gpu_nodes(timing):
     # The fake ddsim calls the model once per event, as DDML does per shower
     assert on_gpu["model_calls"]["mean"] == 1 and on_gpu["inference_time"]["n"] == 2
     assert on_gpu["node"]["job"]["slurm_job_id"]
-    # Its own inference code, imported from models/ as scripts/ddsim_steer_models.py has it
-    rescaled = result(bench, "gpu", "single_photon", "caloclouds3_rescaled", name)
-    assert [m["model"] for m in rescaled["inference"]["models"]] == \
-        ["caloclouds3_rescaled._model"] and rescaled["inference"]["models"][0]["device"] == "cuda:0"
-    assert rescaled["run"]["steering"].endswith(os.path.join("scripts", "ddsim_steer_models.py"))
-    assert rescaled["model_calls"]["mean"] == 1
-    assert rescaled["identity"]["simulator"]["python"]["caloclouds3_rescaled"]
-    on_cpu = result(bench, "cpu", "single_photon", "caloclouds3", name)
+    # Its own inference code, imported from models/ as scripts/ddsim_steer_models.py
+    # has it: moved to the GPU once, though both its configurations run it
+    own = result(bench, "gpu", "single_photon", "caloclouds3_recompiled", name)
+    assert [m["model"] for m in own["inference"]["models"]] == \
+        ["caloclouds3_recompiled._model"] and own["inference"]["models"][0]["device"] == "cuda:0"
+    assert own["run"]["steering"].endswith(os.path.join("scripts", "ddsim_steer_models.py"))
+    assert own["model_calls"]["mean"] == 1
+    assert own["identity"]["simulator"]["python"]["caloclouds3_recompiled"]
+    on_cpu = result(bench, "cpu", "single_photon", "caloclouds3_python", name)
     assert on_cpu["inference"]["models"][0]["device"] == "cpu"
     assert on_cpu["model_calls"]["mean"] == 1
     libtorch = result(bench, "cpu", "single_photon", "caloclouds3_paper", name)
@@ -463,22 +487,26 @@ def test_slurm_timing_on_cpu_and_gpu_nodes(timing):
 
 def test_gpu_timing_needs_pytorch_with_cuda(timing):
     bench = timing
+    # A model whose inference could run on the GPU (its own module's)
+    bench.add_model("caloclouds3_recompiled")
     with_torch(bench, cuda_built=False)
     bench.run("generate_input.sh")
     status, output = bench.run("slurm_timing.sh", "-n", "2", "--warmup", "1")
-    # The CPU nodes' jobs go; the GPU nodes' are blocked, saying why
-    assert "submitting 6 job(s)" in output, output
+    # The CPU nodes' jobs go (geant4 and the 2 models on 3 inputs); the GPU
+    # nodes' are blocked, saying why
+    assert "submitting 9 job(s)" in output, output
     assert "built without CUDA" in output, output
     assert all(job["args"][0].startswith("cpu/") for job in bench.slurm_jobs())
 
 
 def test_a_gpu_job_without_a_gpu_fails_saying_why(timing):
     bench = timing
+    bench.add_model("caloclouds3_recompiled")
     with_torch(bench, gpu=False)
     bench.run("generate_input.sh", "single_photon")
     status, output = bench.run("timing.sh", "-d", "gpu", "-n", "2", "--warmup", "1", check=False)
     assert status == 1 and "FAILED" in output and "finds no GPU it can use" in output, output
-    failed = bench.path("timing", "gpu", "single_photon", "caloclouds3",
+    failed = bench.path("timing", "gpu", "single_photon", "caloclouds3_recompiled",
                         SINGLE_PHOTON[0] + "_t2.failed.json")
     assert os.path.isfile(failed)
     status, output = bench.run("timing_summary.sh", check=False)

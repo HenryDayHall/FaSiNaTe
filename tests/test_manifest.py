@@ -95,7 +95,9 @@ def test_the_records_of_a_data_folder(bench):
     assert [r["seed"] for r in second["reconstructions"]["di_photon"]] == [1000001, 1000002]
     assert [r["seed"] for r in second["reconstructions"]["single_photon"]] == [1000000] * 2
     caloclouds3 = by_name["caloclouds3_paper.npz"]
-    assert caloclouds3["stack"]["presets"] == "CC3_BARREL"
+    # The presets its description gives, as its logs have them
+    assert caloclouds3["stack"]["presets"] == " ".join(
+        bench.description("caloclouds3_paper")["ddml"]["presets"])
     # What the model is, by its logs and by its description now: DDML's own
     # plugin, and no module of models/
     with open(os.path.join(bench.repo, "models", "caloclouds3_paper.yaml")) as stream:
@@ -208,9 +210,12 @@ def test_the_manifest_records_what_a_model_with_its_own_code_is(bench):
     measured = entry()
     assert measured["stack"]["description_sha256"] == described
     assert measured["stack"]["python"] == "caloclouds3_recompiled:" + sha256
-    assert measured["stack"]["model_configs"] == ddml_configs.canonical(
-        [{"preset": "CC3_BARREL_PY_INTERFACE",
-          "plugin_properties": {"PythonModule": "caloclouds3_recompiled"}}])
+    # Its DDML model configurations, each running that code (the barrel's, the
+    # endcap's, ...), as its description gives them
+    configs = yaml.safe_load(text)["ddml"]["model_configs"]
+    assert configs and all(entry["plugin_properties"]["PythonModule"] == "caloclouds3_recompiled"
+                           for entry in configs)
+    assert measured["stack"]["model_configs"] == ddml_configs.canonical(configs)
     assert measured["model"]["description_sha256"] == described
     assert measured["model"]["python"] == {"caloclouds3_recompiled": {
         "path": "models/caloclouds3_recompiled.py", "sha256": sha256}}

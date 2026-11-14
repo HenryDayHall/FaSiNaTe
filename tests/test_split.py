@@ -130,7 +130,8 @@ def test_whole_data_is_split_into_segments_that_measure_the_same(whole):
     # which the manifests read as the whole job's
     found = manifest.read_log(log)
     assert found == manifest.read_log(whole_log) and found["seed"] == 1
-    assert found["key4hep"] == "2026-04-08" and found["presets"] == "CC3_BARREL", found
+    assert found["key4hep"] == "2026-04-08" and found["presets"] == " ".join(
+        bench.description("caloclouds3_paper")["ddml"]["presets"]), found
     # The reconstructions' histograms are kept whole, beside the whole files
     assert bench.files("rec_output", "tau_pairs", "geant4") == sorted(
         "taus_%s_seg%dof3_simseed%d%s" % (name, i, seed, ending)

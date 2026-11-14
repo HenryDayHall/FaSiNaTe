@@ -121,7 +121,11 @@ def prepare(environ=None):
     (FASINATE_TIMED_*); raises RuntimeError, stopping ddsim, if it can't."""
     environ = os.environ if environ is None else environ
     inference = environ.get("FASINATE_TIMED_INFERENCE") or "cpu"
-    modules = [m for m in (environ.get("FASINATE_TIMED_PYTHON_MODULES") or "").split(",") if m]
+    # Each module once, in order, though several of a model's configurations
+    # can run it (its barrel's and its endcap's): wrapped again, it would have
+    # no torch module left to wrap, which stops ddsim on the GPU
+    modules = list(dict.fromkeys(
+        m for m in (environ.get("FASINATE_TIMED_PYTHON_MODULES") or "").split(",") if m))
     if inference not in ("cpu", "cuda"):
         raise RuntimeError("ddml-timing: FASINATE_TIMED_INFERENCE should be cpu or cuda, not %r"
                            % inference)

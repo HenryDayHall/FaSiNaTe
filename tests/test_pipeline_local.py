@@ -181,7 +181,9 @@ def test_pipeline_runs_every_stage(bench):
     with open(bench.path("sim_output", "single_photon", "caloclouds3_paper",
                          INPUTS[0] + ".root")) as stream:
         simulation = json.load(stream)
-    assert simulation["simulator"] == "CC3_BARREL"
+    # with the presets of its description (the fake ddsim names them, joined by +)
+    assert simulation["simulator"] == "+".join(
+        bench.description("caloclouds3_paper")["ddml"]["presets"])
     assert len(simulation["events"]) == 6 and simulation["seed"] is None
     log = open(bench.path("sim_output", "single_photon", "geant4", INPUTS[0] + ".log")).read()
     assert "ddsim_steer_geant4.py" in log and "# finished" in log
