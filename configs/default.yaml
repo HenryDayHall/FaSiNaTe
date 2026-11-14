@@ -202,7 +202,7 @@ scenarios:
       # Beside single_photon's (and so in the published record)
       folder: input_single_particle_gun
       # GeV, each photon of a pair; a file each.
-      energies: [10, 20, 100]
+      energies: [20, 100, 10]
       # Per energy.
       n_events: 15000
       # Where the pairs start on the front face of the stave (mm), as in the
