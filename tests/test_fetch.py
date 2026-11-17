@@ -4,17 +4,22 @@ record published from a run of the pipeline on the fakes, with its manifest
 folders that fetch from it."""
 
 import hashlib
+import io
 import json
 import os
 import shutil
+import tarfile
 
 import pytest
 
 from conftest import Bench
-from ddml_bench import ddml_configs
+from ddml_bench import ddml_configs, fetch
+from test_manifest import write_timing
 from test_pipeline_local import DI_PHOTON_INPUT, INPUTS, read_metrics
 
 RECORD = "123"
+# A new version of it, with the timing benchmark's results and table
+TIMED_RECORD = "124"
 
 
 def digest(path, kind="sha256"):
@@ -22,19 +27,41 @@ def digest(path, kind="sha256"):
 
 
 @pytest.fixture(scope="module")
-def published(tmp_path_factory):
-    """A record of the essential files of a run of the pipeline, as
-    {"folder": where the record's files are, "data": the data folder it was
-    published from, "md5": the md5 sum of its manifest}."""
+def publisher(tmp_path_factory):
+    """A run of the pipeline, to publish."""
     bench = Bench(str(tmp_path_factory.mktemp("publisher")))
     bench.run("pipeline.sh")
-    build = os.path.join(bench.tmp, "build")
+    return bench
+
+
+def publish(bench, record):
+    """The essential record of the bench's data folder, as Zenodo record
+    record: {"zenodo": the folder of the records, "folder": where the
+    record's files are, "data": the data folder it was published from, "md5":
+    the md5 sum of its manifest, "record": its id}."""
+    build = os.path.join(bench.tmp, "build" + record)
     bench.run("scripts/ddml-bench", "manifest", "--out", build, "--records", "essential",
               "--stage", "--copy")
     zenodo = os.path.join(bench.tmp, "zenodo")
-    shutil.copytree(os.path.join(build, "essential"), os.path.join(zenodo, RECORD))
-    return {"zenodo": zenodo, "folder": os.path.join(zenodo, RECORD), "data": bench.data,
-            "md5": digest(os.path.join(zenodo, RECORD, "manifest.json"), "md5")}
+    shutil.copytree(os.path.join(build, "essential"), os.path.join(zenodo, record))
+    return {"zenodo": zenodo, "folder": os.path.join(zenodo, record), "data": bench.data,
+            "md5": digest(os.path.join(zenodo, record, "manifest.json"), "md5"),
+            "record": record}
+
+
+@pytest.fixture(scope="module")
+def published(publisher):
+    """A record of the essential files of a run of the pipeline (publish())."""
+    return publish(publisher, RECORD)
+
+
+@pytest.fixture(scope="module")
+def published_timing(publisher, published):
+    """A new version of the record of published, with the timing benchmark's
+    results and table (made up) of its data folder, timing.tar
+    (publish(), with "timing": the paths of its members)."""
+    members, _ = write_timing(publisher.data)
+    return dict(publish(publisher, TIMED_RECORD), timing=members)
 
 
 def fetching(bench, published, md5=None, extra=""):
@@ -44,7 +71,8 @@ def fetching(bench, published, md5=None, extra=""):
     with open(override, "w") as stream:
         stream.write("published:\n  enabled: true\n  records:\n    - zenodo: %s\n"
                      "      manifest_md5: \"%s\"\n  url: \"file://%s/{record}/{name}\"\n%s"
-                     % (RECORD, md5 or published["md5"], published["zenodo"], extra))
+                     % (published.get("record", RECORD), md5 or published["md5"],
+                        published["zenodo"], extra))
     bench.env["FASINATE_CONFIG"] = bench.config + ":" + override
     return override
 
@@ -335,3 +363,177 @@ def test_inputs_in_segments_dont_fetch_the_published_whole_ones(bench, published
     for name in INPUTS:
         assert digest(bench.path("input_single_particle_gun", name + ".slcio")) == \
             digest(os.path.join(published["data"], "input_single_particle_gun", name + ".slcio"))
+
+
+# ---------------------------------------------------------------------------
+# The timing benchmark's results and table, which no task makes
+
+
+def test_a_fresh_data_folder_fetches_the_timing_for_the_pareto_fronts(bench, published_timing):
+    fetching(bench, published_timing)
+    status, output = bench.run("pipeline.sh", "--dry-run")
+    assert "would fetch 6 published file(s)" in output, output
+    assert "would fetch the timing benchmark's published results and their table, for the " \
+        "Pareto fronts: timing.tar, %d file(s)" % len(published_timing["timing"]) in output, output
+    assert not os.path.exists(bench.path("timing"))
+    status, output = bench.run("pipeline.sh", "--dry-run", "--no-fetch")
+    assert "would fetch" not in output, output
+    # Only a run that plots fetches it
+    status, output = bench.run("pipeline.sh", "--dry-run", "--stages", "generate")
+    assert "would fetch 6 published file(s)" in output, output
+    assert "would fetch the timing" not in output, output
+
+    status, output = bench.run("pipeline.sh")
+    assert "fetching the timing benchmark's published results" in output, output
+    for path in published_timing["timing"]:
+        assert digest(bench.path(path)) == digest(os.path.join(published_timing["data"], path))
+    hidden = [name for root, _, names in os.walk(bench.path("timing")) for name in names
+              if name.startswith(".")]
+    assert hidden == []
+    # (the archive isn't kept)
+    assert os.listdir(bench.path(".ddml-bench", "published", "zenodo-" + TIMED_RECORD)) == [
+        "manifest.json"]
+    plots = bench.files("observables", "plots")
+    for scenario in ("single_photon", "di_photon"):
+        assert "pareto_js_cpu__%s.png" % scenario in plots, plots
+    assert {row["simulator"] for row in read_metrics(bench.path("observables", "plots",
+                                                                "pareto.csv"))} == {
+        "geant4", "caloclouds3_paper"}
+    status, output = bench.run("pipeline.sh")
+    assert "everything selected is done" in output and "fetching" not in output, output
+
+    # A table made here again, from the results fetched and those of a model
+    # timed here, is newer than the plots, which are drawn again
+    write_timing(bench.data, times=(("another", 0.1),))
+    status, output = bench.run("pipeline.sh", "--dry-run")
+    assert "the timing table is newer than the plots" in output and "would fetch" not in output, \
+        output
+
+
+def test_plotting_fetches_the_timing_where_there_is_none(bench, published_timing):
+    fetching(bench, published_timing)
+    measured = os.path.join(published_timing["data"], "observables")
+    shutil.copytree(measured, bench.path("observables"),
+                    ignore=lambda folder, names: [n for n in names if not n.endswith(".npz")])
+    status, output = bench.run("plot_observables.sh", "--format", "png", "--no-dashboard",
+                               "--no-fetch")
+    assert "there is no timing table" in output and not os.path.exists(bench.path("timing")), \
+        output
+    status, output = bench.run("plot_observables.sh", "--format", "png", "--no-dashboard")
+    assert "fetching the timing benchmark's published results" in output, output
+    assert "pareto_js_cpu__single_photon.png" in bench.files("observables", "plots"), output
+    assert digest(bench.path("timing", "summary.csv")) == digest(
+        os.path.join(published_timing["data"], "timing", "summary.csv"))
+    status, output = bench.run("plot_observables.sh", "--format", "png", "--no-dashboard")
+    assert "fetching" not in output, output
+
+    # Measurements elsewhere (--dir): into their data folder, where the
+    # Pareto fronts look for it
+    elsewhere = os.path.join(bench.tmp, "elsewhere", "observables")
+    shutil.copytree(bench.path("observables"), elsewhere,
+                    ignore=lambda folder, names: [n for n in names if not n.endswith(".npz")])
+    status, output = bench.run("plot_observables.sh", "--dir", elsewhere, "--format", "png",
+                               "--no-dashboard")
+    assert "fetching the timing benchmark's published results" in output, output
+    assert os.path.isfile(os.path.join(bench.tmp, "elsewhere", "timing", "summary.csv"))
+    assert os.path.isfile(os.path.join(elsewhere, "plots", "pareto.csv"))
+
+
+def test_the_timing_isnt_fetched_into_a_folder_with_timing_results_of_its_own(
+        bench, published_timing):
+    fetching(bench, published_timing)
+    # The published results, as an interrupted fetch would leave them, without
+    # the table: the rest is fetched, as they are the published ones
+    result = next(path for path in published_timing["timing"] if path.endswith("_t4.json"))
+    os.makedirs(os.path.dirname(bench.path(result)))
+    shutil.copy2(os.path.join(published_timing["data"], result), bench.path(result))
+    status, output = bench.run("pipeline.sh", "--dry-run")
+    assert "would fetch the timing benchmark's published results" in output, output
+    # One of its own, or a published one changed: nothing is fetched, and
+    # nothing there is replaced
+    with open(bench.path(result), "a") as stream:
+        stream.write("\n")
+    status, output = bench.run("pipeline.sh", "--dry-run")
+    assert "the published timing.tar (Zenodo record %s) isn't fetched, as %s has timing results " \
+        "of its own (e.g. %s): ./timing_summary.sh makes the timing table from them" % (
+            TIMED_RECORD, bench.path("timing"), result) in output, output
+    assert "would fetch the timing" not in output, output
+    status, output = bench.run("pipeline.sh")
+    assert "isn't fetched, as" in output and not os.path.exists(bench.path("timing", "summary.csv"))
+    assert open(bench.path(result)).read().endswith("}\n")
+
+
+def test_a_published_timing_archive_that_isnt_what_its_manifest_says_isnt_used(
+        bench, published_timing):
+    tampered = os.path.join(bench.tmp, "tampered")
+    shutil.copytree(published_timing["zenodo"], tampered)
+    with open(os.path.join(tampered, TIMED_RECORD, "timing.tar"), "ab") as stream:
+        stream.write(b"more")
+    fetching(bench, dict(published_timing, zenodo=tampered))
+    # The run goes on, without the Pareto fronts
+    status, output = bench.run("pipeline.sh")
+    assert "can't fetch the timing benchmark's published results (" in output, output
+    assert "timing.tar isn't the published file: its sha256 is" in output, output
+    assert "so the plots won't have their Pareto fronts; the next run tries again" in output
+    assert "metrics.csv" in bench.files("observables", "plots")
+    assert not [n for n in bench.files("observables", "plots") if n.startswith("pareto")]
+    assert not os.path.exists(bench.path("timing"))
+    assert os.listdir(bench.path(".ddml-bench", "published", "zenodo-" + TIMED_RECORD)) == [
+        "manifest.json"]
+
+
+def test_the_members_of_a_published_timing_archive_are_checked(tmp_path):
+    def entry(*paths):
+        return {"name": "timing.tar", "members": [{"path": p, "sha256": "0" * 64}
+                                                  for p in paths]}
+    for path in ("../x", "timing/../x", "/timing/x", "observables/geant4.npz", "timing",
+                 "timing//x", "timing/./x", "timing\\x", None):
+        with pytest.raises(fetch.FetchError, match="isn't a file of timing/"):
+            fetch.timing_members(entry(path))
+    with pytest.raises(fetch.FetchError, match="has no sha256 for timing/x"):
+        fetch.timing_members({"name": "timing.tar", "members": [{"path": "timing/x"}]})
+
+    # An archive with a link where a member is listed, and a member not
+    # listed, which isn't unpacked
+    contents = {"timing/summary.csv": b"table\n", "timing/cpu/s/g/a_t4.json": b"{}\n",
+                "timing/../outside": b"not listed\n"}
+    archive = str(tmp_path / "timing.tar")
+    with tarfile.open(archive, "w") as tar:
+        for name, data in contents.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+        link = tarfile.TarInfo("timing/cpu/s/g/b_t4.json")
+        link.type, link.linkname = tarfile.SYMTYPE, "/etc/passwd"
+        tar.addfile(link)
+    members = [{"path": path, "sha256": hashlib.sha256(contents[path]).hexdigest(),
+                "size": len(contents[path])}
+               for path in ("timing/summary.csv", "timing/cpu/s/g/a_t4.json")]
+    data = tmp_path / "data"
+    # The table last, as it says the rest is there
+    assert fetch.unpack(archive, members, str(data)) == ["timing/cpu/s/g/a_t4.json",
+                                                         "timing/summary.csv"]
+    assert (data / "timing" / "summary.csv").read_bytes() == b"table\n"
+    assert not (tmp_path / "outside").exists() and not (data / "outside").exists()
+    # Nothing there is replaced
+    (data / "timing" / "summary.csv").write_text("mine\n")
+    os.remove(str(data / "timing" / "cpu" / "s" / "g" / "a_t4.json"))
+    assert fetch.unpack(archive, members, str(data)) == ["timing/cpu/s/g/a_t4.json"]
+    assert (data / "timing" / "summary.csv").read_text() == "mine\n"
+
+    with pytest.raises(fetch.FetchError, match="timing/cpu/s/g/b_t4.json in timing.tar isn't a "
+                                               "file"):
+        fetch.unpack(archive, [dict(members[1], path="timing/cpu/s/g/b_t4.json")],
+                     str(tmp_path / "linked"))
+    # A member that isn't the file listed: neither it nor the table is put in place
+    other = tmp_path / "other"
+    with pytest.raises(fetch.FetchError, match="timing/cpu/s/g/a_t4.json in timing.tar isn't "
+                                               "the published file: its sha256 is"):
+        fetch.unpack(archive, [members[0], dict(members[1], sha256="0" * 64)], str(other))
+    assert [name for _, _, names in os.walk(str(other)) for name in names] == []
+    with pytest.raises(fetch.FetchError, match="isn't the published archive: it hasn't timing/x"):
+        fetch.unpack(archive, members + [{"path": "timing/x", "sha256": "0" * 64}],
+                     str(tmp_path / "missing"))
+    (tmp_path / "not.tar").write_bytes(b"not an archive\n" * 100)
+    with pytest.raises(fetch.FetchError, match="not.tar isn't the published archive"):
+        fetch.unpack(str(tmp_path / "not.tar"), members, str(tmp_path / "none"))

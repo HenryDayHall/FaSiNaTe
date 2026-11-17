@@ -9,9 +9,12 @@ The files of the data folder (paths.data_dir) go into records:
                                   running anything of the others: the scenarios'
                                   inputs (<folder>/*.slcio of each scenario's
                                   input.folder: input_single_particle_gun,
-                                  input_physics_samples) and the measurements of
-                                  the full samples (observables/<simulator>.npz),
-                                  all required
+                                  input_physics_samples), the measurements of
+                                  the full samples (observables/<simulator>.npz)
+                                  and the timing benchmark's results with their
+                                  table, for the plots' Pareto fronts (timing.tar:
+                                  timing/summary.csv and each task's .json and
+                                  .events.csv), all required
   input_truth__<scenario>         the guns' truth beside each scenario's inputs
                                   (.h5, optional: no stage reads it)
   sim_output__<scenario>__<simulator>
@@ -26,7 +29,9 @@ The files of the data folder (paths.data_dir) go into records:
   other                           the rest, small, as a tar archive per top
                                   folder (observables.tar: the plots and the test
                                   samples' .npz files; slurm.tar: the
-                                  submissions and their slurm logs), members
+                                  submissions and their slurm logs;
+                                  timing_logs.tar: the rest of timing/, its
+                                  runs' logs and slurm submissions), members
                                   named by their paths in the data folder
 
 Each record gets OUT/<record>/manifest.json; with --stage, OUT/<record>/ also
@@ -37,7 +42,9 @@ and the other record's tar archives.
 A manifest says, for each file: its name in the record, its path in the data
 folder, its sha256 and size, and its role: required (fetched by the
 pipeline), optional (fetched on request) or archive (never fetched
-automatically). An input says which scenarios have it and the gun options
+automatically). The timing benchmark's archive in the essential record has
+the kind timing: ddml_bench/fetch.py fetches it into a data folder that has
+no timing table. An input says which scenarios have it and the gun options
 that made it, or that it was made elsewhere (external: true; e.g. a physics
 sample of ILD's MC production). A measurement says which simulator and scenarios it holds, the
 settings of each observable in it, the reconstructions it was measured from,
@@ -85,11 +92,17 @@ import tempfile
 from .config import REPO_DIR
 from .ddml_configs import OPTION as ML_CONFIG, canonical
 from .layout import (GEANT4, INPUT_DIR, INPUT_FOLDERS, OBSERVABLES_DIR, REC_DIR, REC_SUFFIX,
-                     SECOND_GEANT4, SEED_TAG, SEP, SIM_DIR, input_stem)
+                     SECOND_GEANT4, SEED_TAG, SEP, SIM_DIR, TIMING_DIR, TIMING_SUMMARY,
+                     input_stem, timing_file)
 
 FORMAT = "fasinate-manifest/2"
 ESSENTIAL, TRUTH, OTHER = "essential", "input_truth", "other"
 REQUIRED, OPTIONAL, ARCHIVE = "required", "optional", "archive"
+# The timing benchmark's results and table, in the essential record (the kind
+# of its entry, which fetching looks for), and the rest of its folder, in the
+# other record
+TIMING, TIMING_ARCHIVE, TIMING_LOGS = "timing", "timing.tar", "timing_logs.tar"
+TIMING_TABLE = TIMING_DIR + "/" + TIMING_SUMMARY
 # What Zenodo takes in one record, by default (it can raise a record's quota
 # on request); the manifest is one of the files
 MAX_FILES = 100
@@ -147,6 +160,12 @@ def classify(relative, truth_scenarios=None, input_folders=INPUT_FOLDERS):
         return (TRUTH + SEP + scenario if scenario else TRUTH), OPTIONAL, name, None
     if parts[0] in (SIM_DIR, REC_DIR) and len(parts) >= 4:
         return SEP.join(parts[:3]), ARCHIVE, SEP.join(parts[3:]), None
+    timing = timing_file(relative)
+    if timing in ("table", "result", "events"):
+        # What the plots' Pareto fronts read, and what it is made from
+        return ESSENTIAL, REQUIRED, TIMING_ARCHIVE, TIMING_ARCHIVE
+    if timing:
+        return OTHER, ARCHIVE, TIMING_LOGS, TIMING_LOGS
     group = parts[0] if len(parts) > 1 else "loose"  # loose: files at the top
     return OTHER, ARCHIVE, group + ".tar", group + ".tar"
 
@@ -600,8 +619,8 @@ def plan_records(data_dir, leave_out=(), truth_scenarios=None, max_bytes=MAX_GB 
         if packed:
             entry = next((e for e in files if e["name"] == packed), None)
             if entry is None:
-                entry = {"name": packed, "role": role, "kind": "archive", "size": 0,
-                         "members": []}
+                entry = {"name": packed, "role": role, "size": 0, "members": [],
+                         "kind": TIMING if packed == TIMING_ARCHIVE else "archive"}
                 files.append(entry)
             entry["members"].append({"path": relative, "size": size})
             entry["size"] += size
@@ -615,9 +634,12 @@ def plan_records(data_dir, leave_out=(), truth_scenarios=None, max_bytes=MAX_GB 
 
 
 def catalogue(records):
-    """What every record holds, for the essential record's manifest."""
+    """What every record holds, for the essential record's manifest (an
+    archive not written, without --stage, counted by its members' size)."""
     return dict((name, {"title": title(name), "files": len(files),
-                        "size": sum(e["size"] for e in files),
+                        "size": sum(e["size"] if e.get("size") is not None
+                                    else sum(m["size"] for m in e.get("members", []))
+                                    for e in files),
                         "paths": [e["path"] for e in files if "path" in e]
                         + [m["path"] for e in files for m in e.get("members", [])]})
                 for name, files in records.items())
@@ -653,7 +675,8 @@ def build(data_dir, out, only=(), stage=False, copy=False, config=None, check=Tr
     # derived_from
     inputs = {}
     for entry in records[ESSENTIAL] if ESSENTIAL in records else []:
-        if entry["path"].split("/")[0] in folders and entry["path"].endswith(".slcio"):
+        if "path" in entry and entry["path"].split("/")[0] in folders \
+                and entry["path"].endswith(".slcio"):
             inputs[entry["path"]] = entry
             entry.update(sha256=sha256(os.path.join(data_dir, entry["path"])), kind="input")
             if entry["path"] in commands:
@@ -677,13 +700,15 @@ def build(data_dir, out, only=(), stage=False, copy=False, config=None, check=Tr
     for record in sorted(chosen, key=lambda r: r == ESSENTIAL):
         files, logs = records[record], []
         for i, entry in enumerate(files):
-            if record == ESSENTIAL and entry["path"].startswith(OBSERVABLES_DIR + "/"):
+            if "members" in entry:
+                _archive(entry, data_dir, os.path.join(out, record), stage)
+                if entry["kind"] == TIMING:
+                    _check_timing(entry, data_dir, warnings)
+            elif record == ESSENTIAL and entry["path"].startswith(OBSERVABLES_DIR + "/"):
                 files[i] = _measurement(data_dir, entry["path"], entry["role"], entry["name"],
                                         inputs, status, warnings, logs, by_scenario)
                 if files[i]["simulator"] in models:
                     files[i]["model"] = models[files[i]["simulator"]]
-            elif "members" in entry:
-                _archive(entry, data_dir, os.path.join(out, record), stage)
             elif "sha256" not in entry:
                 entry["sha256"] = sha256(os.path.join(data_dir, entry["path"]))
                 entry.setdefault("kind", "truth" if entry["role"] == OPTIONAL else "file")
@@ -699,6 +724,12 @@ def build(data_dir, out, only=(), stage=False, copy=False, config=None, check=Tr
                 if "path" in entry:
                     _place(os.path.join(data_dir, entry["path"]),
                            os.path.join(folder, entry["name"]), copy)
+            stray = sorted(set(os.listdir(folder)) - set(names) - {"manifest.json"})
+            stray = [name for name in stray if not name.startswith(".")]
+            if stray:
+                warnings.append("%s has files that aren't in its record (from an earlier "
+                                "run?): %s; delete them, so that they aren't uploaded with it"
+                                % (folder, ", ".join(stray)))
         manifest = dict(common, record=record, title=title(record), files=files)
         if record == ESSENTIAL:
             manifest["catalogue"] = catalogue(records)
@@ -799,6 +830,24 @@ def _archive(entry, data_dir, folder, stage):
         entry.update(sha256=None, size=None)
     for member in entry["members"]:
         member["sha256"], member["size"] = hashes[member["path"]]
+
+
+def _check_timing(entry, data_dir, warnings):
+    """Warn where the timing benchmark's table published isn't made from its
+    results published with it: there's none, or a result is newer."""
+    paths = [member["path"] for member in entry["members"]]
+    if TIMING_TABLE not in paths:
+        warnings.append("%s/ has the timing benchmark's results but no table, %s: make it with "
+                        "./timing_summary.sh, as a data folder that fetches them draws its "
+                        "Pareto fronts from it" % (TIMING_DIR, TIMING_TABLE))
+        return
+    made = os.path.getmtime(os.path.join(data_dir, TIMING_TABLE))
+    newer = [path for path in paths if timing_file(path) == "result"
+             and os.path.getmtime(os.path.join(data_dir, path)) > made]
+    if newer:
+        warnings.append("the timing table, %s, is older than %d of the results it is made from "
+                        "(e.g. %s): make it again with ./timing_summary.sh before publishing it"
+                        % (TIMING_TABLE, len(newer), newer[0]))
 
 
 def dry_run(data_dir, leave_out=(), truth_scenarios=None, max_gb=MAX_GB, folders=INPUT_FOLDERS):

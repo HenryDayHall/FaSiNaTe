@@ -18,9 +18,11 @@ Everything is written under paths.data_dir:
   observables/plots/pareto_<js|wasserstein>_<node>__<scenario><sample>.<format>
   observables/plots/pareto<sample>.csv                        the Pareto fronts of the metrics
       against the time per event in timing/summary.csv
-  timing/                                                     the timing benchmark's results,
-      which ddml_timing/plan.py names
-  timing/summary.csv                                          and their table
+  timing/<node>/<scenario>/<simulator>/<name>_t<N>.json       the timing benchmark's results,
+      with .events.csv, .log and (until a try succeeds) .failed.json beside
+      each; ddml_timing/plan.py names them, with the endings below
+  timing/slurm/                                               its slurm submissions
+  timing/summary.csv                                          and the results' table
 
 <sample> is empty for the full inputs, and _n<N> for a test on the first N
 events of each (-n N). It is set once, when an input is simulated: the
@@ -71,6 +73,14 @@ TIMING_DIR = "timing"
 # Their table, in TIMING_DIR (ddml_timing/summary.py), which the plots' Pareto
 # fronts take the time per event from (ddml_bench/pareto.py)
 TIMING_SUMMARY = "summary.csv"
+# The endings of a timing task's files (ddml_timing/plan.py), each in
+# TIMING_DIR/<node>/<scenario>/<simulator>/: its results, each event's times,
+# ddsim's log, and why the last try failed
+TIMING_RESULT, TIMING_EVENTS, TIMING_LOG, TIMING_FAILED = (".json", ".events.csv", ".log",
+                                                           ".failed.json")
+# The folder of TIMING_DIR with its slurm submissions, beside those of the
+# kinds of node
+TIMING_SUBMISSIONS = "slurm"
 # The folders the harness keeps for itself, which no inputs may go in
 RESERVED_FOLDERS = (SIM_DIR, REC_DIR, OBSERVABLES_DIR, "slurm", TIMING_DIR)
 
@@ -241,6 +251,27 @@ def simulations_in(directory):
 def figure_base(folder, observable, profile, scenario, suffix=""):
     """A figure's path, without the ending of its format."""
     return os.path.join(folder, "%s_%s%s%s%s" % (observable, profile, SEP, scenario, suffix))
+
+
+def timing_file(relative):
+    """What a file of the data folder, by its path relative to it ("/"
+    between folders), is of the timing benchmark's: "table" (its summary.csv),
+    "result" (a task's .json), "events" (a task's .events.csv), "other" (the
+    logs, the failures, the slurm submissions, simulations kept), or None
+    outside TIMING_DIR. The table is made from the results (as
+    ddml_timing/summary.py finds them), and the Pareto fronts read it."""
+    parts = relative.split("/")
+    if parts[0] != TIMING_DIR or len(parts) < 2:
+        return None
+    name = parts[-1]
+    if len(parts) == 2 and name == TIMING_SUMMARY:
+        return "table"
+    if len(parts) == 5 and parts[1] != TIMING_SUBMISSIONS and not name.startswith("."):
+        if name.endswith(TIMING_RESULT) and not name.endswith(TIMING_FAILED):
+            return "result"
+        if name.endswith(TIMING_EVENTS):
+            return "events"
+    return "other"
 
 
 def timing_summary_of(observables_dir):

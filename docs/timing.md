@@ -204,6 +204,33 @@ The README's [Pareto fronts](../README.md#the-pareto-fronts) section has the
 details. The pipeline draws the plots again when the table is newer than
 `metrics.csv`.
 
+## Publishing the results
+
+`ddml-bench manifest` puts the results and the table into the essential
+record as `timing.tar`: `timing/summary.csv`, and each task's `.json` and
+`.events.csv`, at their paths in the data folder. The logs, the failures and
+the slurm submissions go to the `other` record, as `timing_logs.tar`. It
+warns where the table is missing or older than a result, so run
+`./timing_summary.sh` before publishing.
+
+A data folder with no `timing/summary.csv` fetches `timing.tar` from the
+records in the configuration's `published` section and unpacks it into
+`timing/` ([`ddml_bench/fetch.py`](../ddml_bench/fetch.py)). A pipeline run
+that plots does this before it starts, and `plot_observables.sh` before it
+plots; `--no-fetch` doesn't. Each member is checked against its sha256 in the
+manifest, the table is put in place last, and nothing there is replaced. A
+data folder whose `timing/` has results of its own fetches nothing:
+`./timing_summary.sh` makes its table from them.
+
+The results fetched are done for this benchmark too, wherever it would time
+the same tasks with the same settings (the events, the warm-up, where the
+inference runs, the pinning, the input and seed, and what the simulator is).
+So with a model added, `slurm_timing.sh` times only that model, and
+`./timing_summary.sh` makes the table again from all the results. Its times
+compare with the published ones only on the same kind of node: the table's
+`host`, `cpu_model` and `gpu` say which nodes those were. To time everything
+on other nodes, start from a data folder without them, or use `-f`.
+
 ## Options
 
 `slurm_timing.sh`, which submits the jobs, and `timing.sh`, which times here,

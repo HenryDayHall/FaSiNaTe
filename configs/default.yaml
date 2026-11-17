@@ -24,7 +24,7 @@ paths:
 
 ddml:
   repository: https://github.com/key4hep/DDML.git
-  branch: python-inference
+  branch: main
   # Commit to build instead of the head of `branch`. Pin it (quoted, full
   # hash) for benchmark runs.
   commit: null
@@ -454,7 +454,10 @@ observables:
 # aren't there yet. Nothing there is replaced; published measurements need no
 # simulation or reconstruction, so adding a model to a fresh data folder runs
 # only its own tasks and the plots. A run says what it fetches, and why any
-# published file isn't used. See ddml_bench/fetch.py; --no-fetch makes a run
+# published file isn't used. The timing benchmark's results and their table
+# (timing.tar), which the plots' Pareto fronts read, are fetched into
+# <paths.data_dir>/timing where there's no timing table, by a run that plots
+# and by plot_observables.sh. See ddml_bench/fetch.py; --no-fetch makes a run
 # make everything itself.
 published:
   enabled: true
@@ -469,8 +472,13 @@ published:
     # di_photon inputs, and its measurements were made from the whole inputs'
     # reconstructions, not the segments' (each run says why they aren't used).
     # A new version with the segments' inputs and measurements replaces it.
-    - zenodo: 23670827
-      manifest_md5: "88e6b911f7fa2d7a7b642a00364477c5"
+    #- zenodo: 23670827
+    #  manifest_md5: "88e6b911f7fa2d7a7b642a00364477c5"
+    # second upload, completely replaces the first one, data has been split
+    # to smaller input sizes, new models exist, and this also contains the 
+    # tau fragments.
+    - zenodo: 24277217
+      manifest_md5: "8e1d4170e5f365b54d3f81124978ca0b"
   # Where a file of a record is downloaded from
   url: "https://zenodo.org/records/{record}/files/{name}?download=1"
   # Where the records' manifests are kept once fetched

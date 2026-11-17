@@ -31,7 +31,8 @@ import json
 import os
 
 from ddml_bench.config import REPO_DIR, ConfigError, load_config
-from ddml_bench.layout import GEANT4, TIMING_DIR, Layout, LayoutError
+from ddml_bench.layout import (GEANT4, TIMING_DIR, TIMING_EVENTS, TIMING_FAILED, TIMING_LOG,
+                               TIMING_RESULT, Layout, LayoutError)
 from ddml_bench.models import MODELS_DIR, ModelError, load_models, reference
 from ddml_bench.scenarios import scenario_inputs
 
@@ -41,7 +42,8 @@ DONE, TODO, SKIPPED, BLOCKED = "done", "todo", "skipped", "blocked"
 STATUSES = (DONE, TODO, SKIPPED, BLOCKED)
 # The version of the results' format; results of another aren't current
 FORMAT = 1
-RESULT, EVENTS, LOG, FAILED = ".json", ".events.csv", ".log", ".failed.json"
+# (ddml_bench/layout.py names them, so that the manifests know them too)
+RESULT, EVENTS, LOG, FAILED = TIMING_RESULT, TIMING_EVENTS, TIMING_LOG, TIMING_FAILED
 
 
 class PlanError(Exception):
