@@ -209,6 +209,21 @@ def load_settings():
     return os.path.join(config["paths"]["data_dir"], OBSERVABLES_DIR), observables
 
 
+def described_style(name):
+    """models.plot_style(name), or None (and why, said) if the description
+    can't be read, so that the measurement's own style is drawn."""
+    from .models import ModelError, plot_style
+    try:
+        style = plot_style(name)
+    except ModelError as error:
+        say("%s; drawing %s as when it was measured" % (error, name))
+        return None
+    if style is not None:
+        # The style as a measurement records it: a line style through JSON
+        style["linestyle"] = json.loads(json.dumps(style["linestyle"]))
+    return style
+
+
 class Simulator:
     def __init__(self, path):
         import numpy as np
@@ -216,9 +231,22 @@ class Simulator:
             self.data = {key: data[key] for key in data.files}
         self.path = path
         self.name = str(self.data.get("meta__simulator", os.path.basename(path)[:-4]))
-        self.label = str(self.data.get("meta__label", self.name))
-        self.color = str(self.data.get("meta__color", "#1f6fb4"))
-        style = json.loads(str(self.data.get("meta__linestyle", '"-"')))
+        # Drawn as models/ describes it now, if it does, so that changing a
+        # model's name or plot section needs no new measurement (the .npz
+        # file's meta__ keys are how it was described when it was measured,
+        # and is_up_to_date() doesn't look at them); otherwise as measured
+        recorded = {"label": str(self.data.get("meta__label", self.name)),
+                    "color": str(self.data.get("meta__color", "#1f6fb4")),
+                    "linestyle": json.loads(str(self.data.get("meta__linestyle", '"-"')))}
+        found = described_style(self.name)
+        if found is not None and found != recorded:
+            say("%s: drawn as models/ describes it now, not as when it was measured (%s)"
+                % (self.name, ", ".join(key for key in sorted(found)
+                                         if found[key] != recorded[key])))
+        found = found or recorded
+        self.label = found["label"]
+        self.color = found["color"]
+        style = found["linestyle"]
         # matplotlib wants a dash pattern as (offset, (on, off, ...))
         self.linestyle = (style[0], tuple(style[1])) if isinstance(style, list) else style
 

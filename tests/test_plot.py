@@ -864,3 +864,37 @@ def test_the_pi0_category_totals_are_per_seed():
     assert points["mean"]["n_good"] == 1.0 and points["error"]["n_good"] == pytest.approx(
         np.std([2, 0], ddof=1))
     np.testing.assert_array_equal(points["totals"]["n_missed"], [0, 1])
+
+
+def stored_style(folder, name, label, color, linestyle):
+    """A measurement with nothing in it but how it was described when measured."""
+    path = os.path.join(str(folder), name + ".npz")
+    np.savez(path, meta__simulator=np.array(name), meta__label=np.array(label),
+             meta__color=np.array(color), meta__linestyle=np.array(json.dumps(linestyle)))
+    return path
+
+
+def test_a_model_is_drawn_as_described_now_not_as_when_measured(tmp_path, monkeypatch,
+                                                                    capsys):
+    from ddml_bench import models
+    described = tmp_path / "models"
+    described.mkdir()
+    (described / "model.yaml").write_text(
+        'name: Model (new)\nplot:\n  color: "#123456"\n  linestyle: [0, [6, 2, 1, 2]]\n')
+    (described / "broken.yaml").write_text("plot: [\n")
+    monkeypatch.setattr(models, "MODELS_DIR", str(described))
+
+    model = plot.Simulator(stored_style(tmp_path, "model", "Model (old)", "#abcdef", "-"))
+    assert (model.label, model.color, model.linestyle) == ("Model (new)", "#123456",
+                                                           (0, (6, 2, 1, 2)))
+    assert "drawn as models/ describes it now" in capsys.readouterr().err
+
+    # Geant4 is drawn as always, however it was stored
+    geant4 = plot.Simulator(stored_style(tmp_path, "geant4", "G4", "#000000", ":"))
+    assert (geant4.label, geant4.color, geant4.linestyle) == (
+        models.GEANT4_STYLE["label"], models.GEANT4_STYLE["color"], "-")
+
+    # A measurement whose model isn't described, or can't be read, as measured
+    for name in ("fetched", "broken"):
+        other = plot.Simulator(stored_style(tmp_path, name, "Other", "#fedcba", "--"))
+        assert (other.label, other.color, other.linestyle) == ("Other", "#fedcba", "--")

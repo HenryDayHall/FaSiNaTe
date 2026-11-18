@@ -195,13 +195,52 @@ def load_model(name):
         model["closure"] = {"of": twin, "identical": identical}
 
     # How the plots draw it; models without a style get the next fallback one
+    model.update(_style(name, names, data, source))
+    return model
+
+
+def _style(name, names, data, source):
+    """{label, color, linestyle} of the model of that name, from its
+    description as read (data): its plot section, or the next fallback
+    style."""
     plot = data.get("plot") or {}
     if not isinstance(plot, dict):
         raise ModelError("%s: plot should be a colour and a line style" % source)
     color, linestyle = FALLBACK_STYLES[names.index(name) % len(FALLBACK_STYLES)]
-    model["color"] = str(plot.get("color") or color)
-    model["linestyle"] = plot.get("linestyle") or linestyle
-    return model
+    return {"label": str(data.get("name") or name),
+            "color": str(plot.get("color") or color),
+            "linestyle": plot.get("linestyle") or linestyle}
+
+
+def plot_style(name):
+    """How the plots draw the simulator of that name as models/ describes it
+    now, {label, color, linestyle}: Geant4 and its second sample as always,
+    a model by its description's name and plot section. None for a simulator
+    models/ doesn't describe (e.g. a measurement fetched without its model),
+    which is then drawn as its measurement recorded. Only the label and the
+    plot section are read, so this needs none of what load_model() checks;
+    ModelError if the description can't be read."""
+    if name == GEANT4:
+        return dict(GEANT4_STYLE)
+    if name == SECOND_GEANT4:
+        return dict(SECOND_GEANT4_STYLE)
+    names = model_names()
+    if name not in names:
+        return None
+    path = os.path.join(MODELS_DIR, name + ".yaml")
+    source = os.path.relpath(path, REPO_DIR)
+    try:
+        import yaml
+    except ImportError:
+        raise ModelError("PyYAML is needed to read %s" % source)
+    try:
+        with open(path) as stream:
+            data = yaml.safe_load(stream)
+    except (OSError, yaml.YAMLError) as error:
+        raise ModelError("cannot read %s: %s" % (source, error))
+    if not isinstance(data, dict):
+        raise ModelError("%s: expected the model's description, a set of settings" % source)
+    return _style(name, names, data, source)
 
 
 def load_models(names=None):
