@@ -477,8 +477,8 @@ published:
     # third upload, completely replaces the first one, data has been split
     # to smaller input sizes, new models exist, and this also contains the 
     # tau fragments. Also contains timing.
-    - zenodo: 24335982
-      manifest_md5: "7e400485c64cd812037227571b648881"
+    - zenodo: 24369175
+      manifest_md5: "606e241180624b28a3db6e7afbeab1d8"
   # Where a file of a record is downloaded from
   url: "https://zenodo.org/records/{record}/files/{name}?download=1"
   # Where the records' manifests are kept once fetched
