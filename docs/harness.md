@@ -25,7 +25,8 @@ ddml_bench/
 ├── executors/          local (one task after another) and slurm (a job each)
 ├── environment.py      getting into the environment from setup.sh
 ├── manifest.py         the manifests of a data folder's records, for publishing it
-├── fetch.py            fetching published files instead of making them
+├── fetch.py            fetching published files instead of making them, and the
+│                       timing benchmark's results and table where there's none
 ├── split.py            splitting whole inputs' data into segments (scripts/split_data.py)
 ├── process.py          running ddsim, k4run and the gun, with logs and clean-up
 └── cli.py              scripts/ddml-bench, which the shell scripts run
@@ -307,3 +308,13 @@ which `layout.py` keeps for it. `docs/timing.md` describes it.
   kind of output is a check in `fetch.choose()` of whether the published file
   is what the task would make. An input made elsewhere is the published file
   of its name in its folder; it is chosen even with `--force generate`.
+- **A published file that no task makes**: the timing benchmark's results and
+  table (`timing/`), which the plot stage reads. `fetch.prepare()` fetches
+  them (`fetch.timing()`) when the plan has the plot stage and the data folder
+  has no timing table; `ddml-bench plot` does the same before it plots (but
+  the plot stage's task doesn't, as it may run in a job). They are one archive
+  in the essential record, of the kind `timing`, whose members are each
+  checked by sha256 and put in place where nothing is there, the table last.
+  A dry run puts its record in the plan (`timing_to_fetch`), which makes the
+  plot task to do; fetched, the table is newer than the plots, which does the
+  same. A failure is said, and doesn't stop the run.

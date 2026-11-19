@@ -512,4 +512,9 @@ def test_the_plots_are_drawn_again_when_the_timing_table_is_newer(tmp_path):
     assert stage.current(task) == (True, "")
     os.utime(str(summary), (3000, 3000))
     done, why = stage.current(task)
-    assert not done and why.startswith("timed again since the last plots")
+    assert not done and why.startswith("the timing table is newer than the plots")
+    # A dry run that would fetch the published timing table says so
+    os.remove(str(summary))
+    assert stage.current(task) == (True, "")
+    task["params"]["timing_to_fetch"] = "Zenodo record 1"
+    assert stage.current(task) == (False, "the timing table is to be fetched from Zenodo record 1")

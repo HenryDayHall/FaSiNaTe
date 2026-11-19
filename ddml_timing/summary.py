@@ -32,7 +32,7 @@ import math
 import os
 import sys
 
-from ddml_bench.layout import TIMING_SUMMARY
+from ddml_bench.layout import TIMING_SUBMISSIONS, TIMING_SUMMARY
 
 from .events import events_needed
 from .plan import FAILED, FORMAT, RESULT
@@ -57,7 +57,8 @@ def gather(root):
     pattern = os.path.join(glob.escape(root), "*", "*", "*", "*.json")
     for path in sorted(glob.glob(pattern)):
         name = os.path.basename(path)
-        if name.startswith(".") or os.path.relpath(path, root).split(os.sep)[0] == "slurm":
+        if name.startswith(".") or os.path.relpath(path, root).split(os.sep)[0] == \
+                TIMING_SUBMISSIONS:
             continue
         try:
             with open(path) as stream:

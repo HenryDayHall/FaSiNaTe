@@ -16,7 +16,7 @@
 This needs only the standard library.
 """
 
-from ddml_bench.layout import LayoutError, check_name
+from ddml_bench.layout import TIMING_SUBMISSIONS, LayoutError, check_name
 
 INFERENCE = ("cpu", "cuda")
 # The simulators a kind of node times: every one, or every model
@@ -25,7 +25,7 @@ DEVICE_KEYS = ("inference", "simulators", "also_cpu_only_models", "partition", "
                "time", "sbatch_args")
 # The folder of the timing folder that holds the slurm submissions, beside
 # those of the kinds of node
-SUBMISSIONS = "slurm"
+SUBMISSIONS = TIMING_SUBMISSIONS
 
 
 class SettingsError(Exception):

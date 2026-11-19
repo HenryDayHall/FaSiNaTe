@@ -11,7 +11,7 @@ import yaml
 
 from ddml_bench import ddml_configs, manifest, models, process
 
-from conftest import TAU_INPUTS
+from conftest import TAU_INPUTS, _write
 from test_pipeline_local import DI_PHOTON_INPUT, DI_PHOTON_SIMULATIONS, INPUTS
 
 
@@ -22,6 +22,36 @@ def digest(path):
 def load(out, record):
     with open(os.path.join(out, record, "manifest.json")) as stream:
         return json.load(stream)
+
+
+def write_timing(data, times=(("geant4", 2.0), ("caloclouds3_paper", 0.05))):
+    """Made-up results of the timing benchmark in the data folder, on the cpu
+    nodes, of each simulator of times (its time per event) on the bench's
+    inputs, with their table as timing_summary.sh makes it, ddsim's log beside
+    each, a failure and a slurm submission. Returns (the paths of the results
+    and the table, the paths of the rest), relative to the data folder."""
+    from ddml_timing import summary
+    from test_timing import DI_PHOTON, SINGLE_PHOTON, write_result
+    folder = os.path.join(data, "timing")
+    for scenario, names in (("single_photon", SINGLE_PHOTON),
+                            ("di_photon", [DI_PHOTON + "_simseed1"])):
+        for simulator, time in times:
+            for name in names:
+                write_result(folder, "cpu", scenario, simulator, name + "_t4", [time] * 4)
+                base = os.path.join(folder, "cpu", scenario, simulator, name + "_t4")
+                _write(base + ".events.csv", "event,warmup,wall_s\n1,1,%g\n2,0,%g\n" % (time, time))
+                _write(base + ".log", "# ddml-timing: %s on %s\nddsim's output\n"
+                       % (simulator, scenario))
+    _write(os.path.join(folder, "gpu", "single_photon", "caloclouds3_paper",
+                        SINGLE_PHOTON[0] + "_t4.failed.json"), '{"format": 1, "reason": "no GPU"}')
+    _write(os.path.join(folder, "slurm", "timing_20261117-120000", "jobs.tsv"), "1\tcpu\n")
+    _write(os.path.join(folder, "slurm", "timing_20261117-120000", "logs", "1-cpu.out"), "done\n")
+    assert summary.main(folder, out=lambda *args: None) == 0
+    found = sorted(os.path.relpath(os.path.join(root, name), data).replace(os.sep, "/")
+                   for root, _, names in os.walk(folder) for name in names)
+    published = [path for path in found if path == "timing/summary.csv"
+                 or path.endswith(("_t4.json", ".events.csv")) and "/slurm/" not in path]
+    return published, [path for path in found if path not in published]
 
 
 def test_the_records_of_a_data_folder(bench):
@@ -338,6 +368,75 @@ def test_which_record_each_file_goes_into():
     assert manifest.reconstruction_sources("rec_output/taus/geant4/t_simseed42_REC.edm4hep.root",
                                            {"taus": "input_physics_samples"})[0] \
         == "input_physics_samples/t.slcio"
+    # The timing benchmark's results and their table, which the Pareto fronts
+    # read, with the essential record; the rest of its folder with the others
+    timing = ("essential", "required", "timing.tar", "timing.tar")
+    logs = ("other", "archive", "timing_logs.tar", "timing_logs.tar")
+    result = "timing/cpu/single_photon/geant4/p22_en20_t200"
+    assert manifest.classify("timing/summary.csv") == timing
+    assert manifest.classify(result + ".json") == timing
+    assert manifest.classify(result + ".events.csv") == timing
+    for path in (result + ".log", result + ".failed.json", result + ".root",
+                 "timing/slurm/timing_1/plan.json", "timing/slurm/timing_1/logs/1-a.json",
+                 "timing/cpu/notes.json", "timing/other.csv"):
+        assert manifest.classify(path) == logs, path
+
+
+def test_the_timing_goes_with_the_essential_record_and_its_logs_with_the_other(bench):
+    """The timing benchmark's results and table go into the essential record,
+    as one archive (timing.tar, of the kind timing) that a data folder without
+    a timing table fetches; its runs' logs and slurm submissions into the
+    other record's timing_logs.tar. Each says where its table isn't made from
+    its results, and a record's folder where it has files of an earlier run."""
+    published, rest = write_timing(bench.data)
+    assert "timing/summary.csv" in published and len(published) == 1 + 2 * 2 * 3
+    assert len(rest) == 2 * 3 + 1 + 2
+    out = os.path.join(bench.tmp, "zenodo")
+    status, output = bench.run("scripts/ddml-bench", "manifest", "--dry-run")
+    assert "timing.tar" in output and "timing_logs.tar" in output, output
+    status, output = bench.run("scripts/ddml-bench", "manifest", "--out", out, "--stage")
+    assert "timing" not in "".join(line for line in output.splitlines(True)
+                                   if "warning" in line), output
+    assert sorted(os.listdir(out)) == ["essential", "other"]
+
+    archive, = load(out, "essential")["files"]
+    assert archive["name"] == "timing.tar" and archive["kind"] == "timing"
+    assert archive["role"] == "required"
+    assert archive["sha256"] == digest(os.path.join(out, "essential", "timing.tar"))
+    assert archive["size"] == os.path.getsize(os.path.join(out, "essential", "timing.tar"))
+    assert sorted(m["path"] for m in archive["members"]) == published
+    for member in archive["members"]:
+        assert member["sha256"] == digest(bench.path(member["path"]))
+    with tarfile.open(os.path.join(out, "essential", "timing.tar")) as tar:
+        assert sorted(tar.getnames()) == published
+    catalogue = load(out, "essential")["catalogue"]
+    assert sorted(catalogue["essential"]["paths"]) == published
+    logs, = load(out, "other")["files"]
+    assert logs["name"] == "timing_logs.tar" and logs["role"] == "archive"
+    assert logs["kind"] == "archive" and sorted(m["path"] for m in logs["members"]) == rest
+
+    # A result newer than its table
+    result = next(path for path in published if path.endswith(".json"))
+    os.utime(bench.path(result), (os.path.getmtime(bench.path("timing", "summary.csv")) + 10,) * 2)
+    status, output = bench.run("scripts/ddml-bench", "manifest", "--out", out, "--stage",
+                               "--records", "essential")
+    assert "the timing table, timing/summary.csv, is older than 1 of the results it is made " \
+        "from (e.g. %s): make it again with ./timing_summary.sh" % result in output, output
+    # No table (and without --stage, the archives aren't written, so the
+    # catalogue counts their members)
+    os.remove(bench.path("timing", "summary.csv"))
+    status, output = bench.run("scripts/ddml-bench", "manifest", "--out", out)
+    assert load(out, "essential")["catalogue"]["other"]["size"] == sum(
+        os.path.getsize(bench.path(path)) for path in rest)
+    assert "timing/ has the timing benchmark's results but no table, timing/summary.csv" \
+        in output, output
+    # The archive of an earlier run, which the other record no longer has
+    with open(os.path.join(out, "other", "timing.tar"), "w") as stream:
+        stream.write("from before\n")
+    status, output = bench.run("scripts/ddml-bench", "manifest", "--out", out, "--stage",
+                               "--records", "other")
+    assert "%s has files that aren't in its record (from an earlier run?): timing.tar; delete " \
+        "them" % os.path.join(out, "other") in output, output
 
 
 def test_the_records_of_a_data_folder_with_inputs_made_elsewhere(bench):

@@ -12,8 +12,9 @@
       observables (observables_from_reconstruction.sh) or plot.
 
   ddml-bench plot [options] [SIMULATOR ...]
-      Plot measurements (plot_observables.sh); needs only numpy and
-      matplotlib.
+      Plot measurements (plot_observables.sh), fetching the published timing
+      table first where there's none (--no-fetch doesn't); needs only numpy
+      and matplotlib.
 
   ddml-bench manifest --out OUT [--stage] [options]
       Write the manifests of the data folder's records for publishing it
@@ -269,7 +270,8 @@ def command_stage(argv):
 
 def command_plot(argv):
     from .plot import main
-    return main(argv)
+    # (fetching the published timing table first, where there's none)
+    return main(argv, fetch=True)
 
 
 def command_manifest(argv):

@@ -91,7 +91,12 @@ versions, by the Jensen-Shannon distance of the
 distributions, pareto_js_<node>__<scenario>, and by their Wasserstein
 distance, pareto_wasserstein_<node>__<scenario>; both measure the energy
 figures and the pi0 categories by their chi^2. Every point is in pareto.csv;
---no-pareto leaves them out.
+--no-pareto leaves them out. From the command line (ddml-bench plot,
+plot_observables.sh), where the data folder of the measurements has no timing
+table, the timing benchmark's published results and table are fetched there
+first, if a record in the configuration's published section has them
+(ddml_bench/fetch.py); --no-fetch doesn't. (A run of the pipeline fetches
+them before its plot stage.)
 
 Every figure is also drawn as SVG for the dashboard, dashboard.html next to
 the figures (ddml_bench/dashboard.py), with each model's parts marked with its
@@ -102,7 +107,7 @@ files, and --no-dashboard leaves the dashboard out.
   python3 -m ddml_bench.plot [--dir DIR] [--out DIR] [--events N]
                              [--format pdf,png] [--reference NAME]
                              [--no-closure] [--no-dashboard] [--timing CSV]
-                             [--no-pareto] [SIMULATOR ...]
+                             [--no-pareto] [--no-fetch] [SIMULATOR ...]
 
 (plot_observables.sh runs it.) The figures go to <dir>/plots (or --out), one per
 observable, profile and scenario, named <observable>_<profile>__<scenario>.<format>
@@ -204,6 +209,21 @@ def load_settings():
     return os.path.join(config["paths"]["data_dir"], OBSERVABLES_DIR), observables
 
 
+def described_style(name):
+    """models.plot_style(name), or None (and why, said) if the description
+    can't be read, so that the measurement's own style is drawn."""
+    from .models import ModelError, plot_style
+    try:
+        style = plot_style(name)
+    except ModelError as error:
+        say("%s; drawing %s as when it was measured" % (error, name))
+        return None
+    if style is not None:
+        # The style as a measurement records it: a line style through JSON
+        style["linestyle"] = json.loads(json.dumps(style["linestyle"]))
+    return style
+
+
 class Simulator:
     def __init__(self, path):
         import numpy as np
@@ -211,9 +231,22 @@ class Simulator:
             self.data = {key: data[key] for key in data.files}
         self.path = path
         self.name = str(self.data.get("meta__simulator", os.path.basename(path)[:-4]))
-        self.label = str(self.data.get("meta__label", self.name))
-        self.color = str(self.data.get("meta__color", "#1f6fb4"))
-        style = json.loads(str(self.data.get("meta__linestyle", '"-"')))
+        # Drawn as models/ describes it now, if it does, so that changing a
+        # model's name or plot section needs no new measurement (the .npz
+        # file's meta__ keys are how it was described when it was measured,
+        # and is_up_to_date() doesn't look at them); otherwise as measured
+        recorded = {"label": str(self.data.get("meta__label", self.name)),
+                    "color": str(self.data.get("meta__color", "#1f6fb4")),
+                    "linestyle": json.loads(str(self.data.get("meta__linestyle", '"-"')))}
+        found = described_style(self.name)
+        if found is not None and found != recorded:
+            say("%s: drawn as models/ describes it now, not as when it was measured (%s)"
+                % (self.name, ", ".join(key for key in sorted(found)
+                                         if found[key] != recorded[key])))
+        found = found or recorded
+        self.label = found["label"]
+        self.color = found["color"]
+        style = found["linestyle"]
         # matplotlib wants a dash pattern as (offset, (on, off, ...))
         self.linestyle = (style[0], tuple(style[1])) if isinstance(style, list) else style
 
@@ -1991,7 +2024,33 @@ def closures(folder, out, suffix, formats, observables, wanted=(), pairs=None):
     return rows
 
 
-def main(argv=None):
+def fetch_timing(folder):
+    """Fetch the timing benchmark's published results and table into the data
+    folder of the measurements in folder (its parent, where the Pareto fronts
+    look for timing/summary.csv), if it has no timing table and a record in
+    the configuration's published section has them (ddml_bench/fetch.py).
+    Whatever goes wrong is said, and the plots go on without them."""
+    from .fetch import FetchError, timing
+    try:
+        from .config import load_config
+        from .graph import published_settings
+        settings = published_settings(load_config())
+    except Exception as error:  # no PyYAML, or a configuration it can't read
+        say("can't read the configuration's published records (%s), so the published timing "
+            "isn't fetched" % error)
+        return None
+    try:
+        return timing(settings, os.path.dirname(os.path.abspath(folder)))
+    except (FetchError, OSError) as error:
+        say("can't fetch the timing benchmark's published results (%s), so the plots won't "
+            "have their Pareto fronts (--no-fetch doesn't try)" % error)
+        return None
+
+
+def main(argv=None, fetch=False):
+    """Plot, as the command line says (see the module docstring); with fetch
+    (from the command line), fetch the published timing table first where
+    there's none (fetch_timing()), unless --no-fetch says not to."""
     parser = argparse.ArgumentParser(
         description="Plot the observables measured by observables_from_reconstruction.sh.")
     parser.add_argument("simulators", nargs="*", metavar="SIMULATOR",
@@ -2017,11 +2076,17 @@ def main(argv=None):
                              "--dir)" % (TIMING_DIR, TIMING_SUMMARY))
     parser.add_argument("--no-pareto", action="store_true",
                         help="leave out the Pareto fronts")
+    parser.add_argument("--no-fetch", action="store_true",
+                        help="don't fetch the timing benchmark's published results and table "
+                             "where the data folder has no timing table (published in the "
+                             "configuration)")
     args = parser.parse_args(argv)
 
     folder, observables = load_settings() if not args.dir else (args.dir, load_settings()[1])
     if not folder:
         return 1
+    if fetch and not (args.no_fetch or args.no_pareto or args.timing):
+        fetch_timing(folder)
     suffix = "" if args.events is None else "_n%d" % args.events
     out = args.out or os.path.join(folder, PLOTS_DIR)
     formats = [f.strip() for f in args.format.split(",") if f.strip()]
@@ -2047,4 +2112,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(fetch=True))

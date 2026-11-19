@@ -44,25 +44,48 @@ cluster, the login node, so the jobs need no access to the internet), and
 needs only the standard library. With --dry-run nothing is fetched, but the
 plan says what would be (to_fetch), so that what each stage would do is
 reported as it would be.
+
+The timing benchmark's results and their table, timing/summary.csv, which the
+plots' Pareto fronts read, are made apart from the pipeline (ddml_timing/), so
+no task makes them. Like the inputs made elsewhere, they are fetched when they
+aren't there: when the data folder has no timing table, by a run that plots
+(prepare()) and by ddml-bench plot (plot_observables.sh) before it plots
+(timing()). The published archive (timing.tar in the essential record, of the
+kind timing) is downloaded and checked, and each of its members that isn't
+there yet is put in place, checked against its own sha256: the results first
+and the table last, as the table says that the rest is there. A data folder
+whose timing folder has results of its own fetches nothing (timing_summary.sh
+makes its table from them), nor does one that has a table. Fetched, the table
+is newer than the plots, so the plot stage draws them again; that it can't be
+fetched doesn't stop a run or the plots, which then have no Pareto fronts. The
+results fetched also count as done for the timing benchmark (ddml_timing/),
+which would time the same tasks with the same settings: a model added is then
+the only one timed, which compares like with like only on the kind of node the
+published results were timed on.
 """
 
 import hashlib
 import json
 import os
 import sys
+import tarfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
 from .ddml_configs import canonical
-from .layout import Layout
+from .layout import TIMING_DIR, TIMING_SUMMARY, Layout, timing_file
 from .models import python_summary
 
 USER_AGENT = "FaSiNaTe-ddml-bench (+https://github.com/HenryDayHall/FaSiNaTe)"
 FORMATS = ("fasinate-manifest/1", "fasinate-manifest/2")
 BLOCK = 1 << 20
 TRIES = 4
+# The kind of the timing benchmark's archive in a manifest (manifest.TIMING),
+# and the timing table, a member of it
+TIMING = "timing"
+TIMING_TABLE = TIMING_DIR + "/" + TIMING_SUMMARY
 
 
 class FetchError(Exception):
@@ -409,14 +432,10 @@ def stack_note(manifests, pins):
     return None
 
 
-def prepare(plan, dry_run=False):
-    """Fetch what the plan's published records have of what its tasks would
-    make (see the module docstring); with dry_run, note it in the plan
-    instead (to_fetch). Raises FetchError if a record can't be read or a
-    file fetched."""
-    settings = plan.get("published") or {}
-    if not settings.get("enabled") or not settings.get("records"):
-        return []
+def read_manifests(settings):
+    """{record: manifest} of the records in settings (the plan's published).
+    Raises FetchError, saying how to go on without them, if one can't be
+    read."""
     manifests = {}
     for entry in settings["records"]:
         record = str(entry["zenodo"])
@@ -426,6 +445,19 @@ def prepare(plan, dry_run=False):
             raise FetchError("can't read the published data of Zenodo record %s: %s\n"
                              "(to make everything here instead, run with --no-fetch, or set "
                              "published.enabled: false)" % (record, error))
+    return manifests
+
+
+def prepare(plan, dry_run=False):
+    """Fetch what the plan's published records have of what its tasks would
+    make (see the module docstring), and, if it plots, the timing benchmark's
+    results where the data folder has no timing table; with dry_run, note
+    them in the plan instead (to_fetch, timing_to_fetch). Raises FetchError
+    if a record can't be read or a file of a task fetched."""
+    settings = plan.get("published") or {}
+    if not settings.get("enabled") or not settings.get("records"):
+        return []
+    manifests = read_manifests(settings)
     chosen, notes = choose(plan, manifests)
     for note in notes:
         say(note)
@@ -433,20 +465,181 @@ def prepare(plan, dry_run=False):
         note = stack_note(manifests, settings.get("pins") or {})
         if note and any(task["stage"] == "observables" for task, _, _ in chosen):
             say("note: " + note)
-    if not chosen:
-        return []
-    total = sum(entry["size"] for _, _, entry in chosen)
-    records = sorted({record for _, record, _ in chosen})
-    if dry_run:
-        plan["to_fetch"] = dict((task["output"], "Zenodo record %s" % record)
-                                for task, record, _ in chosen)
-        say("would fetch %d published file(s), %.3g MB, from Zenodo record %s"
-            % (len(chosen), total / 1e6, ", ".join(records)))
-        return chosen
-    say("fetching %d published file(s), %.3g MB, from Zenodo record %s, instead of making them"
-        % (len(chosen), total / 1e6, ", ".join(records)))
-    for number, (task, record, entry) in enumerate(chosen, 1):
-        say("  [%d/%d] %s" % (number, len(chosen), entry["name"]))
-        download(file_url(settings, record, entry["name"]), task["output"],
-                 sha256=entry["sha256"], size=entry.get("size"))
+        total = sum(entry["size"] for _, _, entry in chosen)
+        records = sorted({record for _, record, _ in chosen})
+        if dry_run:
+            plan["to_fetch"] = dict((task["output"], "Zenodo record %s" % record)
+                                    for task, record, _ in chosen)
+            say("would fetch %d published file(s), %.3g MB, from Zenodo record %s"
+                % (len(chosen), total / 1e6, ", ".join(records)))
+        else:
+            say("fetching %d published file(s), %.3g MB, from Zenodo record %s, instead of "
+                "making them" % (len(chosen), total / 1e6, ", ".join(records)))
+            for number, (task, record, entry) in enumerate(chosen, 1):
+                say("  [%d/%d] %s" % (number, len(chosen), entry["name"]))
+                download(file_url(settings, record, entry["name"]), task["output"],
+                         sha256=entry["sha256"], size=entry.get("size"))
+    if "plot" in (plan.get("stages") or ()):
+        try:
+            record = timing(settings, plan["data_dir"], manifests, dry_run)
+        except (FetchError, OSError) as error:
+            say("can't fetch the timing benchmark's published results (%s), so the plots won't "
+                "have their Pareto fronts; the next run tries again" % error)
+        else:
+            if dry_run and record:
+                plan["timing_to_fetch"] = "Zenodo record %s" % record
     return chosen
+
+
+# ---------------------------------------------------------------------------
+# The timing benchmark's results, which no task makes
+
+
+def published_timing(manifests):
+    """(record, entry) of the timing benchmark's published results and table:
+    the first record's archive of the kind timing, or (None, None)."""
+    for record, manifest in manifests.items():
+        for entry in manifest.get("files", []):
+            if entry.get("kind") == TIMING and entry.get("members"):
+                return record, entry
+    return None, None
+
+
+def timing_members(entry):
+    """The members of the timing benchmark's published archive (its entry in
+    a manifest), each checked to be a file of the timing folder, by a path
+    relative to the data folder without . or .., with a sha256. Raises
+    FetchError if one isn't."""
+    members = []
+    for member in entry.get("members") or []:
+        path = member.get("path") if isinstance(member, dict) else None
+        parts = path.split("/") if isinstance(path, str) else []
+        if len(parts) < 2 or parts[0] != TIMING_DIR or "\\" in path \
+                or any(part in ("", ".", "..") for part in parts):
+            raise FetchError("the published %s has a member %r, which isn't a file of %s/"
+                             % (entry.get("name"), path, TIMING_DIR))
+        if not member.get("sha256"):
+            raise FetchError("the published %s has no sha256 for %s" % (entry.get("name"), path))
+        members.append(member)
+    return members
+
+
+def own_timing(data_dir, members):
+    """The timing results in the data folder (their paths relative to it)
+    that aren't among the published members, by path and sha256: the data
+    folder's own."""
+    published = dict((member["path"], member["sha256"]) for member in members)
+    own = []
+    for folder, folders, names in os.walk(os.path.join(data_dir, TIMING_DIR)):
+        folders[:] = sorted(f for f in folders if not f.startswith("."))
+        for name in sorted(names):
+            path = os.path.join(folder, name)
+            relative = os.path.relpath(path, data_dir).replace(os.sep, "/")
+            if timing_file(relative) == "result" and (
+                    relative not in published or sha256_of(path) != published[relative]):
+                own.append(relative)
+    return own
+
+
+def unpack(archive, members, data_dir):
+    """Put each of the members (path, sha256 and size, as a manifest lists
+    them) of the archive downloaded in place in the data folder, at its path,
+    where nothing is there yet, checked against its sha256 and size, through a
+    hidden file beside it: the timing table last, as it says the rest is
+    there. Returns the paths put in place. Raises FetchError if the archive
+    lacks one, or one isn't the file listed."""
+    wanted = dict((member["path"], member) for member in members)
+    name = os.path.basename(archive)
+    placed = []
+    try:
+        with tarfile.open(archive) as tar:
+            found = {}
+            for info in tar:
+                if info.name in wanted:
+                    found.setdefault(info.name, info)
+            missing = sorted(set(wanted) - set(found))
+            if missing:
+                raise FetchError("%s isn't the published archive: it hasn't %s"
+                                 % (name, missing[0]))
+            for path in sorted(wanted, key=lambda p: p == TIMING_TABLE):
+                target = os.path.join(data_dir, *path.split("/"))
+                if os.path.lexists(target):
+                    continue
+                if not found[path].isreg():
+                    raise FetchError("%s in %s isn't a file" % (path, name))
+                _extract(tar, found[path], target, wanted[path], name)
+                placed.append(path)
+    except tarfile.TarError as error:
+        raise FetchError("%s isn't the published archive: %s" % (name, error))
+    return placed
+
+
+def _extract(tar, info, target, member, archive):
+    folder, name = os.path.split(target)
+    os.makedirs(folder, exist_ok=True)
+    partial = os.path.join(folder, ".%s.%d.fetching" % (name, os.getpid()))
+    digest, got = hashlib.sha256(), 0
+    try:
+        source = tar.extractfile(info)
+        with source, open(partial, "wb") as stream:
+            for block in iter(lambda: source.read(BLOCK), b""):
+                stream.write(block)
+                digest.update(block)
+                got += len(block)
+        if digest.hexdigest() != member["sha256"]:
+            raise FetchError("%s in %s isn't the published file: its sha256 is %s, not %s"
+                             % (member["path"], archive, digest.hexdigest(), member["sha256"]))
+        if member.get("size") is not None and got != member["size"]:
+            raise FetchError("%s in %s isn't the published file: it has %d bytes, not %d"
+                             % (member["path"], archive, got, member["size"]))
+        os.replace(partial, target)
+    finally:
+        if os.path.exists(partial):
+            os.remove(partial)
+
+
+def timing(settings, data_dir, manifests=None, dry_run=False):
+    """Fetch the timing benchmark's results and table published in the
+    records of settings (the plan's published) into the data folder, if it
+    has no timing table and its timing folder has no results of its own (see
+    the module docstring); with dry_run, say so instead. Returns the record
+    they are fetched from (with dry_run, would be), or None. Raises
+    FetchError if a record can't be read, or the archive fetched isn't the
+    published one."""
+    if not settings.get("enabled") or not settings.get("records"):
+        return None
+    if os.path.exists(os.path.join(data_dir, TIMING_DIR, TIMING_SUMMARY)):
+        return None
+    if manifests is None:
+        manifests = read_manifests(settings)
+    record, entry = published_timing(manifests)
+    if entry is None:
+        return None
+    members = timing_members(entry)
+    if TIMING_TABLE not in [member["path"] for member in members]:
+        say("the published %s (Zenodo record %s) isn't used, as it has no timing table, %s"
+            % (entry["name"], record, TIMING_TABLE))
+        return None
+    own = own_timing(data_dir, members)
+    if own:
+        say("the published %s (Zenodo record %s) isn't fetched, as %s has timing results of its "
+            "own (e.g. %s): ./timing_summary.sh makes the timing table from them"
+            % (entry["name"], record, os.path.join(data_dir, TIMING_DIR), own[0]))
+        return None
+    size = entry.get("size") or sum(member.get("size") or 0 for member in members)
+    what = ("the timing benchmark's published results and their table, for the Pareto fronts: "
+            "%s, %d file(s), %.3g MB, from Zenodo record %s"
+            % (entry["name"], len(members), size / 1e6, record))
+    if dry_run:
+        say("would fetch " + what)
+        return record
+    say("fetching " + what)
+    archive = os.path.join(settings["cache_dir"], "zenodo-" + record, entry["name"])
+    download(file_url(settings, record, entry["name"]), archive, sha256=entry.get("sha256"),
+             size=entry.get("size"))
+    try:
+        placed = unpack(archive, members, data_dir)
+    finally:
+        os.remove(archive)
+    say("  %d file(s) put in %s" % (len(placed), os.path.join(data_dir, TIMING_DIR)))
+    return record

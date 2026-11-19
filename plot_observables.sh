@@ -31,8 +31,11 @@
 #       --no-dashboard don't write dashboard.html
 #       --timing FILE  the timing benchmark's table, for the Pareto fronts
 #                      (default: timing/summary.csv in the data folder of the
-#                      .npz files, if timing_summary.sh has made it)
+#                      .npz files, if timing_summary.sh has made it, or it was
+#                      fetched)
 #       --no-pareto    leave out the Pareto fronts
+#       --no-fetch     don't fetch the published timing table where there's
+#                      none (see below)
 #   -h, --help         show this help
 #
 # Each figure is <observable>_<profile>__<scenario>.<format>, e.g.
@@ -51,7 +54,10 @@
 # pareto_wasserstein_<node>__<scenario>.<format>: every metric on one axis, a
 # marker each, each model's JS or Wasserstein distance (or the chi^2) from
 # Geant4, divided by the models' mean, against its time per event, and Geant4
-# at its own distance, its second sample's, at its time, with pareto.csv. dashboard.html has
+# at its own distance, its second sample's, at its time, with pareto.csv. Where
+# the data folder has no timing table, the timing benchmark's published results
+# and table are fetched into it first (timing/), if a record of the
+# configuration's published section has them. dashboard.html has
 # every figure in one page, with a menu to show or hide each model in all of
 # them, or in one by clicking its legend entry. It runs with this shell's
 # python3 if that has numpy and matplotlib, and otherwise in the environment
@@ -82,10 +88,10 @@ while (($#)); do
             mkdir -p -- "$2"
             args+=("$option" "$(realpath -- "$2")")
             bind_args+=(--bind "$(realpath -- "$2")")
-            # The timing table beside the .npz files' folder, which the
-            # Pareto fronts read unless given --timing
-            timing_dir=$(dirname -- "$(realpath -- "$2")")/timing
-            if [[ $option == --dir && -d $timing_dir ]]; then bind_args+=(--bind "$timing_dir"); fi
+            # The data folder of the .npz files: the Pareto fronts read its
+            # timing table (timing/summary.csv) unless given --timing, which
+            # is fetched there where there's none
+            if [[ $option == --dir ]]; then bind_args+=(--bind "$(dirname -- "$(realpath -- "$2")")"); fi
             shift 2
             ;;
         --format)
@@ -108,6 +114,7 @@ while (($#)); do
         --no-closure) args+=(--no-closure); shift ;;
         --no-dashboard) args+=(--no-dashboard); shift ;;
         --no-pareto) args+=(--no-pareto); shift ;;
+        --no-fetch) args+=(--no-fetch); shift ;;
         -h | --help) usage; exit 0 ;;
         -*) die "unknown option '$1' (see --help)" ;;
         *) args+=("$1"); shift ;;

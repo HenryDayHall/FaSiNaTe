@@ -15,7 +15,7 @@ import pytest
 import uproot
 
 from conftest import REPO
-from ddml_bench import manifest
+from ddml_bench import manifest, split
 
 DI_PHOTON = "diphoton_en20_sep90_x0_z70_r10_seed0"
 SEGMENTS = [(0, 10), (10, 20), (20, 30)]  # of its 30 pairs
@@ -70,8 +70,14 @@ def test_whole_data_is_split_into_segments_that_measure_the_same(whole):
     status, output = bench.run("scripts/split_data.py")
     assert "di_photon: %s\n  30 events, counted from its input, in 3 segments of 10, 10, 10" \
         % DI_PHOTON in output, output
-    assert "  sim_output/di_photon/geant4/%s_simseed1.edm4hep.root, 16.6 kB: to split\n" \
-        "    and its .log (a log for each segment): then to .unsplit" % DI_PHOTON in output, output
+    # (its size from the file: the fake holds the compact file's path, so the
+    # size changes with where the tests run)
+    simulation = os.path.join("sim_output", "di_photon", "geant4",
+                              DI_PHOTON + "_simseed1.edm4hep.root")
+    assert "  %s, %s: to split\n" \
+        "    and its .log (a log for each segment): then to .unsplit" % (
+            simulation, split.size_text(os.path.getsize(bench.path(simulation)))) \
+        in output, output
     assert "    and its .log (a log for each segment), _AIDA.root and _PfoAnalysis.root (kept " \
         "whole): then to .unsplit" in output, output
     assert "tau_pairs: taus_b\n  12 events, counted from its input, in 3 segments of 4, 4, 4" \
