@@ -1,7 +1,7 @@
 # The harness
 
 `ddml_bench/` is the harness of the benchmark plan: the code every way of
-running the pipeline goes through, on a laptop, on slurm, and later on GitHub
+running the pipeline goes through, on a laptop, on slurm, and on GitHub
 Actions runners. It has one module that names every file, a registry of the
 stages that says what each stage's tasks are, one task graph, and executors
 that run the graph's tasks.
@@ -29,6 +29,8 @@ ddml_bench/
 │                       timing benchmark's results and table where there's none
 ├── low_cost.py         the low-cost mode: a model's sample of the first events of
 │                       each input, against the published full samples (low_cost.sh)
+├── github.py           the low-cost mode as the jobs of a GitHub workflow
+│                       (.github/workflows/low-cost.yml, docs/github.md)
 ├── floors.py           the statistical floors of a smaller sample's metrics, and
 │                       their projection to the full sample's size
 ├── split.py            splitting whole inputs' data into segments (scripts/split_data.py)
@@ -99,7 +101,12 @@ simulations, reconstructions and measurements of the sample, and the plot
 stage's one task, which in a low-cost plan draws the sample against every
 other simulator's full measurements into `plots/low_cost<sample>/`
 (`plot.py --sample`, with `floors.py` working out each metric's statistical
-floor at the sample's size). The executors run it as any plan.
+floor at the sample's size). The executors run it as any plan. On GitHub
+(`github.py`), the plan job makes the same two plans, splits the models'
+tasks into chains and packs them into shards; each shard makes the plan
+again on its own runner, from the same commit and configuration, and runs its
+chains' tasks; the report merges the chains' measurements and runs the plot
+stage's drawing (`plot.py --sample --no-pareto`).
 
 ## The layout
 
@@ -282,8 +289,13 @@ tasks all the same, and so does giving a simulation file to reconstruct.
   submissions still queued for the same tasks. `slurm_pipeline.sh` uses it.
 
 Both run a task with `executors.run_task()`, which a slurm job reaches through
-`ddml-bench run-task DIR KEY`. A GitHub Actions shard, one task per job of a
-matrix, will run the same command.
+`ddml-bench run-task DIR KEY`. The GitHub workflow (`github.py`,
+`.github/workflows/low-cost.yml`) runs the tasks of a low-cost plan in chains,
+each a simulation, its reconstruction and the measurement of that one
+reconstruction, with `run_task()` and `measure.compute_simulator()`; a shard
+runs its chains a few at a time, each in a process of its own, and the
+report merges each model's measurements (`measure.merge_parts()`) into what
+measuring them together makes.
 
 ## The environment
 

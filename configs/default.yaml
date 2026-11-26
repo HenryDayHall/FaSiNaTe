@@ -491,7 +491,8 @@ published:
 # the events. Its figures (observables/plots/low_cost_n<N>/) give each metric
 # of the model its statistical floor at the model's sample size, the value
 # Geant4 itself would have there, and the Pareto fronts project it to the full
-# sample's. It is what a GitHub runner will run for a new model.
+# sample's. GitHub's runners run it for a model pushed to a fork (github,
+# below).
 low_cost:
   # The events of each input of each scenario that the model simulates (of each
   # segment, for inputs in segments): its first N, a trade of cost against
@@ -526,6 +527,40 @@ low_cost:
       tau_pairs: 1.06
     # Starting ddsim, k4run and the measurement, seconds per simulation
     overhead_s: 180
+
+# The low-cost mode on GitHub's runners (.github/workflows/low-cost.yml,
+# ddml_bench/github.py, docs/github.md), which runs with configs/github.yaml
+# over this: a model added to models/ of a fork is tested on the free runners.
+# Its sample is split into chains, each a simulation of the sample, its
+# reconstruction and the measurement of it alone, estimated as
+# low_cost.estimate does, and the chains are packed into shards, a job each,
+# all at once; a last job merges the measurements and draws the plots.
+github:
+  # Chains run at once on a runner (a free runner of a public repository has 4
+  # vCPUs, likely 2 cores, and 16 GB)
+  parallel: 2
+  # A runner's speed at a chain, as a fraction of a core of the node that
+  # low_cost.estimate's times are of: a chain's estimate is divided by it
+  speed: 0.7
+  # Each shard is planned to take at most this many hours of chains: there are
+  # as many shards as that needs, up to max_shards (GitHub stops a job at 6 h,
+  # and runs 20 of an account's jobs at once)
+  shard_hours: 4
+  max_shards: 10
+  # A shard starts no chain after deadline_hours, and stops those still running
+  # at stop_hours (from the start of its job), so that what it has done is
+  # uploaded before GitHub's limit; a run planned past deadline_hours is refused
+  deadline_hours: 4.5
+  stop_hours: 5.5
+  # Each shard's start-up, for the budget: the container, CVMFS, the software
+  setup_hours: 0.25
+  # A run planned to take more runner-hours than this, all its shards together,
+  # is refused (fewer events, low_cost.events, or fewer models at once): about
+  # two CaloClouds3-like models at 1000 events of each input
+  budget_hours: 40
+  # A runner starts another chain only with this much free disk (GB) left, for
+  # the simulation and reconstruction it writes, which are deleted once measured
+  min_free_gb: 6
 
 # The timing benchmark (./slurm_timing.sh, ./timing.sh and ./timing_summary.sh;
 # the code is in ddml_timing/, and docs/timing.md describes it): the time per

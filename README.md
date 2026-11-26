@@ -31,6 +31,7 @@ The models are those DDML runs: CaloClouds3, both through DDML's embedded Python
   - [Inputs in segments](#inputs-in-segments)
 - [Reusing published measurements](#reusing-published-measurements)
 - [Testing a model at low cost](#testing-a-model-at-low-cost)
+  - [On GitHub's runners](#on-githubs-runners)
 - [Timing](#timing)
 - [The models](#the-models)
   - [Closure tests](#closure-tests)
@@ -465,7 +466,7 @@ Each record gets a folder with its `manifest.json` and a suggested title, and wi
 
 ## Testing a model at low cost
 
-`low_cost.sh` tests a model on the first events of each input, against the full samples of Geant4, its second sample and the published models. Only the model's sample is simulated, reconstructed and measured, at a part of the full benchmark's cost, and it is drawn against the others' full measurements, fetched as published ([Reusing published measurements](#reusing-published-measurements)). It is what a GitHub runner will run for a new model, and runs anywhere the pipeline does:
+`low_cost.sh` tests a model on the first events of each input, against the full samples of Geant4, its second sample and the published models. Only the model's sample is simulated, reconstructed and measured, at a part of the full benchmark's cost, and it is drawn against the others' full measurements, fetched as published ([Reusing published measurements](#reusing-published-measurements)). It runs anywhere the pipeline does, and on GitHub's runners for a model pushed to a fork ([On GitHub's runners](#on-githubs-runners)):
 
 ```bash
 # add your model to models/ (models/mymodel.yaml), then
@@ -493,6 +494,18 @@ A sample of few events is noisier than a full one, which pushes its metrics up. 
 - a closure test needs its twin's sample of the same size, and is otherwise skipped.
 
 `plot_observables.sh --sample MODEL[:N]` draws the same figures again (without `:N`, of the sample of `low_cost.events`).
+
+### On GitHub's runners
+
+Fork FaSiNaTe, add a model to `models/` and push: the workflow [`.github/workflows/low-cost.yml`](.github/workflows/low-cost.yml) tests every model in `models/` without published full measurements in the low-cost mode, on GitHub's free runners, and puts the plots on the run's page. [`docs/github.md`](docs/github.md) says how, step by step.
+
+- **The jobs.** A plan fetches what is published and splits each model's sample into chains: a simulation, its reconstruction, and the measurement of that one reconstruction. It packs the chains into shards, each a job of its own in Key4hep's AlmaLinux 9 container with CVMFS, as DDML's own CI runs. The software is built once, into a cache. A report merges the chains' measurements into the model's `.npz`, the same, array for array, as measuring them together, and draws it against the full samples.
+- **The configuration** is [`configs/github.yaml`](configs/github.yaml), with the software pinned to the published measurements', and the `github` section of `configs/default.yaml`.
+- **The cost.** For a model about as fast as CaloClouds3 at 1000 events of each input: 46 chains in 5 shards of about 2.6 h, about 14 runner-hours. A sample is made once: a later run of the same model, software and settings takes it, for 90 days. A plan over `github.budget_hours` is refused.
+- **The results.** The run's summary has each metric with its floor and projection, beside Geant4's second sample's and the best published model's. Also on the run's page: `dashboard.html`, unzipped, and `low-cost-results`, with the figures, CSVs and measurements. They can go on the fork's GitHub Pages too.
+- **No Pareto fronts yet**, as the model isn't timed on the runners.
+
+The jobs are `ddml-bench github plan|check|shard|report`, which run anywhere the pipeline does ([`ddml_bench/github.py`](ddml_bench/github.py)).
 
 ## Timing
 
@@ -598,7 +611,7 @@ python3 -m pip install pyyaml numpy awkward uproot matplotlib h5py particle pyte
 python3 -m pytest tests
 ```
 
-The tests run the scripts end to end, `pipeline.sh` and `slurm_pipeline.sh` included, through the same launcher and `setup.sh` as on the cluster, with only the programs at the ends faked ([`tests/fakes/`](tests/fakes/)): `ddsim` (which runs the steering files as `ddsim` does, with stand-ins for DD4hep's `DDSim` and `g4units`), `k4run` (which writes real EDM4hep-style ROOT files, so the observables and plots run for real), pyLCIO, DDML's Python package (with DDML's presets), and slurm's `sbatch` and `squeue`. They need no Key4hep, CVMFS or slurm, and run in CI on every push ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)), with shellcheck on the scripts.
+The tests run the scripts end to end, `pipeline.sh` and `slurm_pipeline.sh` included, through the same launcher and `setup.sh` as on the cluster, with only the programs at the ends faked ([`tests/fakes/`](tests/fakes/)): `ddsim` (which runs the steering files as `ddsim` does, with stand-ins for DD4hep's `DDSim` and `g4units`), `k4run` (which writes real EDM4hep-style ROOT files, so the observables and plots run for real), pyLCIO, DDML's Python package (with DDML's presets), and slurm's `sbatch` and `squeue`. They need no Key4hep, CVMFS or slurm, and run in CI on every push ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)), with shellcheck on the scripts. The jobs of the GitHub workflow run there too, each in a copy of the repository of its own, as on runners of their own (`tests/test_github.py`, with a stand-in for GitHub's `gh`).
 
 ## Repository layout
 
@@ -621,12 +634,13 @@ The tests run the scripts end to end, `pipeline.sh` and `slurm_pipeline.sh` incl
 ├── ILD_Di_Photon_Gun.py                # di-photon input generator
 ├── configs/default.yaml                # shared configuration (override in configs/local.yaml)
 ├── configs/pipeline_test.yaml          # a very light test run of the whole pipeline
+├── configs/github.yaml                 # the low-cost mode on GitHub's runners (.github/workflows/low-cost.yml)
 ├── models/                             # one YAML file per model
 ├── ddml_bench/                         # the harness: layout, stages, task graph, executors
 ├── ddml_timing/                        # the timing benchmark (docs/timing.md)
 ├── scripts/                            # building, the environment launcher, the steering files, ddml-bench, ddml-timing
 ├── tests/                              # the tests, with the fakes they run the pipeline on
-├── docs/                               # harness.md, timing.md, and figures for this README
+├── docs/                               # harness.md, timing.md, github.md, and figures for this README
 └── di_photon_old/                      # the earlier di-photon separation analysis (legacy)
 ```
 

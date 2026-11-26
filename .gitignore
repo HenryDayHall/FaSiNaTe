@@ -10,6 +10,7 @@ plots/
 configs/local.yaml
 /external/
 /data/
+/low_cost_run/
 __pycache__/
 .pytest_cache/
 .ipynb_checkpoints/

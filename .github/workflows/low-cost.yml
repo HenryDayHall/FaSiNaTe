@@ -1,0 +1,338 @@
+# The low-cost mode on GitHub's runners: every model in models/ without
+# published full measurements (or the models named, run by hand) simulated,
+# reconstructed and measured on the first events of each input, and drawn
+# against the published full samples of Geant4, its second sample and the
+# other models. Fork the repository, add a model to models/, push, and the
+# plots are on the run's page: docs/github.md says how. The jobs:
+#
+#   plan      fetch what is published, choose the models, split their samples
+#             into chains (a simulation, its reconstruction, its measurement)
+#             and pack them into shards; a sample an earlier run made of the
+#             same model, software and settings is taken rather than made
+#   software  build DDML, ILDConfig and the patches once, in the cache
+#   shard     a job per shard, running its chains in Key4hep's container
+#   report    merge the measurements, draw the plots, write the summary
+#   keep      keep each sample made, as an artifact, for later runs
+#   pages     with the repository variable FASINATE_PAGES set to true, publish
+#             the plots of the default branch on the repository's GitHub Pages
+#
+# The jobs with the software run in Key4hep's AlmaLinux 9 image with CVMFS, as
+# DDML's own CI does; the rest on the runner itself. ddml_bench/github.py has
+# the details, and configs/github.yaml the configuration.
+name: low-cost benchmark
+
+on:
+  push:
+    paths:
+      - "models/**"
+      - "configs/github.yaml"
+      - ".github/workflows/low-cost.yml"
+  workflow_dispatch:
+    inputs:
+      models:
+        description: "Models to test, by their names in models/, separated by spaces (default: every model without published full measurements)"
+        type: string
+        default: ""
+      events:
+        description: "The first N events of each input of every scenario (default: low_cost.events of configs/github.yaml)"
+        type: string
+        default: ""
+      fresh:
+        description: "Make the samples again, even those an earlier run made"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  # (to find the samples earlier runs kept)
+  actions: read
+
+# One run of a branch at a time; a push while one runs waits for it, and takes
+# what it made
+concurrency:
+  group: low-cost-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FASINATE_CONFIG: configs/github.yaml
+  # The container of the software jobs below (in the key of the software's
+  # cache): keep the three the same
+  FASINATE_GITHUB_IMAGE: ghcr.io/key4hep/key4hep-images/alma9-cvmfs:latest
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+      chains: ${{ steps.plan.outputs.chains }}
+      report: ${{ steps.plan.outputs.report }}
+      software-key: ${{ steps.keys.outputs.software-key }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install what the plan uses
+        run: python -m pip install pyyaml numpy
+      - id: keys
+        name: Work out the keys of the caches
+        run: python3 scripts/ddml-bench github keys
+      - name: Restore what was fetched from Zenodo before
+        uses: actions/cache@v6
+        with:
+          path: data
+          key: ${{ steps.keys.outputs.published-key }}
+      - id: plan
+        name: Plan the run
+        env:
+          # (gh's, to find the samples earlier runs kept)
+          GH_TOKEN: ${{ github.token }}
+          MODELS: ${{ inputs.models }}
+          EVENTS: ${{ inputs.events }}
+          FRESH: ${{ inputs.fresh }}
+        run: |
+          options=(--models "$MODELS" --events "$EVENTS")
+          if [[ $FRESH == true ]]; then options+=(--fresh); fi
+          python3 scripts/ddml-bench github plan "${options[@]}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: low-cost-plan
+          path: low_cost_run/
+          retention-days: 7
+          overwrite: true
+      - if: steps.plan.outputs.report == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: low-cost-published-data
+          path: |
+            data/
+            !data/timing/
+          retention-days: 7
+          overwrite: true
+
+  software:
+    needs: plan
+    if: needs.plan.outputs.chains != '0'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    container:
+      image: ghcr.io/key4hep/key4hep-images/alma9-cvmfs:latest
+      options: --privileged
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - id: cache
+        name: Look for the software in the cache
+        uses: actions/cache/restore@v6
+        with:
+          path: external
+          key: ${{ needs.plan.outputs.software-key }}
+          lookup-only: true
+      - if: steps.cache.outputs.cache-hit != 'true'
+        name: Mount CVMFS
+        run: /mount.sh
+      - if: steps.cache.outputs.cache-hit != 'true'
+        name: Build DDML, ILDConfig and the patches
+        run: |
+          # (the image has PyYAML, which the configuration needs: in case it hasn't)
+          python3 -c 'import yaml' 2>/dev/null || dnf install -y -q python3-pyyaml
+          scripts/run_in_environment.sh true
+          # The build folders are large, and nothing runs from them
+          rm -rf external/DDML/build external/patches/*/build
+          du -sh external
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: low-cost-plan
+          path: low_cost_run
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: low-cost-published-data
+          path: data
+      - if: steps.cache.outputs.cache-hit != 'true'
+        name: Check that the software, as it is cached, can run the chains
+        run: python3 scripts/ddml-bench github check
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: external
+          key: ${{ needs.plan.outputs.software-key }}
+
+  shard:
+    name: shard ${{ matrix.shard }}
+    needs: [plan, software]
+    if: needs.plan.outputs.chains != '0'
+    runs-on: ubuntu-24.04
+    # GitHub's limit is 6 h: a shard stops its chains at github.stop_hours
+    timeout-minutes: 350
+    container:
+      image: ghcr.io/key4hep/key4hep-images/alma9-cvmfs:latest
+      options: --privileged
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
+    steps:
+      - name: Note when the job started
+        run: echo "FASINATE_GITHUB_JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v7
+      - name: Mount CVMFS
+        run: /mount.sh
+      - uses: actions/cache/restore@v6
+        with:
+          path: external
+          key: ${{ needs.plan.outputs.software-key }}
+          fail-on-cache-miss: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: low-cost-plan
+          path: low_cost_run
+      - uses: actions/download-artifact@v8
+        with:
+          name: low-cost-published-data
+          path: data
+      - name: Take the chains an earlier attempt of this job made
+        if: github.run_attempt != '1'
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: low-cost-parts-${{ matrix.shard }}
+          path: low_cost_run
+      - name: Run the shard's chains
+        run: |
+          echo "$(nproc) CPUs"; grep -E 'MemTotal|MemAvailable' /proc/meminfo; df -h .
+          python3 -c 'import yaml' 2>/dev/null || dnf install -y -q python3-pyyaml
+          python3 scripts/ddml-bench github shard ${{ matrix.shard }}
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: low-cost-parts-${{ matrix.shard }}
+          path: |
+            low_cost_run/parts/
+            low_cost_run/logs/
+          retention-days: 7
+          overwrite: true
+          if-no-files-found: warn
+
+  report:
+    needs: [plan, shard]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.report == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      keep: ${{ steps.report.outputs.keep }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install what the plots use
+        run: python -m pip install pyyaml numpy matplotlib
+      - uses: actions/download-artifact@v8
+        with:
+          name: low-cost-plan
+          path: low_cost_run
+      - uses: actions/download-artifact@v8
+        with:
+          name: low-cost-published-data
+          path: data
+      - if: needs.plan.outputs.chains != '0'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: low-cost-parts-*
+          path: low_cost_run
+          merge-multiple: true
+      - id: report
+        name: Merge the measurements, and draw them against the full samples
+        run: python3 scripts/ddml-bench github report
+      - id: results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: low-cost-results
+          path: low_cost_run/results/
+          retention-days: 30
+          if-no-files-found: ignore
+          overwrite: true
+      # Unzipped, so that it opens in the browser from the run's page
+      - id: dashboard
+        if: ${{ !cancelled() && hashFiles('low_cost_run/results/dashboard.html') != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          path: low_cost_run/results/dashboard.html
+          archive: false
+          retention-days: 30
+          overwrite: true
+      - name: Link the results from the summary
+        if: ${{ !cancelled() && steps.dashboard.outputs.artifact-url != '' }}
+        env:
+          DASHBOARD: ${{ steps.dashboard.outputs.artifact-url }}
+          RESULTS: ${{ steps.results.outputs.artifact-url }}
+        run: |
+          {
+            echo "### The results"
+            echo "- [dashboard.html]($DASHBOARD): every figure, with a menu to show or hide each model"
+            echo "- [low-cost-results]($RESULTS): the figures as PNG and PDF, metrics.csv, fits.csv, and the models' measurements"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - if: ${{ !cancelled() && steps.report.outputs.keep != '' && steps.report.outputs.keep != '[]' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: low-cost-keep
+          path: low_cost_run/keep/
+          retention-days: 1
+          overwrite: true
+
+  # Each sample made, as an artifact of its own, which later runs of the same
+  # model, software and settings take rather than make it again
+  keep:
+    name: keep ${{ matrix.artifact }}
+    needs: report
+    if: ${{ !cancelled() && needs.report.outputs.keep != '' && needs.report.outputs.keep != '[]' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        artifact: ${{ fromJSON(needs.report.outputs.keep) }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: low-cost-keep
+          path: keep
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: keep/${{ matrix.artifact }}/
+          retention-days: 90
+          overwrite: true
+
+  pages:
+    needs: report
+    if: ${{ needs.report.result == 'success' && vars.FASINATE_PAGES == 'true' && github.ref_name == github.event.repository.default_branch }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: low-cost-results
+          path: site
+      - name: Open the site on the dashboard
+        run: cp site/dashboard.html site/index.html
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4

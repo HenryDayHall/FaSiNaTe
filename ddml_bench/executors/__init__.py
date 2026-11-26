@@ -6,7 +6,8 @@
                      the jobs of the tasks it needs: slurm_pipeline.sh
 
 Either way, a task is run by run_task(), which is what `ddml-bench run-task`
-runs in each slurm job, and what a GitHub Actions shard will run.
+runs in each slurm job, and what each chain of a shard of the GitHub workflow
+runs (ddml_bench/github.py).
 """
 
 import os

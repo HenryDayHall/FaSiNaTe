@@ -1,8 +1,9 @@
 """The low-cost mode: models tested on the first events of each input, against
 the full samples of Geant4, its second sample and the other models, as
 published, so that only those models are simulated and reconstructed, and on
-a part of the events. It is what a GitHub runner will run for a new model,
-and runs anywhere the pipeline does:
+a part of the events. It runs anywhere the pipeline does, and on GitHub's
+runners for a model pushed to a fork (ddml_bench/github.py, which splits it
+into the jobs of .github/workflows/low-cost.yml):
 
   ddml-bench low-cost [options] MODEL ... [-- SBATCH_OPTION ...]   (./low_cost.sh)
 
