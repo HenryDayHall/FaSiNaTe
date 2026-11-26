@@ -8,8 +8,8 @@ import sys
 import pytest
 
 from conftest import REPO
-from ddml_bench.layout import (Layout, LayoutError, measurement_files, sample_suffix,
-                               seed_suffix, simulation_stem)
+from ddml_bench.layout import (Layout, LayoutError, is_sample, is_sample_suffix,
+                               measurement_files, sample_suffix, seed_suffix, simulation_stem)
 
 INPUT = "/data/input_single_particle_gun/p22_en20.slcio"
 
@@ -39,6 +39,45 @@ def test_a_sample_is_named_alike_at_every_stage():
 def test_a_sample_has_at_least_one_event(events):
     with pytest.raises(LayoutError):
         sample_suffix(events)
+
+
+def test_a_sample_can_have_a_number_of_events_for_each_scenario():
+    events = {"sp": 1000, "dp": 1000, "taus": 500}
+    layout = Layout("/data", events=events)
+    # Each input's simulation, and what is made from it, by its scenario's N
+    assert layout.simulation("sp", "cc3", INPUT) == "/data/sim_output/sp/cc3/p22_en20_n1000.root"
+    assert layout.simulation("taus", "cc3", INPUT, 42) == \
+        "/data/sim_output/taus/cc3/p22_en20_n500_simseed42.root"
+    assert layout.reconstruction_base("taus", "cc3", INPUT, 42) == \
+        "/data/rec_output/taus/cc3/p22_en20_n500_simseed42"
+    assert layout.events_of("taus") == 500 and layout.events_of("sp") == 1000
+    # The measurements and plots by all of them: the most common N, then the
+    # scenarios of others, in order
+    assert layout.suffix == "_n1000_taus500"
+    assert layout.observables("cc3") == "/data/observables/cc3_n1000_taus500.npz"
+    assert layout.low_cost_plots_dir == "/data/observables/plots/low_cost_n1000_taus500"
+    # The same N everywhere is the sample of -n N
+    assert Layout("/data", {"sp": 7, "dp": 7}).suffix == "_n7" == sample_suffix(7)
+    assert sample_suffix({"a": 5, "b": 6, "c": 6}) == "_n6_a5"
+    # (ties go to the first scenario's)
+    assert sample_suffix({"a": 5, "b": 6}) == "_n5_b6"
+    with pytest.raises(LayoutError):
+        layout.sample_name(INPUT)  # which scenario's?
+    with pytest.raises(LayoutError):
+        layout.events_of("elsewhere")
+    for wrong in ({}, {"sp": 0}, {"sp": "5"}, {"no/good": 5}):
+        with pytest.raises(LayoutError):
+            sample_suffix(wrong)
+
+
+def test_the_measurements_of_any_sample_are_told_from_the_full_ones():
+    for name in ("geant4_n5", "cc3_n1000_tau_pairs500", "cc3_n1000_di_photon2_tau_pairs500"):
+        assert is_sample(name), name
+    for name in ("geant4", "geant4_2", "caloclouds3_recompiled_5GeV", "l2lflows", "cc_n"):
+        assert not is_sample(name), name
+    assert is_sample_suffix("_n1000") and is_sample_suffix("_n1000_tau_pairs500")
+    for text in ("n1000", "_n", "_n1000_", "_n1000_tau_pairs", "_n10/0"):
+        assert not is_sample_suffix(text), text
 
 
 def test_a_simulation_with_a_seed_of_its_own_is_named_after_it():
@@ -79,12 +118,15 @@ def test_simulations_given_directly(tmp_path):
 
 
 def test_measurement_files(tmp_path):
-    for name in ("geant4.npz", "geant4_n5.npz", ".geant4.npz.123.npz", "cc3.npz", "notes.txt"):
+    for name in ("geant4.npz", "geant4_n5.npz", ".geant4.npz.123.npz", "cc3.npz", "notes.txt",
+                 "cc3_n5_tau_pairs2.npz"):
         open(str(tmp_path / name), "w").close()
     folder = str(tmp_path)
     assert measurement_files(folder) == [("cc3", os.path.join(folder, "cc3.npz")),
                                          ("geant4", os.path.join(folder, "geant4.npz"))]
     assert measurement_files(folder, "_n5") == [("geant4", os.path.join(folder, "geant4_n5.npz"))]
+    assert measurement_files(folder, "_n5_tau_pairs2") == [
+        ("cc3", os.path.join(folder, "cc3_n5_tau_pairs2.npz"))]
 
 
 def test_records_are_relative_to_the_data():

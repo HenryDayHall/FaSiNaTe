@@ -85,10 +85,11 @@ class Simulate(Stage):
                     task = graph.add(
                         self.name, layout.simulation(scenario, simulator["name"], path, seed),
                         [source["key"]] if source else [], scenario=scenario,
-                        simulator=simulator["name"], name=layout.sample_name(path, seed),
+                        simulator=simulator["name"],
+                        name=layout.sample_name(path, seed, scenario),
                         inputs=[path], input_file=path, seed=seed,
                         params=self.params(simulator, layout, scenario, path,
-                                           graph.plan["events"], seed))
+                                           layout.events_of(scenario), seed))
                     graph.simulations.append(task)
 
     @staticmethod

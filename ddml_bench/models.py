@@ -33,7 +33,7 @@ import re
 
 from .config import REPO_DIR
 from .ddml_configs import ModelConfigError, check as check_model_config
-from .layout import GEANT4, SECOND_GEANT4, LayoutError, check_name
+from .layout import GEANT4, SECOND_GEANT4, LayoutError, check_name, is_sample
 
 MODELS_DIR = os.path.join(REPO_DIR, "models")
 
@@ -89,6 +89,10 @@ def load_model(name):
         raise ModelError("%s: '%s' names %s, so it can't be a model name"
                          % (source, name, "the Geant4 reference" if name == GEANT4
                             else "the second Geant4 sample"))
+    if is_sample(name):
+        raise ModelError("%s: '%s' ends as the measurements of a test or low-cost sample are "
+                         "named (_n<N>, ddml_bench/layout.py), so it can't be a model name"
+                         % (source, name))
     try:
         import yaml
     except ImportError:

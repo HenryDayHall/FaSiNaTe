@@ -27,6 +27,10 @@ ddml_bench/
 ├── manifest.py         the manifests of a data folder's records, for publishing it
 ├── fetch.py            fetching published files instead of making them, and the
 │                       timing benchmark's results and table where there's none
+├── low_cost.py         the low-cost mode: a model's sample of the first events of
+│                       each input, against the published full samples (low_cost.sh)
+├── floors.py           the statistical floors of a smaller sample's metrics, and
+│                       their projection to the full sample's size
 ├── split.py            splitting whole inputs' data into segments (scripts/split_data.py)
 ├── process.py          running ddsim, k4run and the gun, with logs and clean-up
 └── cli.py              scripts/ddml-bench, which the shell scripts run
@@ -83,6 +87,20 @@ whole input of such a scenario, or a simulation or reconstruction made from
 one, is there without all its segments (`graph.unsplit()`): the run would make
 them all anew, where `scripts/split_data.py` (`split.py`) splits them.
 
+A low-cost run (`low_cost.sh`, `ddml-bench low-cost`, `low_cost.py`'s
+`plan_run()`) is a run of two plans. The full benchmark's, `make_plan()`, is
+only for fetching: the published records' software is checked against the
+configuration's pins (`check_stack()`, with `fetch.stack_differences()`), and
+`fetch.prepare()` fetches what that plan would make (the inputs, the full
+measurements, the timing table). The run is of the models' sample,
+`make_plan(simulators=MODELS, events={scenario: N}, low_cost=True)`, with the
+full plan's `to_fetch` and `timing_to_fetch` for a dry run: the models'
+simulations, reconstructions and measurements of the sample, and the plot
+stage's one task, which in a low-cost plan draws the sample against every
+other simulator's full measurements into `plots/low_cost<sample>/`
+(`plot.py --sample`, with `floors.py` working out each metric's statistical
+floor at the sample's size). The executors run it as any plan.
+
 ## The layout
 
 `layout.py` names every file under `paths.data_dir`: inputs (each scenario's in
@@ -110,6 +128,14 @@ itself: where the Pareto fronts draw Geant4. Inputs given directly (`custom`)
 are simulated once. Records of files, such as the reconstructed files in a
 `.npz`, are relative to the data folder (`Layout.relative`), so they hold when
 the data is copied elsewhere.
+A sample can also have a number of events of its own for each scenario
+(`Layout(data_dir, {scenario: N})`, as the low-cost mode's `low_cost.events`):
+each simulation is named after its scenario's (`Layout.events_of()`,
+`input_suffix()`), and the measurements and plots after all of them,
+`sample_suffix()`: `_n<N>` for the most common N, then `_<scenario><M>` for
+each scenario of another, e.g. `<simulator>_n1000_tau_pairs500.npz`; the same
+N everywhere is `-n N`'s sample. `is_sample()` tells any sample's
+measurements from the full ones, which no model may be named like.
 The segments of an input (`input.segments`) are inputs named
 `<input>_seg<i>of<N>` (`segment_suffix()`, with their events from
 `segment_bounds()`), so everything made from one is named after it, e.g.

@@ -18,6 +18,10 @@ Everything is written under paths.data_dir:
   observables/plots/pareto_<js|wasserstein>_<node>__<scenario><sample>.<format>
   observables/plots/pareto<sample>.csv                        the Pareto fronts of the metrics
       against the time per event in timing/summary.csv
+  observables/plots/low_cost<sample>/                         the figures of the low-cost
+      samples of models against the full samples of the others
+      (ddml_bench/low_cost.py), with their metrics.csv, fits.csv, pareto.csv
+      and dashboard.html (named without <sample>, which the folder has)
   timing/<node>/<scenario>/<simulator>/<name>_t<N>.json       the timing benchmark's results,
       with .events.csv, .log and (until a try succeeds) .failed.json beside
       each; ddml_timing/plan.py names them, with the endings below
@@ -28,7 +32,12 @@ Everything is written under paths.data_dir:
 events of each (-n N). It is set once, when an input is simulated: the
 simulation of the first N events of <input> is <input>_n<N>, and everything
 made from it carries that name on, so -n N means the same sample at every
-stage. A scenario whose inputs are simulated with ddsim seeds of its own
+stage. A sample can also take a number of events of its own for each
+scenario, as the low-cost mode does (low_cost.events, ddml_bench/low_cost.py):
+each input's simulation is then <input>_n<N> with its own scenario's N, and
+the measurements and plots, of every scenario, are named after the numbers of
+all of them, _n<N> for the most common and _<scenario><M> after it for each
+scenario of another (sample_suffix()), e.g. <simulator>_n1000_tau_pairs500.npz. A scenario whose inputs are simulated with ddsim seeds of its own
 (simulation_seeds) adds _simseed<S> to <sample> for the seed S, likewise: the
 simulation of <input> with seed 2 is <input>_simseed2, and of its first N
 events <input>_n<N>_simseed2. (The inputs' own names may have _seed<S>, the
@@ -124,7 +133,14 @@ SEGMENT_TAG = "_seg"
 UNSPLIT_DIR = ".unsplit"
 
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]*$")
-_SAMPLE = re.compile(r"_n\d+$")
+# What the name of a sample's measurements ends in, after the simulator's,
+# for any sample but the full one (sample_suffix()): _n<N>, then
+# _<scenario><M> for each scenario with a number of its own
+_SAMPLE_TEXT = r"_n\d+(?:_[A-Za-z0-9][A-Za-z0-9_.+-]*?\d+)*"
+_SAMPLE = re.compile(_SAMPLE_TEXT + "$")
+# The folder of the plots of low-cost samples (ddml_bench/low_cost.py), in
+# PLOTS_DIR, followed by the sample's suffix
+LOW_COST_PLOTS = "low_cost"
 
 
 class LayoutError(Exception):
@@ -149,14 +165,67 @@ def check_input_folder(folder, what):
     return folder
 
 
+def _check_number(events, what="the number of events"):
+    if not isinstance(events, int) or isinstance(events, bool) or events < 1:
+        raise LayoutError("%s must be a whole number, at least 1, not %r" % (what, events))
+    return events
+
+
+def check_events(events):
+    """The events of a sample, checked: None for the full inputs, N for the
+    first N of each input, or {scenario: N} for the first N of each input of
+    each scenario (every scenario of the sample has one)."""
+    if events is None:
+        return None
+    if isinstance(events, dict):
+        if not events:
+            raise LayoutError("a sample with a number of events for each scenario needs at "
+                              "least one scenario")
+        for scenario, number in events.items():
+            check_name(scenario, "scenario")
+            _check_number(number, "the number of events of %s" % scenario)
+        return dict(events)
+    return _check_number(events)
+
+
+def most_common(events):
+    """Of {scenario: N}, the N most of the scenarios have, the first
+    scenario's of those as common as each other."""
+    counts = {}
+    for number in events.values():
+        counts[number] = counts.get(number, 0) + 1
+    return max(counts, key=lambda number: (counts[number],
+                                           -list(events.values()).index(number)))
+
+
 def sample_suffix(events):
     """What the names of the files of a sample end in: nothing for the full
-    inputs, _n<N> for the first N events of each."""
+    inputs, _n<N> for the first N events of each, and for {scenario: N},
+    _n<N> for the N most scenarios have (most_common()) with
+    _<scenario><M> after it for each scenario of another number, in their
+    order: _n1000 for 1000 of every scenario's inputs, _n1000_tau_pairs500
+    with 500 of tau_pairs'."""
+    events = check_events(events)
     if events is None:
         return ""
-    if not isinstance(events, int) or isinstance(events, bool) or events < 1:
-        raise LayoutError("the number of events must be at least 1, not %r" % (events,))
-    return "_n%d" % events
+    if not isinstance(events, dict):
+        return "_n%d" % events
+    common = most_common(events)
+    return "_n%d" % common + "".join("_%s%d" % (scenario, number)
+                                     for scenario, number in events.items() if number != common)
+
+
+def is_sample_suffix(text):
+    """Whether text is a sample's suffix, all of it, as sample_suffix() gives
+    them: _n1000, _n1000_tau_pairs500."""
+    return re.match("^%s$" % _SAMPLE_TEXT, text) is not None
+
+
+def is_sample(name):
+    """Whether a name of measurements (without .npz) is of a sample other than
+    the full one, ending in what sample_suffix() gives, e.g. geant4_n100 or
+    mymodel_n1000_tau_pairs500."""
+    return bool(_SAMPLE.search(name))
 
 
 def seed_suffix(seed):
@@ -281,13 +350,19 @@ def timing_summary_of(observables_dir):
                         TIMING_SUMMARY)
 
 
+def low_cost_plots(plots_dir, suffix):
+    """The folder of the figures of the low-cost samples of a suffix, in a
+    folder of plots."""
+    return os.path.join(plots_dir, LOW_COST_PLOTS + suffix)
+
+
 def measurement_files(folder, suffix=""):
     """[(simulator, .npz file)] of one sample's measurements in a folder, by name."""
     found = []
     for path in sorted(glob.glob(os.path.join(glob.escape(folder), "*%s.npz" % suffix))):
         name = os.path.basename(path)[:-len(suffix + ".npz")]
         # Hidden files are unfinished; without a suffix, leave out the test samples
-        if not name or name.startswith(".") or (suffix == "" and _SAMPLE.search(name)):
+        if not name or name.startswith(".") or (suffix == "" and is_sample(name)):
             continue
         found.append((name, path))
     return found
@@ -295,12 +370,31 @@ def measurement_files(folder, suffix=""):
 
 class Layout(object):
     """The paths of one sample, the full inputs or the first N events of each
-    (events=N), under a data folder."""
+    (events=N), or of each input of each scenario ({scenario: N}), under a
+    data folder."""
 
     def __init__(self, data_dir, events=None):
         self.data_dir = data_dir
-        self.events = events
-        self.suffix = sample_suffix(events)
+        self.events = check_events(events)
+        self.suffix = sample_suffix(self.events)
+
+    def events_of(self, scenario):
+        """The events of each input of a scenario in this sample: None for all
+        of them, or N for the first N."""
+        if not isinstance(self.events, dict):
+            return self.events
+        if scenario not in self.events:
+            raise LayoutError("this sample has no number of events for the scenario %s, only "
+                              "for %s" % (scenario, ", ".join(self.events)))
+        return self.events[scenario]
+
+    def input_suffix(self, scenario=None):
+        """What the names of a scenario's simulations, and of what is made from
+        them, have after their input's: _n<N> for its first N events."""
+        if isinstance(self.events, dict) and scenario is None:
+            raise LayoutError("this sample has a number of events for each scenario, so name "
+                              "the scenario")
+        return sample_suffix(self.events_of(scenario))
 
     # The inputs
 
@@ -319,20 +413,21 @@ class Layout(object):
     def sim_dir(self):
         return os.path.join(self.data_dir, SIM_DIR)
 
-    def sample_name(self, input_file, seed=None):
+    def sample_name(self, input_file, seed=None, scenario=None):
         """The name of an input's simulation in this sample (with the ddsim
         seed, if it has one of its own), which everything made from that
-        simulation is named after too."""
-        return input_stem(input_file) + self.suffix + seed_suffix(seed)
+        simulation is named after too; the scenario's, where the sample has a
+        number of events for each scenario."""
+        return input_stem(input_file) + self.input_suffix(scenario) + seed_suffix(seed)
 
     def simulation(self, scenario, simulator, input_file, seed=None):
         ending = SIM_ENDINGS.get(simulator, MODEL_SIM_ENDING)
         return os.path.join(self.sim_dir, scenario, simulator,
-                            self.sample_name(input_file, seed) + ending)
+                            self.sample_name(input_file, seed, scenario) + ending)
 
     def simulation_log(self, scenario, simulator, input_file, seed=None):
         return os.path.join(self.sim_dir, scenario, simulator,
-                            self.sample_name(input_file, seed) + ".log")
+                            self.sample_name(input_file, seed, scenario) + ".log")
 
     # The reconstructions
 
@@ -344,7 +439,7 @@ class Layout(object):
         """What a reconstruction's outputs are named after: <base>_REC.edm4hep.root,
         <base>_AIDA.root, <base>_PfoAnalysis.root and <base>.log."""
         return os.path.join(self.rec_dir, scenario, simulator,
-                            self.sample_name(input_file, seed))
+                            self.sample_name(input_file, seed, scenario))
 
     def given_simulation(self, path):
         """(scenario, simulator, reconstruction base) of a simulation file given
@@ -381,6 +476,12 @@ class Layout(object):
     @property
     def metrics(self):
         return os.path.join(self.plots_dir, "metrics%s.csv" % self.suffix)
+
+    @property
+    def low_cost_plots_dir(self):
+        """Where the figures of this sample of models against the full
+        samples of the others go (ddml_bench/low_cost.py)."""
+        return low_cost_plots(self.plots_dir, self.suffix)
 
     @property
     def timing_summary(self):

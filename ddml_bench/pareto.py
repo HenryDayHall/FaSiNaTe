@@ -61,6 +61,15 @@ point of each metric of each figure of each version, with the distance and
 the time, their uncertainties, and whether it is on its metric's front;
 Geant4's rows have its second sample's distances, at its own time.
 
+A sample of a model drawn against the full samples of the others (a
+low-cost sample, plot.py's --sample) has metrics measured on fewer events,
+which its statistical noise pushes up. Its points are drawn at its metrics
+projected to the full sample's size (metrics.csv's projected,
+ddml_bench/floors.py), the floor of its own size taken away and that of the
+full size put back, with the scatter of its floor as the error bar, drawn
+dashed; its legend entry says so. pareto.csv keeps its metric as measured
+(measured_value), its sample's events and its floor beside the projection.
+
 The closure tests, which compare a model with its twin, have no front.
 """
 
@@ -127,7 +136,7 @@ _NODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]*$")
 COLUMNS = ("version", "node", "scenario", "observable", "profile", "simulator", "time_s",
            "time_error_s", "timed_on", "metric", "value", "distance", "distance_error", "unit",
            "relative_distance", "relative_distance_error", "mean_distance", "models", "speedup",
-           "on_front")
+           "on_front", "projected", "measured_value", "events", "floor")
 
 
 class TimingError(Exception):
@@ -171,18 +180,31 @@ def read_timing(path):
     return times
 
 
-def read_metrics(path):
+def read_metrics(path, samples=None):
     """{(observable, scenario, profile): {metric: {simulator: (value,
-    uncertainty or None)}}} of metrics.csv, the figures in their order."""
+    uncertainty or None)}}} of metrics.csv, the figures in their order. A
+    sample's metric that is projected to the full sample's size (its column
+    projected, plot.py's --sample) is taken at that, with its uncertainty;
+    samples, a dict if given, gets {(observable, scenario, profile, metric,
+    simulator): {"value": as measured, "events", "floor"}} of those."""
     groups = {}
     with open(path, newline="") as stream:
         for row in csv.DictReader(stream):
             value = number(row.get("value"))
             if value is None:
                 continue
+            uncertainty = number(row.get("uncertainty"))
+            projected = number(row.get("projected"))
+            if projected is not None:
+                if samples is not None:
+                    samples[(row["observable"], row["scenario"], row["profile"], row["metric"],
+                             row["simulator"])] = {
+                        "value": value, "events": number(row.get("events")),
+                        "floor": number(row.get("floor"))}
+                value, uncertainty = projected, number(row.get("projected_uncertainty"))
             key = (row["observable"], row["scenario"], row["profile"])
             groups.setdefault(key, {}).setdefault(row["metric"], {})[row["simulator"]] = (
-                value, number(row.get("uncertainty")))
+                value, uncertainty)
     return groups
 
 
@@ -256,7 +278,7 @@ def metric_label(metric, version_metric):
                          (" " + unit) if unit and unit != "°" else unit)
 
 
-def plan_fronts(groups, times, simulators, reference_name, version=VERSIONS[0]):
+def plan_fronts(groups, times, simulators, reference_name, version=VERSIONS[0], samples=None):
     """The figures of one version (of VERSIONS): a dict for each scenario of
     groups (read_metrics()) and kind of node its models are timed on, with the
     scenario, the node, the reference, its time on those nodes or the CPU
@@ -271,8 +293,11 @@ def plan_fronts(groups, times, simulators, reference_name, version=VERSIONS[0]):
     the metric's value, the distance and the relative distance and their
     uncertainties, and whether it is on the metric's front (the reference's
     first, if it is timed, at its second sample's distance, if that is
-    measured)."""
+    measured); samples, as read_metrics() gives them, marks the points
+    projected from a sample's metrics (projected: what it measured, its
+    events and floor)."""
     name, measures = version
+    samples = samples or {}
     reference = style_of(reference_name, simulators)
     # The reference's own distance, its second sample's (layout.SECOND_GEANT4),
     # which isn't one of the models
@@ -345,7 +370,10 @@ def plan_fronts(groups, times, simulators, reference_name, version=VERSIONS[0]):
                     if simulator.name in metric["distances"]:
                         points.append(point(simulator.name, simulator, False,
                                             model_times[simulator.name], node,
-                                            metric["distances"][simulator.name]))
+                                            metric["distances"][simulator.name],
+                                            samples.get((metric["observable"], scenario,
+                                                         metric["profile"], metric["metric"],
+                                                         simulator.name))))
                 if all(p["reference"] for p in points):
                     continue
                 for p, on in zip(points, pareto_front([(p["time"], p["relative"])
@@ -361,16 +389,17 @@ def plan_fronts(groups, times, simulators, reference_name, version=VERSIONS[0]):
     return planned
 
 
-def point(name, simulator, is_reference, time, timed_on, distances):
+def point(name, simulator, is_reference, time, timed_on, distances, projected=None):
     """A point of a metric's front: of the simulator named, drawn as simulator,
     at its time (from read_timing()) on the node it was timed on, at its
     distances (relative_distances()' (value, distance, its uncertainty,
-    relative distance, its uncertainty))."""
+    relative distance, its uncertainty)); projected, of a sample's metric
+    projected to the full sample's size, what it measured (read_metrics())."""
     value, distance, error, relative, relative_error = distances
     return {"name": name, "simulator": simulator, "reference": is_reference,
             "time": time["time"], "time_error": time["error"], "timed_on": timed_on,
             "value": value, "distance": distance, "distance_error": error,
-            "relative": relative, "relative_error": relative_error}
+            "relative": relative, "relative_error": relative_error, "projected": projected}
 
 
 def fronts(out, suffix, formats, simulators, reference_name, timing_path, metrics_path=None):
@@ -393,11 +422,12 @@ def fronts(out, suffix, formats, simulators, reference_name, timing_path, metric
     except (OSError, TimingError) as error:
         plot.say("%s, so no Pareto fronts" % error)
         return []
-    groups = read_metrics(metrics_path)
+    samples = {}
+    groups = read_metrics(metrics_path, samples)
     rows = []
     for version in VERSIONS:
         planned = [figure for figure in plan_fronts(groups, times, simulators, reference_name,
-                                                    version) if figure["metrics"]]
+                                                    version, samples) if figure["metrics"]]
         if not planned:
             plot.say("no metric of a model timed in %s, so there are no %s Pareto fronts"
                      % (timing_path, version[0]))
@@ -410,8 +440,11 @@ def fronts(out, suffix, formats, simulators, reference_name, timing_path, metric
         if plot.collector is not None:
             plot.collector.section(out, planned[0]["reference"])
         for figure in planned:
+            # (a sample's label says its events of the scenario's inputs)
+            plot.relabel(simulators, figure["scenario"])
             plot_fronts(figure, (-0.03 * top, top), out, suffix, formats)
             rows += figure_rows(figure)
+        plot.relabel(simulators, None)
     if not rows:
         return []
     path = os.path.join(out, "%s%s.csv" % (NAME, suffix))
@@ -448,7 +481,11 @@ def figure_rows(figure):
                 "mean_distance": metric["mean"], "models": metric["models"],
                 "speedup": None if is_reference or reference_time is None
                 else reference_time / p["time"],
-                "on_front": p["on_front"]})
+                "on_front": p["on_front"],
+                "projected": bool(p.get("projected")),
+                "measured_value": (p.get("projected") or {}).get("value"),
+                "events": (p.get("projected") or {}).get("events"),
+                "floor": (p.get("projected") or {}).get("floor")})
     return rows
 
 
@@ -458,7 +495,7 @@ def _cell(value):
     if isinstance(value, bool):
         return "yes" if value else "no"
     if isinstance(value, float):
-        return "%.6g" % value
+        return "%.6g" % value if math.isfinite(value) else ""
     return value
 
 
@@ -497,6 +534,10 @@ def plot_fronts(figure, ylim, out, suffix, formats):
                 markeredgecolor="white" if on else simulator.color,
                 markeredgewidth=0.9 if on else 1.4, elinewidth=1.0, capsize=0, zorder=5,
                 transform=shifted)
+            if p.get("projected"):
+                # Projected from a sample's metric: its error bar dashed
+                for bars in drawn[2]:
+                    bars.set_linestyle((0, (2, 1.5)))
             plot.mark(simulator, DATA, drawn)
 
     ax.set_xscale("log")
@@ -538,6 +579,9 @@ def plot_fronts(figure, ylim, out, suffix, formats):
                      if p["simulator"] is simulator), None)
         if reference_time is not None and mine is not None:
             label += ", %s" % speedup_text(reference_time[0]["time"] / mine["time"])
+        if any(p.get("projected") for metric in figure["metrics"] for p in metric["points"]
+               if p["simulator"] is simulator):
+            label += ",\nprojected to the full sample"
         entries.append((Line2D([], [], color=simulator.color, linewidth=5,
                                solid_capstyle="butt"), label, simulator))
     entries.append((Line2D([], [], linestyle="none"), "Metrics (the models' mean):", None))
@@ -556,6 +600,8 @@ def plot_fronts(figure, ylim, out, suffix, formats):
         note += "\na simulator's metrics side by side\nabout its time"
     if any(p["relative_error"] is not None for p in every):
         note += "\nerrors: the metrics' uncertainties"
+    if any(p.get("projected") for p in every):
+        note += "\ndashed: a sample's scatter"
     ax.text(1.02, 0.0, note, transform=ax.transAxes, fontsize=8, color=plot.MUTED,
             va="bottom", ha="left")
     figure_name = "%s_%s" % (NAME, name)

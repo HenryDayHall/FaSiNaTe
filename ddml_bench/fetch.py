@@ -413,22 +413,45 @@ def _inputs_are_published(layout, entry, fetched_inputs):
     return True, ""
 
 
-def stack_note(manifests, pins):
-    """A note when the configuration doesn't pin the software the published
-    measurements were made with, or pins another."""
+# The software the published measurements record (a manifest's stack), and
+# the settings that pin it here
+PINS = (("key4hep", "key4hep.release"), ("ddml", "ddml.commit"),
+        ("ildconfig", "detector_configs.ildconfig.commit"))
+
+
+def published_stack(manifests):
+    """{field: value} of the software the published measurements were made
+    with, the first record's of each field (their manifests' stack)."""
     stack = {}
     for manifest in manifests.values():
         for field, value in (manifest.get("stack") or {}).items():
             stack.setdefault(field, value)
+    return stack
+
+
+def stack_differences(manifests, pins):
+    """[(setting, the published value, the pin here or None)] of the software
+    pins (PINS) of the configuration (pins, as the plan's published has
+    them) that aren't the published measurements': unpinned, or pinned to
+    another."""
+    stack = published_stack(manifests)
     differ = []
-    for field, setting in (("key4hep", "key4hep.release"), ("ddml", "ddml.commit"),
-                           ("ildconfig", "detector_configs.ildconfig.commit")):
+    for field, setting in PINS:
         theirs, mine = stack.get(field), pins.get(field)
         if isinstance(theirs, str) and theirs != "unknown" and str(mine) != theirs:
-            differ.append('%s: "%s" (here %s)' % (setting, theirs, mine or "not pinned"))
+            differ.append((setting, theirs, mine))
+    return differ
+
+
+def stack_note(manifests, pins):
+    """A note when the configuration doesn't pin the software the published
+    measurements were made with, or pins another."""
+    differ = stack_differences(manifests, pins)
     if differ:
         return ("so that a model simulated here is compared like with like, pin the software "
-                "the published measurements were made with: " + "; ".join(differ))
+                "the published measurements were made with: " + "; ".join(
+                    '%s: "%s" (here %s)' % (setting, theirs, mine or "not pinned")
+                    for setting, theirs, mine in differ))
     return None
 
 
@@ -448,12 +471,14 @@ def read_manifests(settings):
     return manifests
 
 
-def prepare(plan, dry_run=False):
+def prepare(plan, dry_run=False, note_stack=True):
     """Fetch what the plan's published records have of what its tasks would
     make (see the module docstring), and, if it plots, the timing benchmark's
     results where the data folder has no timing table; with dry_run, note
-    them in the plan instead (to_fetch, timing_to_fetch). Raises FetchError
-    if a record can't be read or a file of a task fetched."""
+    them in the plan instead (to_fetch, timing_to_fetch). Without
+    note_stack, the software pins aren't noted (the caller checks them).
+    Raises FetchError if a record can't be read or a file of a task
+    fetched."""
     settings = plan.get("published") or {}
     if not settings.get("enabled") or not settings.get("records"):
         return []
@@ -462,7 +487,7 @@ def prepare(plan, dry_run=False):
     for note in notes:
         say(note)
     if chosen:
-        note = stack_note(manifests, settings.get("pins") or {})
+        note = stack_note(manifests, settings.get("pins") or {}) if note_stack else None
         if note and any(task["stage"] == "observables" for task, _, _ in chosen):
             say("note: " + note)
         total = sum(entry["size"] for _, _, entry in chosen)

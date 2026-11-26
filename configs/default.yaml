@@ -484,6 +484,49 @@ published:
   # Where the records' manifests are kept once fetched
   cache_dir: ${paths.data_dir}/.ddml-bench/published
 
+# The low-cost mode (./low_cost.sh, ddml_bench/low_cost.py): a model tested on
+# the first events of each input, against the full samples of Geant4, its
+# second sample and the other models, as published (or as measured in the data
+# folder), so that only that model is simulated and reconstructed, on a part of
+# the events. Its figures (observables/plots/low_cost_n<N>/) give each metric
+# of the model its statistical floor at the model's sample size, the value
+# Geant4 itself would have there, and the Pareto fronts project it to the full
+# sample's. It is what a GitHub runner will run for a new model.
+low_cost:
+  # The events of each input of each scenario that the model simulates (of each
+  # segment, for inputs in segments): its first N, a trade of cost against
+  # statistical power. Every scenario enabled needs one; -n N gives every
+  # scenario N instead. The sample is named after them: _n<N> for the most
+  # common N, then _<scenario><M> for each scenario with another, e.g.
+  # observables/<model>_n1000_tau_pairs500.npz. The tau pairs cost the most per
+  # event, as Geant4 simulates most of their particles whatever the model: at
+  # 1000 events each, about two thirds of a CaloClouds3-like model's 20
+  # core-hours (./low_cost.sh --dry-run gives the estimate below).
+  events:
+    single_photon: 1000
+    di_photon: 1000
+    tau_pairs: 1000
+  # The estimate of a run's cost that it prints first, in core-hours of one
+  # core of the kind of node the timing benchmark timed (node).
+  estimate:
+    # The published model whose time per event on those nodes (the timing
+    # table, timing/summary.csv) stands in for the model's, which isn't timed
+    stand_in: caloclouds3_recompiled
+    node: cpu
+    # Its seconds per event of each scenario where the table hasn't it
+    # (CaloClouds3 recompiled, 10 GeV trigger, on Maxwell's EPYC 7402)
+    simulation_s:
+      single_photon: 0.104
+      di_photon: 0.36
+      tau_pairs: 4.16
+    # The reconstruction's seconds per event of each scenario, there
+    reconstruction_s:
+      single_photon: 0.32
+      di_photon: 0.16
+      tau_pairs: 1.06
+    # Starting ddsim, k4run and the measurement, seconds per simulation
+    overhead_s: 180
+
 # The timing benchmark (./slurm_timing.sh, ./timing.sh and ./timing_summary.sh;
 # the code is in ddml_timing/, and docs/timing.md describes it): the time per
 # event of every simulator on the inputs of every scenario, on each kind of node

@@ -849,21 +849,33 @@ def test_the_category_deviations_carry_the_spreads_of_both(figures, tmp_path):
     # in the legend as chi^2/ndf
     chi2 = sum((m - g) ** 2 / (me ** 2 + ge ** 2)
                for m, me, g, ge in zip(m_mean, m_error, g_mean, g_error))
-    assert len(results[5]) == 4 and results[5][3] == pytest.approx(chi2)
+    # (with no uncertainty, then its degrees of freedom, the categories compared)
+    assert len(results[5]) == 6 and results[5][3] == pytest.approx(chi2)
+    assert results[5][4:] == (None, 5)
     labels = [text.get_text() for text in figures[0].axes[0].get_legend().get_texts()]
     assert labels == ["Geant4", "Model ($\\chi^2$/ndf %.3g/5)" % chi2]
 
 
-def test_the_pi0_category_totals_are_per_seed():
+def test_the_pi0_category_totals_are_per_seed_and_per_1000_events():
     G, C, F = measure.GOOD, measure.CONFUSED, measure.FAKE
     simulator = categorised([1, 2, 1, 0], [G, G, F, C], [0, 0, -1, 0], [1, 1, 1, 1], seeds=[7, 9])
     points = plot.category_totals(*plot.pi0_categories(simulator, "pi0", "tau_pairs"))
     assert points["seeds"] == [7, 9] and points["events"] == {7: 2, 9: 2} and points["spread"]
     np.testing.assert_array_equal(points["totals"]["n_reco"], [3, 1])
     np.testing.assert_array_equal(points["totals"]["n_fake"], [1, 0])
-    assert points["mean"]["n_good"] == 1.0 and points["error"]["n_good"] == pytest.approx(
-        np.std([2, 0], ddof=1))
     np.testing.assert_array_equal(points["totals"]["n_missed"], [0, 1])
+    # The figure's bars are per 1000 events of each seed (each has 2 here), so
+    # that samples of other sizes compare
+    np.testing.assert_array_equal(points["rates"]["n_good"], [1000, 0])
+    assert points["mean"]["n_good"] == 500.0 and points["error"]["n_good"] == pytest.approx(
+        np.std([1000, 0], ddof=1))
+    # With one seed, the Poisson uncertainty of its total, likewise
+    one = plot.category_totals({"n_good": np.array([2, 1, 0, 1])}, [5, 5, 5, 5])
+    assert one["mean"]["n_good"] == 1000.0 and not one["spread"]
+    assert one["error"]["n_good"] == pytest.approx(np.sqrt(4) * 1000 / 4)
+    # A sample of half the events, at the same rate, has the same bars
+    half = plot.category_totals({"n_good": np.array([2, 0])}, [5, 5])
+    assert half["mean"]["n_good"] == one["mean"]["n_good"]
 
 
 def stored_style(folder, name, label, color, linestyle):

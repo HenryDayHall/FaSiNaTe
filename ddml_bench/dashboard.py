@@ -103,12 +103,15 @@ class Collector:
                              "observable": observable, "scenario": scenario, "svg": svg})
 
 
-def write(collector, where, folder=None, events=None, reference_colors=("#d9d9d9", "#8c8c8c")):
+def write(collector, where, folder=None, events=None, reference_colors=("#d9d9d9", "#8c8c8c"),
+          notes=()):
     """Write the dashboard of the collected figures to where, through a
     temporary file so that no one reads half of it; folder is that of the
     measurements, and events the number of events of each, if limited.
-    reference_colors are the fill and edge of the reference's histograms."""
-    page = render(collector, folder=folder, events=events, reference_colors=reference_colors)
+    reference_colors are the fill and edge of the reference's histograms;
+    notes, lines the menu shows below them (e.g. of a low-cost sample)."""
+    page = render(collector, folder=folder, events=events, reference_colors=reference_colors,
+                  notes=notes)
     temporary = os.path.join(os.path.dirname(where) or os.curdir,
                              ".%s.part" % os.path.basename(where))
     with open(temporary, "w", encoding="utf-8") as stream:
@@ -255,7 +258,8 @@ def figure_title(figure):
     return head.replace("_", " ")
 
 
-def render(collector, folder=None, events=None, reference_colors=("#d9d9d9", "#8c8c8c")):
+def render(collector, folder=None, events=None, reference_colors=("#d9d9d9", "#8c8c8c"),
+           notes=()):
     """The page of the collected figures (see write())."""
     names = list(collector.simulators)
     index = dict((name, k) for k, name in enumerate(names))
@@ -320,7 +324,8 @@ def render(collector, folder=None, events=None, reference_colors=("#d9d9d9", "#8
         "style": STYLE + rules,
         "definitions": ET.tostring(definitions, encoding="unicode"),
         "side": side(models, collector.references.get(""), reference_colors, scenarios,
-                     observables, any(section for section, _ in order), folder, events),
+                     observables, any(section for section, _ in order), folder, events,
+                     notes),
         "sections": "".join(parts),
         "script": SCRIPT,
     }
@@ -339,8 +344,10 @@ def sample(color, dash, fill=None):
                 ' stroke-dasharray="%s"' % _attribute(dash) if dash else ""))
 
 
-def side(models, reference, reference_colors, scenarios, observables, closures, folder, events):
-    """The menu: the models, and which figures to show."""
+def side(models, reference, reference_colors, scenarios, observables, closures, folder, events,
+         notes=()):
+    """The menu: the models, and which figures to show; notes, lines below
+    what the figures are of."""
     rows = []
     if reference is not None:
         rows.append('<div class="fsn-model fsn-reference" title="%s">%s<span class="fsn-label">'
@@ -368,6 +375,7 @@ def side(models, reference, reference_colors, scenarios, observables, closures, 
     if events is not None:
         meta.append("the first %d events" % events)
     meta.append("made %s" % datetime.datetime.now().strftime("%Y-%m-%d %H:%M"))
+    meta += [html.escape(note) for note in notes or ()]
     return (
         '<aside class="fsn-side"><h1>FaSiNaTe plots</h1><p class="fsn-meta">%s</p>'
         '<p class="fsn-off">The menu needs scripts, which are off here: in JupyterLab\'s viewer, '
