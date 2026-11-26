@@ -21,6 +21,13 @@
 #                      sample (default: every measurement found)
 #   -n, --events N     plot the measurements of the first N events
 #                      (<simulator>_n<N>.npz)
+#       --sample M[:N] draw model M's sample of the first N events of each
+#                      input (<M>_n<N>.npz; without N, the low-cost sample of
+#                      the configuration, low_cost.events) in place of its
+#                      full measurements, against the full measurements of the
+#                      others, with each metric's statistical floor, into
+#                      <dir>/plots/low_cost_n<N> (repeatable; low_cost.sh
+#                      draws these)
 #   -d, --dir DIR      the folder with the .npz files (default: observables in
 #                      paths.data_dir)
 #   -o, --out DIR      where the figures go (default: <dir>/plots)
@@ -92,6 +99,11 @@ while (($#)); do
             # timing table (timing/summary.csv) unless given --timing, which
             # is fetched there where there's none
             if [[ $option == --dir ]]; then bind_args+=(--bind "$(dirname -- "$(realpath -- "$2")")"); fi
+            shift 2
+            ;;
+        --sample)
+            (($# >= 2)) || die "--sample needs a model, MODEL or MODEL:N"
+            args+=(--sample "$2")
             shift 2
             ;;
         --format)

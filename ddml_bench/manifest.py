@@ -93,7 +93,7 @@ from .config import REPO_DIR
 from .ddml_configs import OPTION as ML_CONFIG, canonical
 from .layout import (GEANT4, INPUT_DIR, INPUT_FOLDERS, OBSERVABLES_DIR, REC_DIR, REC_SUFFIX,
                      SECOND_GEANT4, SEED_TAG, SEP, SIM_DIR, TIMING_DIR, TIMING_SUMMARY,
-                     input_stem, timing_file)
+                     input_stem, is_sample, timing_file)
 
 FORMAT = "fasinate-manifest/2"
 ESSENTIAL, TRUTH, OTHER = "essential", "input_truth", "other"
@@ -153,7 +153,7 @@ def classify(relative, truth_scenarios=None, input_folders=INPUT_FOLDERS):
     if len(parts) == 2 and parts[0] in input_folders and name.endswith(".slcio"):
         return ESSENTIAL, REQUIRED, name, None
     if len(parts) == 2 and parts[0] == OBSERVABLES_DIR and name.endswith(".npz") \
-            and not _TEST_SAMPLE.search(name[:-len(".npz")]):
+            and not is_sample(name[:-len(".npz")]):
         return ESSENTIAL, REQUIRED, name, None
     if len(parts) == 2 and parts[0] in input_folders and name.endswith(".h5"):
         scenario = (truth_scenarios or {}).get("%s/%s.slcio" % (parts[0], input_stem(name)))

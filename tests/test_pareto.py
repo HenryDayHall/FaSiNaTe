@@ -518,3 +518,47 @@ def test_the_plots_are_drawn_again_when_the_timing_table_is_newer(tmp_path):
     assert stage.current(task) == (True, "")
     task["params"]["timing_to_fetch"] = "Zenodo record 1"
     assert stage.current(task) == (False, "the timing table is to be fetched from Zenodo record 1")
+
+
+def test_a_samples_metrics_are_drawn_projected_to_the_full_samples_size(figures, tmp_path):
+    """A low-cost sample's metrics (plot.py's --sample) are drawn at their
+    projection to the full sample's size, its error bar dashed, and
+    pareto.csv keeps what it measured."""
+    columns = ("observable", "scenario", "profile", "simulator", "metric", "value",
+               "uncertainty", "events", "ndf", "floor", "floor_uncertainty", "projected",
+               "projected_uncertainty")
+    rows = [("radial_profile", "single_photon", "r30", "alpha", "JS", 0.0004, "", 30000, "",
+             "", "", "", ""),
+            ("radial_profile", "single_photon", "r30", "beta", "JS", 0.0009, "", 3000, "",
+             0.0007, 0.0001, 0.0003, 0.0001),
+            ("radial_profile", "single_photon", "r30", "geant4_2", "JS", 0.0001, "", 30000, "",
+             "", "", "", "")]
+    metrics = tmp_path / "metrics.csv"
+    with open(str(metrics), "w", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(columns)
+        writer.writerows(rows)
+    timing = write_timing(tmp_path / "summary.csv", [
+        ("cpu", "single_photon", "geant4", "all", 2000, 2.85, 0.008),
+        ("cpu", "single_photon", "alpha", "all", 2000, 0.06, 0.002),
+        ("cpu", "single_photon", "beta", "all", 2000, 0.5, 0.004)])
+    out = tmp_path / "plots"
+    os.makedirs(str(out))
+    pareto.fronts(str(out), "", ["png"], SIMULATORS, "geant4", timing, metrics_path=str(metrics))
+    by = dict(((r["version"], r["simulator"]), r) for r in read_rows(out / "pareto.csv"))
+    beta = by[("js", "beta")]
+    # At its projection, which the models' mean is of too
+    assert float(beta["value"]) == close(0.0003) and beta["projected"] == "yes"
+    assert float(beta["measured_value"]) == close(0.0009) and beta["events"] == "3000"
+    assert float(beta["floor"]) == close(0.0007)
+    assert float(beta["mean_distance"]) == close((0.02 + math.sqrt(0.0003)) / 2)
+    assert by[("js", "alpha")]["projected"] == "no" and by[("js", "alpha")]["measured_value"] == ""
+    figure = figures[0]
+    labels = [text.get_text() for text in figure.axes[0].get_legend().get_texts()]
+    assert "Beta, ×5.7,\nprojected to the full sample" in labels
+    # Its error bars dashed (of its time and its distance), the others' solid
+    dashed = [collection for collection in figure.axes[0].collections
+              if collection.get_linestyle()[0][1] is not None]
+    assert len(dashed) == 2
+    assert all(tuple(collection.get_color()[0][:3]) == (0x1f / 255.0, 0x6f / 255.0, 0xb4 / 255.0)
+               for collection in dashed)

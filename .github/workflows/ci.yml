@@ -62,4 +62,4 @@ jobs:
           shellcheck -x --shell=bash pipeline.sh slurm_pipeline.sh slurm_simulate_geant4.sh \
             generate_input.sh simulate_geant4.sh simulate_models.sh reconstruct_simulation.sh \
             observables_from_reconstruction.sh plot_observables.sh setup.sh scripts/*.sh \
-            slurm_timing.sh timing.sh timing_summary.sh
+            slurm_timing.sh timing.sh timing_summary.sh low_cost.sh

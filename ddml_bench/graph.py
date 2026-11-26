@@ -114,22 +114,27 @@ def _real_files(paths, what):
 
 
 def make_plan(simulators=(), scenarios=(), stages=(), events=None, force=(), inputs=(),
-              files=(), simulations=(), compact=None, slurm=False):
+              files=(), simulations=(), compact=None, slurm=False, low_cost=False):
     """What the tasks are made from, as a JSON-able dict.
 
     simulators, scenarios: run only these (default: all of them)
     stages: run only these (lists separated by commas, or all; default: all)
-    events: a test on the first N events of each input (default: all)
+    events: a test on the first N events of each input (default: all), or
+        {scenario: N} for the first N of each input of each scenario enabled
     force: stages whose outputs are made again where they exist
     inputs: input files simulated as the scenario custom
     files: run only on these inputs of the scenarios
     simulations: simulation files to reconstruct
     compact: reconstruct in this detector instead
     slurm: check the slurm settings too
+    low_cost: the simulators' sample (events) is compared with the full
+        samples of the others: its plot task draws them together
+        (ddml_bench/low_cost.py)
     """
+    per_scenario = events if isinstance(events, dict) else None
     try:
         config = load_config()
-        layout = Layout(config["paths"]["data_dir"], events)
+        layout = Layout(config["paths"]["data_dir"], None if per_scenario else events)
     except LayoutError as error:
         raise PlanError(str(error))
     selected = stage_list(stages, "--stages") if stages else list(STAGE_NAMES)
@@ -145,6 +150,20 @@ def make_plan(simulators=(), scenarios=(), stages=(), events=None, force=(), inp
     every = scenario_inputs(config, layout)
     groups = [group for group in every if group["enabled"]]
     disabled = [group["scenario"] for group in every if not group["enabled"]]
+    if per_scenario is not None:
+        events = scenario_events(per_scenario, [group["scenario"] for group in groups],
+                                 disabled)
+        if inputs:
+            raise PlanError("files given with --input are simulated as the scenario '%s', "
+                            "which a sample with a number of events for each scenario has no "
+                            "number for" % CUSTOM_SCENARIO)
+        try:
+            layout = Layout(config["paths"]["data_dir"], events)
+        except LayoutError as error:
+            raise PlanError(str(error))
+    if low_cost and events is None:
+        raise PlanError("a low-cost sample is of the first events of each input, so it needs "
+                        "a number of them")
     if "generate" in selected:
         for group in groups:
             kind = INPUT_TYPES[group["type"]]
@@ -268,6 +287,7 @@ def make_plan(simulators=(), scenarios=(), stages=(), events=None, force=(), inp
         "config_files": [f for f in os.environ.get("FASINATE_CONFIG", "").split(":") if f],
         "data_dir": layout.data_dir,
         "events": events,
+        "low_cost": bool(low_cost),
         "stages": selected,
         "force": forced,
         "only_simulators": list(dict.fromkeys(simulators)),
@@ -300,6 +320,25 @@ def make_plan(simulators=(), scenarios=(), stages=(), events=None, force=(), inp
             "over again" % (" and ".join(sorted({scenario for scenario, _, _ in left})),
                             len(left), layout.relative(left[0][1])))
     return plan
+
+
+def scenario_events(events, enabled, disabled=()):
+    """{scenario: N} of a sample with a number of events for each scenario,
+    for the scenarios enabled, in their order: each needs one, and the
+    numbers of scenarios disabled are left out."""
+    unknown = [scenario for scenario in events
+               if scenario not in enabled and scenario not in disabled]
+    if unknown:
+        raise PlanError("there is a number of events for the scenario %s, which the "
+                        "configuration doesn't have; it has: %s"
+                        % (unknown[0], ", ".join(list(enabled) + list(disabled)) or "none"))
+    missing = [scenario for scenario in enabled if events.get(scenario) is None]
+    if missing:
+        raise PlanError("there is no number of events for the scenario %s (low_cost.events in "
+                        "the configuration has one for each scenario)" % missing[0])
+    if not enabled:
+        raise PlanError("no scenario is enabled")
+    return dict((scenario, events[scenario]) for scenario in enabled)
 
 
 def unsplit(plan):

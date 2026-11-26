@@ -11,6 +11,11 @@
       (simulate_models.sh), reconstruct (reconstruct_simulation.sh),
       observables (observables_from_reconstruction.sh) or plot.
 
+  ddml-bench low-cost [options] MODEL ... [-- SBATCH_OPTION ...]
+      Test models on the first events of each input (low_cost.events), against
+      the full samples of Geant4 and the other models, as published, with the
+      local executor or slurm (low_cost.sh, ddml_bench/low_cost.py).
+
   ddml-bench plot [options] [SIMULATOR ...]
       Plot measurements (plot_observables.sh), fetching the published timing
       table first where there's none (--no-fetch doesn't); needs only numpy
@@ -44,12 +49,13 @@ from .executors import ExecutorError
 from .fetch import FetchError
 from .graph import PlanError, make_plan
 from .layout import LayoutError
+from .low_cost import LowCostError
 from .measure import ObservableError
 from .models import ModelError, model_names
 from .stages import STAGE_NAMES, StageError
 
 ERRORS = (ConfigError, PlanError, StageError, ExecutorError, ModelError, LayoutError,
-          ObservableError, FetchError)
+          ObservableError, FetchError, LowCostError)
 
 
 class UsageError(Exception):
@@ -190,6 +196,44 @@ def command_run(argv):
     return run_locally(plan, args.dry_run)
 
 
+def command_low_cost(argv):
+    before, sbatch_args = split_dashes(argv)
+    parser = argparse.ArgumentParser(
+        prog="ddml-bench low-cost",
+        description="Test models on the first events of each input, against the full samples "
+                    "of Geant4, its second sample and the other models, as published (or as "
+                    "measured here, with --no-fetch): only the models' tasks of the sample run, "
+                    "then its plots against the full samples, each metric with its statistical "
+                    "floor (ddml_bench/low_cost.py).")
+    parser.add_argument("models", nargs="*", metavar="MODEL",
+                        help="the models to test, by their names in models/")
+    parser.add_argument("-n", "--events", type=positive_int, metavar="N",
+                        help="the first N events of each input of every scenario (default: "
+                             "low_cost.events in the configuration, a number for each scenario)")
+    parser.add_argument("-f", "--force", action="append", default=[], metavar="STAGE",
+                        help="make the outputs of STAGE again, even where nothing needs them, "
+                             "and what is made from them (repeatable, or a list separated by "
+                             "commas)")
+    parser.add_argument("--executor", choices=("local", "slurm"), default="local",
+                        help="run the tasks one after another here, or as slurm jobs")
+    parser.add_argument("--any-stack", action="store_true",
+                        help="compare with the published measurements even where this "
+                             "configuration pins other software than they were made with")
+    common_options(parser)
+    args = parse(parser, before, "models")
+    if sbatch_args and args.executor != "slurm":
+        parser.error("options after -- go to sbatch, so they need --executor slurm")
+    use_config_files(args.config)
+    from .low_cost import plan_run
+    plan = plan_run(args.models, events=args.events, force=args.force,
+                    slurm=args.executor == "slurm", dry_run=args.dry_run,
+                    no_fetch=args.no_fetch, any_stack=args.any_stack)
+    if args.executor == "slurm":
+        from .executors import slurm
+        return slurm.run(plan, args.dry_run, sbatch_args)
+    return run_locally(plan, args.dry_run)
+
+
 def stage_parser(name):
     parser = argparse.ArgumentParser(prog="ddml-bench stage " + name,
                                      description="Run the %s stage." % name)
@@ -313,6 +357,7 @@ def command_run_task(argv):
 
 COMMANDS = {
     "run": command_run,
+    "low-cost": command_low_cost,
     "stage": command_stage,
     "plot": command_plot,
     "manifest": command_manifest,

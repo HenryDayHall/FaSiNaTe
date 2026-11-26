@@ -36,7 +36,7 @@ COPIED = ["ddml_bench", "scripts", "configs", "ILD_Particle_Gun.py",
           "ILD_Di_Photon_Gun.py", "setup.sh",
           "pipeline.sh", "slurm_pipeline.sh", "slurm_simulate_geant4.sh", "generate_input.sh",
           "simulate_geant4.sh", "simulate_models.sh", "reconstruct_simulation.sh",
-          "observables_from_reconstruction.sh", "plot_observables.sh"]
+          "observables_from_reconstruction.sh", "plot_observables.sh", "low_cost.sh"]
 # A model of DDML's presets alone, with its weights in DDML's build
 BENCH_MODELS = ["caloclouds3_paper"]
 # The plugins DDML declares (src/MLModelActions.cc), with every backend built

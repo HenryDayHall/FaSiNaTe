@@ -79,7 +79,9 @@ Each simulator's curve is the mean over the ddsim seeds of each seed's, and
 its band the spread over the seeds; the metric compares the numbers of good
 pi0s in the bins, seed by seed, as the separation's does (seed_histograms(),
 seed_metric()). A fifth figure, as the paper's figure 10, counts the
-candidates of each category of the reconstruction, and the MC pi0s missed.
+candidates of each category of the reconstruction, and the MC pi0s missed,
+per 1000 events of each seed (PI0_CATEGORY_EVENTS), so that samples of other
+sizes compare.
 
 Where the timing benchmark has timed the models (<paths.data_dir>/timing/
 summary.csv, or the table --timing gives), every scenario also has its Pareto
@@ -98,6 +100,16 @@ first, if a record in the configuration's published section has them
 (ddml_bench/fetch.py); --no-fetch doesn't. (A run of the pipeline fetches
 them before its plot stage.)
 
+A model's sample of the first N events of each input (a low-cost sample,
+ddml_bench/low_cost.py) is drawn with --sample MODEL[:N] in place of its full
+measurements, against the full measurements of every other simulator, into
+<dir>/plots/low_cost<sample>/ (draw()'s samples): its label says its events
+of each input, e.g. "MyModel (n=1000)", the text in each figure's corner its
+events there, and each of its metrics has its statistical floor at its sample
+size, in its legend and in metrics.csv, what Geant4 itself would measure with
+as many events (set_floors(), ddml_bench/floors.py), with its value projected
+to the full sample's size (finish_row()), which the Pareto fronts draw.
+
 Every figure is also drawn as SVG for the dashboard, dashboard.html next to
 the figures (ddml_bench/dashboard.py), with each model's parts marked with its
 name (mark()), so that its menu can hide them; --format svg keeps the SVG
@@ -105,7 +117,7 @@ files, and --no-dashboard leaves the dashboard out.
 
 
   python3 -m ddml_bench.plot [--dir DIR] [--out DIR] [--events N]
-                             [--format pdf,png] [--reference NAME]
+                             [--sample MODEL[:N]] [--format pdf,png] [--reference NAME]
                              [--no-closure] [--no-dashboard] [--timing CSV]
                              [--no-pareto] [--no-fetch] [SIMULATOR ...]
 
@@ -117,7 +129,8 @@ e.g. intrinsic_angle_theta_top4__single_photon,
 photon_separation_<E>GeV__<scenario> for the separation, and pi0_mass__<scenario>,
 pi0_energy__<scenario>, pi0_theta__<scenario>, pi0_phi__<scenario> and
 pi0_categories__<scenario> for the pi0s), with the metrics in
-metrics.csv (and their uncertainties, for those that have one) and the fitted
+metrics.csv (and their uncertainties, for those that have one, and the columns
+of METRIC_COLUMNS) and the fitted
 parameters of the energy figures, with their uncertainties, chi^2 and degrees
 of freedom, in fits.csv. It needs numpy and matplotlib, and PyYAML only to
 read the configuration for the default folder, the metrics and the bins of the
@@ -225,11 +238,20 @@ def described_style(name):
 
 
 class Simulator:
-    def __init__(self, path):
+    """A simulator's measurements, as one .npz file holds them; sample is the
+    suffix of a sample of it drawn against the full measurements of the
+    others (a low-cost sample: --sample), or None, and floors, once draw()
+    has worked them out, the statistical floors of its metrics at its sample
+    size, {(observable, scenario, figure, metric): (floor, spread)}
+    (ddml_bench/floors.py)."""
+
+    def __init__(self, path, sample=None):
         import numpy as np
         with np.load(path, allow_pickle=False) as data:
             self.data = {key: data[key] for key in data.files}
         self.path = path
+        self.sample = sample
+        self.floors = {}
         self.name = str(self.data.get("meta__simulator", os.path.basename(path)[:-4]))
         # Drawn as models/ describes it now, if it does, so that changing a
         # model's name or plot section needs no new measurement (the .npz
@@ -244,11 +266,59 @@ class Simulator:
                 % (self.name, ", ".join(key for key in sorted(found)
                                          if found[key] != recorded[key])))
         found = found or recorded
-        self.label = found["label"]
+        self.label = self.base_label = found["label"]
         self.color = found["color"]
         style = found["linestyle"]
         # matplotlib wants a dash pattern as (offset, (on, off, ...))
         self.linestyle = (style[0], tuple(style[1])) if isinstance(style, list) else style
+
+    def scenarios(self):
+        """The scenarios it measured, in order."""
+        return sorted({key.split(SEP)[0] for key in self.data
+                       if key.endswith(SEP + "n_events") and len(key.split(SEP)) == 2})
+
+    def events_in(self, scenario):
+        """Its events of a scenario, of all its files (0 if it has none)."""
+        import numpy as np
+        counts = self.data.get(SEP.join((scenario, "n_events")))
+        return int(np.sum(counts)) if counts is not None else 0
+
+    def per_input(self, scenario):
+        """The most events it has of one input (file) of a scenario: N for a
+        sample of the first N events of each."""
+        import numpy as np
+        counts = self.data.get(SEP.join((scenario, "n_events")))
+        return int(np.max(counts)) if counts is not None and len(counts) else 0
+
+    def label_for(self, scenario):
+        """Its label in the figures of a scenario: a sample's says its events
+        of each input, n=<N>."""
+        number = self.per_input(scenario) if self.sample else 0
+        return "%s (n=%d)" % (self.base_label, number) if number else self.base_label
+
+    def menu_label(self):
+        """Its label in the dashboard's menu: a sample's says its events of
+        each input, if they are the same in every scenario."""
+        if not self.sample:
+            return self.base_label
+        numbers = sorted({self.per_input(scenario) for scenario in self.scenarios()} - {0})
+        return "%s (%s)" % (self.base_label, "n=%d" % numbers[0] if len(numbers) == 1
+                            else "low-cost")
+
+    def sample_text(self):
+        """A sample's events of each input, in words: n=1000, or n=1000 (500
+        of tau_pairs) where the scenarios differ."""
+        numbers = [(scenario, self.per_input(scenario)) for scenario in self.scenarios()]
+        numbers = [(scenario, number) for scenario, number in numbers if number]
+        if not numbers:
+            return "no events"
+        counts = {}
+        for _, number in numbers:
+            counts[number] = counts.get(number, 0) + 1
+        common = max(counts, key=lambda n: (counts[n], -[m for _, m in numbers].index(n)))
+        rest = ["%d of %s" % (number, scenario) for scenario, number in numbers
+                if number != common]
+        return "n=%d%s" % (common, " (%s)" % ", ".join(rest) if rest else "")
 
     def profiles(self):
         found = []
@@ -390,6 +460,27 @@ def chi_squared_text(value, points):
     return r"$\chi^2$/ndf %s/%d" % ("%.0f" % value if value >= 100 else "%.3g" % value, points)
 
 
+def floor_text(simulator, key):
+    """What a legend adds to a sample's metric (key: observable, scenario,
+    figure, metric): its statistical floor at the sample's size, if known
+    (ddml_bench/floors.py), ", floor 4.1e-04"; nothing for a full sample."""
+    import math
+    if not getattr(simulator, "sample", None):
+        return ""
+    found = (getattr(simulator, "floors", None) or {}).get(key)
+    if not found or found[0] is None or not math.isfinite(found[0]):
+        return ""
+    return ", floor %.1e" % found[0]
+
+
+def sample_lines(curves):
+    """The lines a figure's text in the corner adds for the samples drawn
+    against full ones: each one's events (or showers, or pi0s) in the
+    figure, as the text gives the reference's."""
+    return "".join("\n%s: %d" % (simulator.base_label, n) for simulator, _, _, _, n in curves
+                   if getattr(simulator, "sample", None))
+
+
 def metric_of(observable, settings):
     """The metric of an observable: its settings' metric, or its default."""
     return (settings or {}).get("metric") or DEFAULT_METRICS.get(observable, "jensen_shannon")
@@ -502,7 +593,8 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
         if ref is not None and metric is not None:
             value = metric(ref[2][keep], mean)
             results.append((simulator, short, value))
-            label = "%s (%s %.2e)" % (label, short, value)
+            label = "%s (%s %.2e%s)" % (label, short, value, floor_text(
+                simulator, (observable, scenario, profile, short)))
         else:
             given = next((t for s, t in metric_texts if s is simulator), None)
             if given:
@@ -536,6 +628,7 @@ def plot_profile(observable, scenario, profile, curves, reference, metric_name, 
     if note is None:
         n_ref = ref[4] if ref is not None else curves[0][4]
         note = "%s, %d events%s" % (scenario, n_ref, " (Geant4)" if ref is not None else "")
+    note += sample_lines(curves)
     top.text(0.02, 0.97 if room else 0.03, note, transform=top.transAxes, fontsize=8,
              color=MUTED, va="top" if room else "bottom")
     legend(top, entries, fontsize=8, loc="upper right")
@@ -809,13 +902,14 @@ def _some(values, most=3):
     return ", ".join(values[:most]) + (", ..." if len(values) > most else "")
 
 
-def energy_points(true, reconstructed):
+def energy_points(true, reconstructed, errors=True):
     """The points of the energy figures, one per true energy, from the lowest:
     dicts of the energy (its events' mean true energy, GeV), the number of
     events n, and mu90, sigma90 and their ratio, the resolution, of the events'
-    reconstructed energies, each with its uncertainty (<name>_err); and why
-    events were left out, if any were. If most were, none are kept, as the
-    events then aren't at fixed energies (e.g. an input of a spectrum)."""
+    reconstructed energies, each with its uncertainty (<name>_err; nan
+    without errors, which skips resampling for them); and why events were
+    left out, if any were. If most were, none are kept, as the events then
+    aren't at fixed energies (e.g. an input of a spectrum)."""
     import numpy as np
     true = np.asarray(true, dtype=float)
     reconstructed = np.asarray(reconstructed, dtype=float)
@@ -834,7 +928,8 @@ def energy_points(true, reconstructed):
         else:
             mu90, sigma90 = mu90_sigma90(values)
             if mu90 > 0:
-                mu90_err, sigma90_err, resolution_err = bootstrap_errors(values)
+                mu90_err, sigma90_err, resolution_err = (
+                    bootstrap_errors(values) if errors else (float("nan"),) * 3)
                 points.append({"energy": energy, "n": len(index), "mu90": mu90,
                                "mu90_err": mu90_err, "sigma90": sigma90,
                                "sigma90_err": sigma90_err, "resolution": sigma90 / mu90,
@@ -947,16 +1042,17 @@ def plot_energy(observable, scenario, measured, reference, metric_name, out, suf
     for spec in ENERGY_FIGURES if entries else ():
         base = figure_base(out, observable, spec[0], scenario, suffix)
         figure_results, figure_fits = plot_energy_figure(spec, scenario, entries, reference,
-                                                         metric_name, base, formats)
-        results += [(simulator, spec[0], short, value)
-                    for simulator, short, value in figure_results]
+                                                         metric_name, base, formats,
+                                                         observable=observable)
+        results += [(result[0], spec[0]) + tuple(result[1:]) for result in figure_results]
         fits += [(simulator, spec[0]) + fit for simulator, fit in figure_fits]
         say("%s: %s" % (", ".join(simulator.label for simulator, _ in entries),
                         ", ".join("%s.%s" % (os.path.basename(base), f) for f in formats)))
     return results, fits
 
 
-def plot_energy_figure(spec, scenario, entries, reference, metric_name, out_base, formats):
+def plot_energy_figure(spec, scenario, entries, reference, metric_name, out_base, formats,
+                       observable="energy"):
     """One figure of the energy (a spec of ENERGY_FIGURES): every simulator's
     points against the true energy, each with its uncertainty and the function
     fitted to them, and below, each model's relative deviation from Geant4,
@@ -964,8 +1060,9 @@ def plot_energy_figure(spec, scenario, entries, reference, metric_name, out_base
     The legend gives each model's metric and its chi^2 from Geant4 (chi_squared(),
     of the points at Geant4's energies). Returns ([(simulator, metric,
     value)], [(simulator, (parameter, value, uncertainty, chi^2, degrees of
-    freedom))]): each model's metric, then each model's chi^2 (CHI2); and
-    the fits."""
+    freedom))]): each model's metric, then each model's chi^2 (CHI2, with no
+    uncertainty and then its points, its degrees of freedom); and the
+    fits."""
     from matplotlib.lines import Line2D
     import numpy as np
 
@@ -1006,13 +1103,14 @@ def plot_energy_figure(spec, scenario, entries, reference, metric_name, out_base
         if pairs and metric is not None:
             result = metric([r[value] for r, _ in pairs], [p[value] for _, p in pairs])
             results.append((simulator, short, result))
-            texts.append("%s %.2e" % (short, result))
+            texts.append("%s %.2e%s" % (short, result, floor_text(
+                simulator, (observable, scenario, figure, short))))
         if pairs:
             found, points_compared = chi_squared(
                 [p[value] for _, p in pairs], [p[value + "_err"] for _, p in pairs],
                 [r[value] for r, _ in pairs], [r[value + "_err"] for r, _ in pairs])
             if points_compared:
-                chi2s.append((simulator, CHI2, found))
+                chi2s.append((simulator, CHI2, found, None, points_compared))
                 texts.append(chi_squared_text(found, points_compared))
         if texts:
             label = "%s (%s)" % (label, ", ".join(texts))
@@ -1334,6 +1432,45 @@ def energy_name(energy):
     return "%gGeV" % float("%.3g" % energy)
 
 
+def separation_groups(measured, scenario=""):
+    """The events of each simulator that have a separation, by the energy of
+    their photons, from measured, [(simulator, and of each event its
+    separation, number of reconstructed photons, photon energy and ddsim
+    seed)]: ([[energy, [(simulator, its events' separation, photons,
+    seeds)]]], [what is left out, and why, in words])."""
+    import numpy as np
+    groups, messages = [], []
+    for simulator, separation, photons, energy, seeds in measured:
+        separation = np.asarray(separation, dtype=float)
+        energy = np.asarray(energy, dtype=float)
+        found = np.flatnonzero(np.isfinite(separation) & np.isfinite(energy))
+        if len(found) < len(separation):
+            messages.append("%s, %s: %d of %d events haven't two incident photons heading into "
+                            "the ECAL face, so they're left out" % (
+                                simulator.name, scenario, len(separation) - len(found),
+                                len(separation)))
+        spread = []
+        for index in same_energies(energy[found]) if len(found) else []:
+            chosen = found[index]
+            value = float(energy[chosen].mean())
+            if energy[chosen].max() - energy[chosen].min() > SAME_ENERGY * abs(value):
+                spread.append("%.4g to %.4g" % (energy[chosen].min(), energy[chosen].max()))
+                continue
+            group = next((g for g in groups if abs(g[0] - value) <= SAME_ENERGY * abs(g[0])),
+                         None)
+            if group is None:
+                group = [value, []]
+                groups.append(group)
+            group[1].append((simulator, separation[chosen], np.asarray(photons)[chosen],
+                             np.asarray(seeds)[chosen]))
+        if spread:
+            messages.append("%s, %s: %d set(s) of events whose photons' energies differ by more "
+                            "than %g%% (%s GeV) are left out: the separation figures need inputs "
+                            "at fixed energies" % (simulator.name, scenario, len(spread),
+                                                   100 * SAME_ENERGY, _some(spread)))
+    return groups, messages
+
+
 def plot_separation(observable, scenario, measured, reference, settings, out, suffix, formats):
     """The figures of the di-photon separation, from measured, [(simulator, and
     of each event its separation, number of reconstructed photons, photon
@@ -1363,35 +1500,9 @@ def plot_separation(observable, scenario, measured, reference, settings, out, su
     codes = sorted({abs(int(code)) for code in settings.get("pdg") or []})
     counted = "particles" if "pdg" in settings and codes != [22] else "photons"
 
-    # The events of each simulator that have a separation, by the energy of
-    # their photons
-    groups = []  # [[energy, [(simulator, its events' separation, photons, seeds)]]]
-    for simulator, separation, photons, energy, seeds in measured:
-        separation = np.asarray(separation, dtype=float)
-        energy = np.asarray(energy, dtype=float)
-        found = np.flatnonzero(np.isfinite(separation) & np.isfinite(energy))
-        if len(found) < len(separation):
-            say("%s, %s: %d of %d events haven't two incident photons heading into the ECAL "
-                "face, so they're left out" % (simulator.name, scenario,
-                                              len(separation) - len(found), len(separation)))
-        spread = []
-        for index in same_energies(energy[found]) if len(found) else []:
-            chosen = found[index]
-            value = float(energy[chosen].mean())
-            if energy[chosen].max() - energy[chosen].min() > SAME_ENERGY * abs(value):
-                spread.append("%.4g to %.4g" % (energy[chosen].min(), energy[chosen].max()))
-                continue
-            group = next((g for g in groups if abs(g[0] - value) <= SAME_ENERGY * abs(g[0])),
-                         None)
-            if group is None:
-                group = [value, []]
-                groups.append(group)
-            group[1].append((simulator, separation[chosen], np.asarray(photons)[chosen],
-                             np.asarray(seeds)[chosen]))
-        if spread:
-            say("%s, %s: %d set(s) of events whose photons' energies differ by more than %g%% "
-                "(%s GeV) are left out: the separation figures need inputs at fixed energies"
-                % (simulator.name, scenario, len(spread), 100 * SAME_ENERGY, _some(spread)))
+    groups, messages = separation_groups(measured, scenario)
+    for message in messages:
+        say(message)
 
     results = []
     for energy, members in sorted(groups, key=lambda group: group[0]):
@@ -1412,8 +1523,9 @@ def plot_separation(observable, scenario, measured, reference, settings, out, su
             if not pairs:
                 continue
             results.append((simulator, profile, short, value, spread))
-            texts.append((simulator, "%s %.2e \u00b1 %.1e" % (short, value, spread)
-                          if np.isfinite(spread) else "%s %.2e" % (short, value)))
+            texts.append((simulator, ("%s %.2e \u00b1 %.1e" % (short, value, spread)
+                                      if np.isfinite(spread) else "%s %.2e" % (short, value))
+                          + floor_text(simulator, (observable, scenario, profile, short))))
         results += seed_distances(profile, edges, ref, entries)
         # The text in the corner is of Geant4, if it is there
         shown = ref if ref is not None else entries[0][1]
@@ -1474,7 +1586,10 @@ PI0_FIGURES = (
 PI0_CATEGORIES = (("n_reco", "nRecoPi0"), ("n_fake", "nFake"), ("n_good", "nGood"),
                   ("n_confused", "nConfused"), ("n_missed", "nMissed"))
 PI0_CATEGORY_FIGURE = "categories"
-PI0_CATEGORY_YLABEL = r"$\pi^0$s per seed"
+# The categories are counted per this many events of each seed, so that
+# samples of other sizes compare (a low-cost sample's with the full ones)
+PI0_CATEGORY_EVENTS = 1000
+PI0_CATEGORY_YLABEL = r"$\pi^0$s per %d events" % PI0_CATEGORY_EVENTS
 
 
 def seed_histograms(values, seeds, edges):
@@ -1566,33 +1681,38 @@ def pi0_categories(simulator, observable, scenario):
             event_seeds(simulator, scenario, n_events))
 
 
-def category_totals(categories, seeds):
-    """Of each category, its total over the events of each ddsim seed: a dict
-    of "seeds", in order; "totals", {category: [seed's total]}; "mean" and
-    "error", {category: the mean over the seeds, and their standard deviation
-    (the sample's, ddof 1; with one seed the Poisson uncertainty)}; "spread",
-    whether the error is the spread over the seeds; and "events", {seed: its
-    events}."""
+def category_totals(categories, seeds, per=PI0_CATEGORY_EVENTS):
+    """Of each category, its total over the events of each ddsim seed, and
+    that per `per` events of the seed, so that samples of other sizes compare:
+    a dict of "seeds", in order; "totals", {category: [seed's total]};
+    "rates", {category: [seed's total per `per` events]}; "mean" and "error",
+    {category: the mean of the rates over the seeds, and their standard
+    deviation (the sample's, ddof 1; with one seed the Poisson uncertainty of
+    its total, per `per` events)}; "spread", whether the error is the spread
+    over the seeds; and "events", {seed: its events}."""
     import numpy as np
     seeds = np.asarray(seeds)
     order = sorted(set(int(s) for s in seeds))
+    events = dict((seed, int(np.sum(seeds == seed))) for seed in order)
+    scale = np.array([per / events[seed] for seed in order], dtype=float)
     totals = {key: np.array([float(np.sum(values[seeds == seed])) for seed in order])
               for key, values in categories.items()}
+    rates = dict((key, values * scale) for key, values in totals.items())
     mean, error = {}, {}
-    for key, values in totals.items():
+    for key, values in rates.items():
         mean[key] = float(values.mean()) if order else float("nan")
         error[key] = (float(values.std(ddof=1)) if len(order) > 1 else
-                      float(np.sqrt(values[0])) if order else float("nan"))
-    return {"seeds": order, "totals": totals, "mean": mean, "error": error,
-            "spread": len(order) > 1,
-            "events": {seed: int(np.sum(seeds == seed)) for seed in order}}
+                      float(np.sqrt(totals[key][0]) * scale[0]) if order else float("nan"))
+    return {"seeds": order, "totals": totals, "rates": rates, "mean": mean, "error": error,
+            "spread": len(order) > 1, "events": events}
 
 
 def plot_pi0_categories(observable, scenario, entries, reference, out, suffix, formats):
     """The figure of the categories of the pi0 reconstruction,
     pi0_categories__<scenario>, from entries, [(simulator, category_totals())]:
     of each category (PI0_CATEGORIES) a bar of each simulator, its mean over
-    the seeds with their spread as the error, Geant4 first; below, each
+    the seeds of its number per PI0_CATEGORY_EVENTS events, with their spread
+    as the error, Geant4 first; below, each
     model's relative deviation from Geant4 in each category, its error the
     spreads of both combined (relative_deviation()). The legend gives each
     model's chi^2 from Geant4 over the categories (chi_squared(), with the errors
@@ -1625,7 +1745,7 @@ def plot_pi0_categories(observable, scenario, entries, reference, out, suffix, f
             # Of the categories, with the errors drawn (the seed spreads)
             found, compared = chi_squared(mean, error, r_mean, r_err)
             if compared:
-                chi2s.append((simulator, PI0_CATEGORY_FIGURE, CHI2, found))
+                chi2s.append((simulator, PI0_CATEGORY_FIGURE, CHI2, found, None, compared))
                 label = "%s (%s)" % (label, chi_squared_text(found, compared))
         bars = top.bar(x + shift, mean, width, color=REFERENCE_FILL if is_ref else color,
                        edgecolor=color, linewidth=1, alpha=1 if is_ref else 0.85,
@@ -1744,8 +1864,9 @@ def pi0_figures(observable, scenario, simulators, reference, settings, out, suff
             if not pairs:
                 continue
             results.append((simulator, figure, short, value, spread))
-            texts.append((simulator, "%s %.2e ± %.1e" % (short, value, spread)
-                          if np.isfinite(spread) else "%s %.2e" % (short, value)))
+            texts.append((simulator, ("%s %.2e ± %.1e" % (short, value, spread)
+                                      if np.isfinite(spread) else "%s %.2e" % (short, value))
+                          + floor_text(simulator, (observable, scenario, figure, short))))
         results += seed_distances(figure, edges, ref, entries, key="counts")
         # The text in the corner is of Geant4, if it is there
         shown = ref if ref is not None else entries[0][1]
@@ -1773,12 +1894,14 @@ def pi0_figures(observable, scenario, simulators, reference, settings, out, suff
     if entries:
         ref = next((points for simulator, points in entries if simulator is reference), None)
         for simulator, points in entries:
+            # (A sample's are the first events of the same inputs)
             if ref is not None and simulator is not reference \
+                    and not getattr(simulator, "sample", None) \
                     and sorted(points["events"].values()) != sorted(ref["events"].values()):
-                say("%s, %s: its seeds have %s events and %s's %s, so its totals of the pi0 "
-                    "categories aren't of the same events" % (
+                say("%s, %s: its seeds have %s events and %s's %s, so its numbers of the pi0 "
+                    "categories, per %d events, aren't of the same events" % (
                         simulator.name, scenario, sorted(points["events"].values()),
-                        reference.name, sorted(ref["events"].values())))
+                        reference.name, sorted(ref["events"].values()), PI0_CATEGORY_EVENTS))
         results += plot_pi0_categories(observable, scenario, entries, reference, out, suffix,
                                        formats)
     return results, []
@@ -1795,27 +1918,164 @@ EVENT_FIGURES = {"energy": energy_figures, "intrinsic_angle": angle_figures,
                  "photon_separation": separation_figures, "pi0": pi0_figures}
 
 
-def uncertainty_text(row, form="%.6g"):
-    """A metric's uncertainty, written out, if it has one: the seventh item of
-    its row; empty without one, or if it couldn't be estimated (nan)."""
+# The columns of metrics.csv: of each figure (observable, scenario, profile)
+# and simulator compared with the reference, a metric's value and its
+# uncertainty (the spread over the seeds, where it has one), the simulator's
+# events of the scenario, a chi^2's degrees of freedom, and where the plots
+# have samples drawn against full ones (--sample, ddml_bench/floors.py), of a
+# sample, the metric's statistical floor at its sample size with its spread,
+# and its value projected to the reference's sample size, with its
+# uncertainty (the floor's spread); of the reference's second sample, the
+# floors of the profiles at the reference's own size, which what it measured
+# checks
+METRIC_COLUMNS = ("observable", "scenario", "profile", "simulator", "metric", "value",
+                  "uncertainty", "events", "ndf", "floor", "floor_uncertainty", "projected",
+                  "projected_uncertainty")
+
+
+def number_cell(value, form="%.6g"):
+    """A number of metrics.csv, written out; empty for none, or nan."""
     import math
-    error = row[6] if len(row) > 6 else None
-    return form % error if error is not None and math.isfinite(error) else ""
+    if value is None or isinstance(value, bool):
+        return ""
+    if isinstance(value, int):
+        return str(value)
+    return form % value if math.isfinite(value) else ""
 
 
-def draw(folder, out, suffix, formats, observables, wanted=(), reference_name=REFERENCE):
+def set_floors(reference, second, simulators, observables):
+    """Work out the statistical floors of the samples drawn against full
+    measurements (Simulator.sample), each at its own sample size, against
+    the reference, with its second sample if it is drawn
+    (ddml_bench/floors.py); each sample's go to its floors. The second
+    sample's floors are those of the profiles at the reference's own sample
+    size, from resampling them as a sample's are, beside what it measured:
+    the check of how the profiles are resampled."""
+    from . import floors
+    samples = [s for s in simulators if s.sample and s is not reference and s is not second]
+    if not samples or reference is None:
+        return
+    scenarios = reference.scenarios()
+    say("working out the statistical floors of the metrics of %s: what %s would measure of "
+        "itself with as many events, %d draws of %s" % (
+            ", ".join("%s (%s)" % (s.base_label, s.sample_text()) for s in samples),
+            reference.label, floors.RESAMPLINGS,
+            "%s's events (and resamplings of the profiles)" % second.label if second is not None
+            else "its own events"))
+    for simulator in samples:
+        counts = {}
+        for scenario in simulator.scenarios():
+            if scenario not in scenarios:
+                continue
+            found, why = floors.counts_in(reference, simulator, scenario)
+            if found is None:
+                say("%s has no floors of %s: %s" % (simulator.name, scenario, why))
+                continue
+            counts[scenario] = found
+        simulator.floors = floors.floors(reference, counts, observables, second=second)
+    if second is not None:
+        own = dict((scenario, list(reference.data[SEP.join((scenario, "n_events"))]))
+                   for scenario in scenarios)
+        second.floors = floors.floors(reference, own, observables, per_event=False)
+
+
+def full_floors(rows, reference, second, observables):
+    """{(observable, scenario, figure, metric): (floor, spread)} at the
+    reference's own sample size, which a sample's metrics are projected to:
+    what its second sample measured (its rows of metrics.csv, as they are),
+    or without it the floors of the reference's own sizes
+    (ddml_bench/floors.py)."""
+    from . import floors
+    if second is not None:
+        return dict(((row["observable"], row["scenario"], row["profile"], row["metric"]),
+                     (row["value"], row.get("uncertainty")))
+                    for simulator, row in rows if simulator is second)
+    if reference is None:
+        return {}
+    say("there's no second sample of %s, so the floors of its own sample size are worked out "
+        "from its events, %d draws" % (reference.label, floors.RESAMPLINGS))
+    own = dict((scenario, list(reference.data[SEP.join((scenario, "n_events"))]))
+               for scenario in reference.scenarios())
+    return floors.floors(reference, own, observables)
+
+
+def relabel(simulators, scenario):
+    """Label each simulator as the figures of a scenario do
+    (Simulator.label_for()), or as it is (scenario None)."""
+    for simulator in simulators:
+        if hasattr(simulator, "label_for"):
+            simulator.label = (simulator.base_label if scenario is None
+                               else simulator.label_for(scenario))
+
+
+def finish_row(row, simulator, reference, full):
+    """Fill in a row of metrics.csv (METRIC_COLUMNS) beyond the metric: the
+    simulator's events of the scenario and, of a sample drawn against full
+    measurements, its floor (Simulator.floors) and its value projected to
+    the reference's sample size (floors.project(), with the floors there,
+    full_floors())."""
+    import math
+    from . import floors
+    scenario = row["scenario"]
+    row["events"] = simulator.events_in(scenario) if hasattr(simulator, "events_in") else None
+    key = (row["observable"], scenario, row["profile"], row["metric"])
+    floor = (getattr(simulator, "floors", None) or {}).get(key)
+    if floor is not None:
+        row["floor"], row["floor_uncertainty"] = floor
+    if not getattr(simulator, "sample", None) or reference is None or not row["events"]:
+        return row
+    ratio = reference.events_in(scenario) / float(row["events"])
+    full = full.get(key)
+    row["projected"] = floors.project(row["metric"], row["value"],
+                                      floor[0] if floor else None, full[0] if full else None,
+                                      ratio, row.get("ndf"))
+    if row["projected"] is None:
+        return row
+    if row["metric"] == CHI2:
+        # Its own statistical scatter, scaled as its excess is
+        row["projected_uncertainty"] = math.sqrt(2.0 * row["ndf"]) * floors.chi2_scale(ratio)
+    elif floor is not None:
+        row["projected_uncertainty"] = floor[1]
+    return row
+
+
+def sample_files(folder, samples, wanted=(), keep=()):
+    """[(simulator, .npz file, sample)] that draw() draws with samples
+    ({model: the suffix of its sample}): each other simulator's full
+    measurements (of those wanted, and those in keep, or of all of them),
+    then each model's sample, if it is measured (else said)."""
+    found = [(name, path, None) for name, path in measurement_files(folder)
+             if name not in samples and (not wanted or name in wanted or name in keep)]
+    for name, sample in samples.items():
+        path = os.path.join(folder, name + sample + ".npz")
+        if os.path.isfile(path):
+            found.append((name, path, sample))
+        else:
+            say("there's no %s, so %s's sample %s isn't drawn" % (path, name, sample))
+    return found
+
+
+def draw(folder, out, suffix, formats, observables, wanted=(), reference_name=REFERENCE,
+         samples=None):
     """Draw every figure of the measurements in folder (<simulator><suffix>.npz;
     of the simulators wanted, and the reference with its second sample, or of
     all of them) into out, with metrics<suffix>.csv and fits<suffix>.csv there,
-    comparing each to the reference. Returns the simulators drawn ([] if there
-    are no measurements): the reference first, its second sample next, then
-    the others in the order of their files."""
+    comparing each to the reference. With samples, {model: the suffix of its
+    sample}, each such model's sample (e.g. a low-cost one, <model>_n1000.npz)
+    is drawn instead, against the full measurements of every other simulator,
+    and each metric gets its statistical floor (set_floors()). Returns the
+    simulators drawn ([] if there are no measurements): the reference first,
+    its second sample next, then the others in the order of their files (the
+    samples last)."""
     second_name = second_sample_of(reference_name)
-    paths = [path for name, path in measurement_files(folder, suffix)
-             if not wanted or name in wanted or name in (reference_name, second_name)]
-    if not paths:
+    if samples:
+        found = sample_files(folder, samples, wanted, (reference_name, second_name))
+    else:
+        found = [(name, path, None) for name, path in measurement_files(folder, suffix)
+                 if not wanted or name in wanted or name in (reference_name, second_name)]
+    if not found:
         return []
-    simulators = [Simulator(p) for p in paths]
+    simulators = [Simulator(path, sample) for _, path, sample in found]
     reference = next((s for s in simulators if s.name == reference_name), None)
     if reference is None:
         say("there's no %s measurement, so there's nothing to compare to; plotting "
@@ -1824,10 +2084,18 @@ def draw(folder, out, suffix, formats, observables, wanted=(), reference_name=RE
     for simulator in reversed([s for s in (reference, second) if s is not None]):
         simulators.remove(simulator)
         simulators.insert(0, simulator)
+    if samples:
+        set_floors(reference, second, simulators, observables)
 
     os.makedirs(out, exist_ok=True)
     if collector is not None:
         collector.section(out, reference)
+        if samples:
+            # The menu's labels, as the figures' differ by scenario
+            for simulator in simulators:
+                if simulator is not reference:
+                    simulator.label = simulator.menu_label()
+                    collector.simulator(simulator)
     groups, event_groups = [], []
     for simulator in simulators:
         for key in simulator.profiles():
@@ -1839,6 +2107,7 @@ def draw(folder, out, suffix, formats, observables, wanted=(), reference_name=RE
 
     rows, fit_rows = [], []
     for observable, scenario, profile in groups:
+        relabel(simulators, scenario)
         curves = []
         edges = None
         for simulator in simulators:
@@ -1866,7 +2135,9 @@ def draw(folder, out, suffix, formats, observables, wanted=(), reference_name=RE
         say("%s: %s" % (", ".join(c[0].label for c in curves),
                         ", ".join("%s.%s" % (os.path.basename(base), f) for f in formats)))
         for simulator, short, value in results:
-            rows.append((observable, scenario, profile, simulator.name, short, value))
+            rows.append((simulator, {"observable": observable, "scenario": scenario,
+                                     "profile": profile, "simulator": simulator.name,
+                                     "metric": short, "value": value}))
 
     # The observables stored per event: the energy linearity and resolution,
     # and the intrinsic angles
@@ -1874,6 +2145,7 @@ def draw(folder, out, suffix, formats, observables, wanted=(), reference_name=RE
         if observable not in EVENT_FIGURES:
             say("there are no figures of %s, so it isn't plotted" % observable)
             continue
+        relabel(simulators, scenario)
         measured = [simulator for simulator in simulators
                     if (observable, scenario) in simulator.per_event()]
         if collector is not None:
@@ -1883,18 +2155,25 @@ def draw(folder, out, suffix, formats, observables, wanted=(), reference_name=RE
                                                   suffix, formats)
         for result in results:
             simulator, figure, short, value = result[:4]
-            rows.append((observable, scenario, figure, simulator.name, short, value)
-                        + tuple(result[4:5]))
+            rows.append((simulator, {"observable": observable, "scenario": scenario,
+                                     "profile": figure, "simulator": simulator.name,
+                                     "metric": short, "value": value,
+                                     "uncertainty": result[4] if len(result) > 4 else None,
+                                     "ndf": result[5] if len(result) > 5 else None}))
         for simulator, figure, parameter, value, error, chi2, ndf in fits:
             fit_rows.append((observable, scenario, figure, simulator.name, parameter, value,
                              error, chi2, ndf))
+    relabel(simulators, None)
+    full = full_floors(rows, reference, second, observables) \
+        if any(s.sample for s in simulators) else {}
+    rows = [finish_row(row, simulator, reference, full) for simulator, row in rows]
 
     with open(os.path.join(out, "metrics%s.csv" % suffix), "w", newline="") as stream:
         writer = csv.writer(stream)
-        writer.writerow(["observable", "scenario", "profile", "simulator", "metric", "value",
-                         "uncertainty"])
+        writer.writerow(METRIC_COLUMNS)
         for row in rows:
-            writer.writerow(row[:5] + ("%.6g" % row[5], uncertainty_text(row)))
+            writer.writerow([row[column] if column in METRIC_COLUMNS[:5]
+                             else number_cell(row.get(column)) for column in METRIC_COLUMNS])
     # The functions fitted in the energy figures, a row per parameter
     with open(os.path.join(out, "fits%s.csv" % suffix), "w", newline="") as stream:
         writer = csv.writer(stream)
@@ -1903,10 +2182,15 @@ def draw(folder, out, suffix, formats, observables, wanted=(), reference_name=RE
         for row in fit_rows:
             writer.writerow(row[:5] + tuple("%.6g" % v for v in row[5:8]) + (row[8],))
     for row in rows:
-        observable, scenario, profile, name, short, value = row[:6]
-        error = uncertainty_text(row, "%.1e")
-        print("%-22s %-14s %-10s %-14s %s %.3e%s" % (observable, scenario, profile, name, short,
-                                                    value, " +- " + error if error else ""))
+        error = number_cell(row.get("uncertainty"), "%.1e")
+        extra = ""
+        if row.get("floor") is not None:
+            extra += ", floor %s" % number_cell(row["floor"], "%.2e")
+        if row.get("projected") is not None:
+            extra += ", %.3e at full statistics" % row["projected"]
+        print("%-22s %-14s %-10s %-14s %s %.3e%s%s" % (
+            row["observable"], row["scenario"], row["profile"], row["simulator"], row["metric"],
+            row["value"], " +- " + error if error else "", extra))
     for observable, scenario, profile, name, parameter, value, error, chi2, ndf in fit_rows:
         print("%-22s %-14s %-10s %-14s %-9s %.4g +- %.2g" % (
             observable, scenario, profile, name, parameter, value, error))
@@ -1973,7 +2257,8 @@ def compare_scenario(first, second, scenario):
     return how, True
 
 
-def closures(folder, out, suffix, formats, observables, wanted=(), pairs=None):
+def closures(folder, out, suffix, formats, observables, wanted=(), pairs=None,
+             samples_only=False):
     """For each model that is a closure test of another (closure in
     models/<model>.yaml, or pairs, as closure_pairs() gives them), with both
     measured (and the model among those wanted, if any are): every figure of
@@ -1981,11 +2266,17 @@ def closures(folder, out, suffix, formats, observables, wanted=(), pairs=None):
     metrics, and a row for each scenario of whether their measurements are the
     same, in <out>/closure<suffix>.csv. Their events should be the same where
     they are simulated with the same seeds, if closure.identical says so.
-    Returns the rows."""
+    Returns the rows. With samples_only, the models wanted are samples drawn
+    against full measurements (--sample), whose closure tests need their
+    twins' samples of the same size (suffix), and it is said where there are
+    none."""
     measured = dict(measurement_files(folder, suffix))
     rows = []
     for model, (twin, identical) in sorted((closure_pairs() if pairs is None
                                             else pairs).items()):
+        if samples_only and model in wanted and model in measured and twin not in measured:
+            say("closure test of %s against %s skipped: %s has no sample %s, only its full "
+                "measurements, which are of other events" % (model, twin, twin, suffix))
         if (wanted and model not in wanted) or model not in measured or twin not in measured:
             continue
         say("closure test: %s against %s" % (model, twin))
@@ -2047,6 +2338,44 @@ def fetch_timing(folder):
         return None
 
 
+def parse_samples(values):
+    """{model: the suffix of its sample} from --sample MODEL[:N]: N a number
+    of events (_n<N>), or the suffix of a sample (e.g. _n1000_tau_pairs500),
+    or without it the low-cost sample of the configuration
+    (ddml_bench/low_cost.py). Raises ValueError for one that isn't."""
+    from .layout import is_sample_suffix
+    samples = {}
+    for value in values:
+        name, _, sample = value.partition(":")
+        if not name:
+            raise ValueError("--sample %s: give a model, MODEL or MODEL:N" % value)
+        if sample.isdigit() and int(sample) > 0:
+            sample = "_n%d" % int(sample)
+        elif not sample:
+            from .low_cost import configured_suffix
+            sample = configured_suffix()
+        elif not is_sample_suffix(sample):
+            raise ValueError("--sample %s: after the model, give the number of events of each "
+                             "input (MODEL:1000) or a sample's suffix (MODEL:_n1000)" % value)
+        if samples.get(name, sample) != sample:
+            raise ValueError("--sample gives %s two samples, %s and %s"
+                             % (name, samples[name], sample))
+        samples[name] = sample
+    return samples
+
+
+def sample_notes(simulators):
+    """What the dashboard says of the samples drawn against full ones."""
+    notes = []
+    for simulator in simulators:
+        if getattr(simulator, "sample", None):
+            notes.append("%s: its sample of the first events of each input, %s, against the "
+                         "full samples of the others; each of its metrics has its floor, what "
+                         "Geant4 itself would measure with as many events"
+                         % (simulator.base_label, simulator.sample_text()))
+    return notes
+
+
 def main(argv=None, fetch=False):
     """Plot, as the command line says (see the module docstring); with fetch
     (from the command line), fetch the published timing table first where
@@ -2058,9 +2387,16 @@ def main(argv=None, fetch=False):
                              "sample (default: every .npz file found)")
     parser.add_argument("--dir", help="the folder with the .npz files "
                                       "(default: observables in paths.data_dir)")
-    parser.add_argument("--out", help="where the figures go (default: <dir>/plots)")
+    parser.add_argument("--out", help="where the figures go (default: <dir>/plots, or with "
+                                      "--sample <dir>/plots/low_cost<sample>)")
     parser.add_argument("--events", type=int, metavar="N",
                         help="plot the measurements of the first N events (<simulator>_n<N>.npz)")
+    parser.add_argument("--sample", action="append", default=[], metavar="MODEL[:N]",
+                        help="draw MODEL's sample of the first N events of each input "
+                             "(<MODEL>_n<N>.npz; without N, the low-cost sample of the "
+                             "configuration, low_cost.events) in place of its full "
+                             "measurements, against the full measurements of every other "
+                             "simulator, each metric with its statistical floor (repeatable)")
     parser.add_argument("--format", default="pdf,png",
                         help="figure formats, separated by commas (default: pdf,png)")
     parser.add_argument("--reference", default=REFERENCE,
@@ -2081,6 +2417,16 @@ def main(argv=None, fetch=False):
                              "where the data folder has no timing table (published in the "
                              "configuration)")
     args = parser.parse_args(argv)
+    try:
+        samples = parse_samples(args.sample)
+    except ValueError as error:
+        parser.error(str(error))
+    except Exception as error:  # the configuration, for the low-cost sample
+        say("%s" % error)
+        return 1
+    if samples and args.events is not None:
+        parser.error("--sample draws samples against the full measurements, and --events "
+                     "draws the samples of the first N events of every simulator: give one")
 
     folder, observables = load_settings() if not args.dir else (args.dir, load_settings()[1])
     if not folder:
@@ -2088,25 +2434,44 @@ def main(argv=None, fetch=False):
     if fetch and not (args.no_fetch or args.no_pareto or args.timing):
         fetch_timing(folder)
     suffix = "" if args.events is None else "_n%d" % args.events
-    out = args.out or os.path.join(folder, PLOTS_DIR)
+    if samples:
+        from .layout import low_cost_plots
+        kinds = sorted(set(samples.values()))
+        out = args.out or low_cost_plots(os.path.join(folder, PLOTS_DIR),
+                                         kinds[0] if len(kinds) == 1 else "")
+    else:
+        out = args.out or os.path.join(folder, PLOTS_DIR)
     formats = [f.strip() for f in args.format.split(",") if f.strip()]
     gathered = None if args.no_dashboard else dashboard.Collector(out)
     with collecting(gathered):
-        drawn = draw(folder, out, suffix, formats, observables, args.simulators, args.reference)
+        drawn = draw(folder, out, suffix, formats, observables, args.simulators, args.reference,
+                     samples=samples)
         if not drawn:
             say("no measurements (*%s.npz) in %s; make them with "
                 "./observables_from_reconstruction.sh" % (suffix, folder))
+            return 1
+        if samples and not any(simulator.sample for simulator in drawn):
+            say("none of the samples asked for is measured (%s), so there's nothing of them to "
+                "draw" % ", ".join("%s%s.npz" % item for item in sorted(samples.items())))
             return 1
         if not args.no_pareto:
             from . import pareto
             pareto.fronts(out, suffix, formats, drawn, args.reference,
                           args.timing or timing_summary_of(folder))
         if not args.no_closure:
-            closures(folder, out, suffix, formats, observables, args.simulators)
+            if samples:
+                # Of the samples, each with its twin's sample of the same size
+                for sample in sorted(set(samples.values())):
+                    closures(folder, out, sample, formats, observables,
+                             [name for name in samples if samples[name] == sample],
+                             samples_only=True)
+            else:
+                closures(folder, out, suffix, formats, observables, args.simulators)
     if gathered is not None and gathered.figures:
         path = dashboard.write(gathered, dashboard.path(out, suffix), folder=folder,
                                events=args.events, reference_colors=(REFERENCE_FILL,
-                                                                     REFERENCE_EDGE))
+                                                                     REFERENCE_EDGE),
+                               notes=sample_notes(drawn))
         say("every figure, with a menu to show or hide each model: %s" % path)
     return 0
 
