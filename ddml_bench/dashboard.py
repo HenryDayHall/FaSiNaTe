@@ -8,7 +8,11 @@ each part of it marked with the simulator it draws (plot.mark(): a group with
 the id <MARK>.<role>.<simulator>.<n>, the role DATA for its curves, bands,
 points, fits and bars, KEY for its legend entry, and TARGET for an invisible
 rectangle over that entry, to click). The reference (Geant4) is never marked,
-so it is always there to compare with.
+so it is always there to compare with. A part may also be of a group of the
+figure's parts, e.g. the points of one metric of a Pareto front (<MARK>.<role>.
+<simulator>:<group>.<n>, or <MARK>.<role>.:<group>.<n> for the group's legend
+entry alone): a click on the group's legend entry hides or shows them all in
+that figure, whatever their simulators.
 
 The page is one self-contained file, with no styles, scripts or fonts from
 elsewhere, so it opens the same way from a disk, a web server (e.g. python3
@@ -41,6 +45,9 @@ DATA, KEY, TARGET = "data", "key", "target"
 # The classes the page gives what is marked: of a simulator's DATA, which its
 # menu hides, its KEY, which it dims, and its TARGET, which is clicked
 CLASSES = {DATA: "fsn-d", KEY: "fsn-k", TARGET: "fsn-t"}
+# What a group of a figure's parts can be called (plot.mark()): its class is
+# fsn-g<group>, and a figure hides it with the class fsn-x<group>
+GROUP = re.compile(r"^[A-Za-z0-9_-]+$")
 # How many figures the page can show in a row: as many as fit at 420 px or
 # more, or a number of them (the CSS grid's columns)
 FIT = "repeat(auto-fill,minmax(min(420px,100%),1fr))"
@@ -156,26 +163,44 @@ def compact(d):
     return _COMMAND.sub(r"\1", d)
 
 
-def parse_mark(ident):
-    """(role, simulator) of a mark's id, <MARK>.<role>.<simulator>.<n>; None
-    for any other id."""
+def read_mark(ident):
+    """(role, simulator, group) of a mark's id, <MARK>.<role>.<simulator>.<n>
+    (group None), <MARK>.<role>.<simulator>:<group>.<n>, or <MARK>.<role>.
+    :<group>.<n> (simulator None); None for any other id."""
     parts = ident.split(".", 2)
     if len(parts) < 3 or parts[0] != MARK or parts[1] not in CLASSES:
         return None
     name, _, number = parts[2].rpartition(".")
     if not name or not number.isdigit():
         name = parts[2]
-    return parts[1], unquote(name)
+    # (a simulator's name is quoted, so a colon is the group's)
+    name, colon, group = name.rpartition(":")
+    if not colon:
+        name, group = group, None
+    elif not GROUP.match(group):
+        return None
+    if not name and group is None:
+        return None
+    return parts[1], unquote(name) if name else None, group
+
+
+def parse_mark(ident):
+    """(role, simulator) of a mark's id (read_mark()), simulator None for a
+    group's alone; None for any other id."""
+    found = read_mark(ident)
+    return None if found is None else found[:2]
 
 
 def figure_svg(svg, shared, index, labels, title):
-    """The SVG of a figure for the page, and the indices (in index, {name:
-    index}) of the simulators whose parts are marked in it. What it defines
+    """The SVG of a figure for the page, the indices (in index, {name:
+    index}) of the simulators whose parts are marked in it, and the groups of
+    its parts (read_mark()) that have a legend entry to click. What it defines
     for its parts to share goes to shared, {id: element}, once for every
     figure: matplotlib names it after what it is (with plot.svg_of()'s hash
     salt), so that one name is one thing. The other ids go, and each mark's
-    becomes classes: fsn-d, fsn-k or fsn-t (CLASSES), and fsn-s<index> of its
-    simulator. labels, {name: label}, name the targets' tooltips."""
+    becomes classes: fsn-d, fsn-k or fsn-t (CLASSES), fsn-s<index> of its
+    simulator, and fsn-g<group> of its group. labels, {name: label}, name the
+    targets' tooltips."""
     root = ET.fromstring(svg)
     parents = dict((child, parent) for parent in root.iter() for child in parent)
     for definitions in [element for element in root.iter(_tag("defs"))]:
@@ -190,21 +215,32 @@ def figure_svg(svg, shared, index, labels, title):
     for element in [e for e in root if e.tag == _tag("metadata")]:
         root.remove(element)
 
-    present = set()
+    present, groups = set(), []
     for element in list(root.iter()):
         ident = element.attrib.pop("id", None)
         if element.tag == _tag("path") and "d" in element.attrib:
             element.set("d", compact(element.get("d")))
-        found = parse_mark(ident) if ident else None
-        if found is None or found[1] not in index:
+        found = read_mark(ident) if ident else None
+        if found is None or (found[1] is not None and found[1] not in index):
             continue
-        role, name = found
-        k = index[name]
-        present.add(k)
-        element.set("class", "%s fsn-s%d" % (CLASSES[role], k))
+        role, name, group = found
+        classes = [CLASSES[role]]
+        if name is not None:
+            k = index[name]
+            present.add(k)
+            classes.append("fsn-s%d" % k)
+        if group is not None:
+            classes.append("fsn-g" + group)
+            if role == TARGET and name is None and group not in groups:
+                groups.append(group)
+        element.set("class", " ".join(classes))
         if role == TARGET:
-            text = "Show or hide %s in this figure" % labels.get(name, name)
-            element.set("data-s", str(k))
+            if name is not None:
+                text = "Show or hide %s in this figure" % labels.get(name, name)
+                element.set("data-s", str(k))
+            else:
+                text = "Show or hide this entry's points in this figure"
+                element.set("data-g", group)
             element.set("tabindex", "0")
             element.set("role", "button")
             element.set("aria-label", text)
@@ -217,7 +253,7 @@ def figure_svg(svg, shared, index, labels, title):
     # (a group, not an image, whose parts screen readers would then skip)
     root.set("role", "group")
     root.set("aria-label", title)
-    return ET.tostring(root, encoding="unicode"), sorted(present)
+    return ET.tostring(root, encoding="unicode"), sorted(present), groups
 
 
 def dashes(linestyle, width=SAMPLE_WIDTH):
@@ -265,6 +301,7 @@ def render(collector, folder=None, events=None, reference_colors=("#d9d9d9", "#8
     index = dict((name, k) for k, name in enumerate(names))
     labels = dict((name, info[0]) for name, info in collector.simulators.items())
     shared = {}
+    seen_groups = set()
 
     # The sections: the figures of each scenario, then each closure test's
     sections, order = {}, []
@@ -293,15 +330,17 @@ def render(collector, folder=None, events=None, reference_colors=("#d9d9d9", "#8
         cards = []
         for figure in sections[key]:
             title = figure_title(figure)
-            svg, present = figure_svg(figure["svg"], shared, index, labels, title)
+            svg, present, groups = figure_svg(figure["svg"], shared, index, labels, title)
+            seen_groups.update(groups)
             cards.append(
                 '<figure class="fsn-card" data-scenario="%s" data-observable="%s" '
-                'data-closure="%d" data-models="%s"><figcaption><span class="fsn-title">%s</span>'
-                '<span class="fsn-file" title="%s">%s</span><button type="button" '
-                'class="fsn-reset" title="Show the models as the menu does" hidden>Reset</button>'
-                '</figcaption>%s</figure>' % (
+                'data-closure="%d" data-models="%s" data-groups="%s"><figcaption>'
+                '<span class="fsn-title">%s</span><span class="fsn-file" title="%s">%s</span>'
+                '<button type="button" class="fsn-reset" title="Show the models as the menu does, '
+                'and every metric" hidden>Reset</button></figcaption>%s</figure>' % (
                     _attribute(figure["scenario"] or ""), _attribute(figure["observable"] or ""),
                     1 if section else 0, " ".join(str(k) for k in present),
+                    _attribute(" ".join(groups)),
                     html.escape(title), _attribute(figure["name"]), html.escape(figure["name"]),
                     svg))
         parts.append('<section class="fsn-section"><h2>%s</h2><div class="fsn-grid">%s</div>'
@@ -318,6 +357,9 @@ def render(collector, folder=None, events=None, reference_colors=("#d9d9d9", "#8
     rules = "".join(".fsn-card.fsn-h%d .fsn-d.fsn-s%d{display:none}"
                     ".fsn-card.fsn-h%d .fsn-k.fsn-s%d{opacity:.28}" % ((k,) * 4)
                     for k in range(len(models)))
+    rules += "".join(".fsn-card.fsn-x%s .fsn-d.fsn-g%s{display:none}"
+                     ".fsn-card.fsn-x%s .fsn-k.fsn-g%s{opacity:.28}" % ((group,) * 4)
+                     for group in sorted(seen_groups))
     return PAGE % {
         "title": "FaSiNaTe plots",
         "models_json": _attribute(json.dumps([m["name"] for m in models])),
@@ -387,8 +429,9 @@ def side(models, reference, reference_colors, scenarios, observables, closures, 
         '</span></div>%s%s<label class="fsn-field"><span>Per row</span><select class="fsn-columns">'
         '%s</select></label>%s</div>'
         '<p class="fsn-tip">Untick a model to hide it in every figure, or click its entry in a '
-        'figure\'s legend to hide or show it in that figure alone. The axes stay as drawn with '
-        'every model.</p></aside>' % (
+        'figure\'s legend to hide or show it in that figure alone; in the Pareto fronts, click '
+        'a metric\'s entry to hide or show its points. The axes stay as drawn with every '
+        'model.</p></aside>' % (
             "<br>".join(meta), "".join(rows) or '<p class="fsn-tip">No models.</p>',
             choices(scenarios, "scenario"), choices(observables, "observable"), per_row,
             '<label class="fsn-check"><input type="checkbox" class="fsn-closure" checked> '
@@ -486,7 +529,9 @@ font-size:11px;color:var(--fsn-muted)}
 # hidden in every figure; a click on its legend entry in a figure changes that
 # figure alone, which the box then shows as neither ticked nor unticked, and
 # the figure's Reset puts back. A figure hides a model with the class
-# fsn-h<k> (the rules after STYLE). On a page of its own, what the menu hides
+# fsn-h<k> (the rules after STYLE). A click on a group's legend entry (a
+# metric of a Pareto front) hides or shows its parts in that figure alone,
+# with the class fsn-x<group>, which Reset takes away too. On a page of its own, what the menu hides
 # and shows is kept in the address (#hide=a,b&...), to come back to and to
 # share.
 SCRIPT = r"""
@@ -512,6 +557,8 @@ SCRIPT = r"""
   cards.forEach(function (card) {
     var list = card.getAttribute("data-models");
     card.fsnModels = list ? list.split(" ").map(Number) : [];
+    var groups = card.getAttribute("data-groups");
+    card.fsnGroups = groups ? groups.split(" ") : [];
   });
   var pick = function (kind) { return root.querySelector(".fsn-" + kind); };
   var scenario = pick("scenario"), observable = pick("observable");
@@ -520,11 +567,20 @@ SCRIPT = r"""
 
   function hidden(card, k) { return card.classList.contains("fsn-h" + k); }
   function differs(card, k) { return hidden(card, k) === chosen[k]; }
+  function changed(card) {
+    card.querySelector(".fsn-reset").hidden =
+      !card.fsnModels.some(function (m) { return differs(card, m); }) &&
+      !card.fsnGroups.some(function (g) { return card.classList.contains("fsn-x" + g); });
+  }
   function hide(card, k, yes) {
     if (card.fsnModels.indexOf(k) < 0) return;
     card.classList.toggle("fsn-h" + k, yes);
-    card.querySelector(".fsn-reset").hidden =
-      !card.fsnModels.some(function (m) { return differs(card, m); });
+    changed(card);
+  }
+  function hideGroup(card, group, yes) {
+    if (card.fsnGroups.indexOf(group) < 0) return;
+    card.classList.toggle("fsn-x" + group, yes);
+    changed(card);
   }
   function choose(k, show) {
     chosen[k] = show;
@@ -623,8 +679,13 @@ SCRIPT = r"""
     });
   });
   function toggle(target) {
-    var card = target.closest(".fsn-card"), k = Number(target.getAttribute("data-s"));
+    var card = target.closest(".fsn-card"), group = target.getAttribute("data-g");
     if (!card) return;
+    if (group !== null) {
+      hideGroup(card, group, !card.classList.contains("fsn-x" + group));
+      return;
+    }
+    var k = Number(target.getAttribute("data-s"));
     hide(card, k, !hidden(card, k));
     sync();
   }
@@ -634,6 +695,7 @@ SCRIPT = r"""
     var reset = event.target.closest && event.target.closest(".fsn-reset");
     if (reset) {
       var card = reset.closest(".fsn-card");
+      card.fsnGroups.forEach(function (g) { hideGroup(card, g, false); });
       card.fsnModels.forEach(function (k) { hide(card, k, !chosen[k]); });
       sync();
     }

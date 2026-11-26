@@ -146,7 +146,7 @@ import sys
 from urllib.parse import quote
 
 from . import dashboard, measure
-from .dashboard import DATA, KEY, MARK, TARGET
+from .dashboard import DATA, GROUP, KEY, MARK, TARGET
 from .layout import (GEANT4, OBSERVABLES_DIR, PLOTS_DIR, SEP, TIMING_DIR, TIMING_SUMMARY,
                      figure_base, measurement_files, second_sample_of, timing_summary_of)
 
@@ -726,14 +726,21 @@ def collecting(into):
         collector = before
 
 
-def mark(simulator, role, *artists):
+def mark(simulator, role, *artists, group=None):
     """Mark the artists (and those in containers, e.g. of errorbar() or bar())
     as drawing a simulator, in a role: DATA, its curves, bands, points and fits,
     which the dashboard hides with it, or KEY, its legend entry, which it
     dims. In the SVG, each is a group with the id <MARK>.<role>.<simulator>.<n>
-    (numbered by svg_of())."""
+    (numbered by svg_of()). With a group (letters, digits, - and _), they are
+    of that group of the figure's parts too, e.g. a metric of a Pareto front,
+    which the dashboard hides as it hides a simulator: <MARK>.<role>.<simulator>:
+    <group>.<n>; simulator None for parts of the group alone (its legend
+    entry), <MARK>.<role>.:<group>.<n>."""
     from matplotlib.artist import Artist
-    gid = "%s.%s.%s" % (MARK, role, quote(simulator.name, safe=""))
+    if group is not None and not GROUP.match(group):
+        raise ValueError("a group of a figure's parts is letters, digits, - and _: %r" % group)
+    gid = "%s.%s.%s%s" % (MARK, role, "" if simulator is None else quote(simulator.name, safe=""),
+                          "" if group is None else ":" + group)
 
     def walk(item):
         if isinstance(item, Artist):
@@ -746,18 +753,21 @@ def mark(simulator, role, *artists):
             walk(item.errorbar)
 
     walk(artists)
-    if collector is not None:
+    if collector is not None and simulator is not None:
         collector.simulator(simulator)
 
 
 def legend(ax, entries, **options):
     """The legend of the axes, from entries, [(handle, label, simulator, None
-    for the reference)], each entry marked as its simulator's KEY."""
-    drawn = ax.legend([handle for handle, _, _ in entries], [label for _, label, _ in entries],
+    for the reference)], each entry marked as its simulator's KEY; an entry
+    may have a fourth item, a group of the figure's parts (mark()), whose KEY
+    it is then, with the simulator or with None."""
+    drawn = ax.legend([entry[0] for entry in entries], [entry[1] for entry in entries],
                       frameon=False, labelcolor=INK, **options)
-    for (_, _, simulator), text, handle in zip(entries, drawn.get_texts(), legend_handles(drawn)):
-        if simulator is not None:
-            mark(simulator, KEY, text, handle)
+    for entry, text, handle in zip(entries, drawn.get_texts(), legend_handles(drawn)):
+        simulator, group = entry[2], (entry[3] if len(entry) > 3 else None)
+        if simulator is not None or group is not None:
+            mark(simulator, KEY, text, handle, group=group)
     return drawn
 
 
