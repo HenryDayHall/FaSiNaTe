@@ -1,17 +1,16 @@
 # FaSiNaTe
 
-FaSiNaTe benchmarks generative fast-simulation models of calorimeter showers in ILD's full detector chain. Each model runs inside `ddsim` through [DDML](https://github.com/key4hep/DDML), its events go through ILD's standard reconstruction, and the observables of *"A First Full Physics Benchmark for Highly Granular Calorimeter Surrogates"* are compared with Geant4.
+ [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+ [![CI](https://github.com/HenryDayHall/FaSiNaTe/actions/workflows/ci.yml/badge.svg)](https://github.com/HenryDayHall/FaSiNaTe/actions/workflows/ci.yml)
+
+FaSiNaTe benchmarks generative fast-simulation models of calorimeter showers in ILD's full reconstruction chain. Each model runs inside `ddsim` through [DDML](https://github.com/key4hep/DDML), its events go through ILD's standard reconstruction, and standard 
 
 <p align="center">
-  <img src="docs/images/longitudinal_profile_layers__single_photon.png" alt="Longitudinal shower profile, CaloClouds3 against Geant4" width="32%">
-  <img src="docs/images/radial_profile_r30__single_photon.png" alt="Radial shower profile out to 30 mm, CaloClouds3 against Geant4" width="32%">
-  <img src="docs/images/radial_profile_r100__single_photon.png" alt="Radial shower profile out to 100 mm, CaloClouds3 against Geant4" width="32%">
-</p>
-<p align="center">
-  <img src="docs/images/step_times.png" alt="Wall time per job of each pipeline step, Geant4 against CaloClouds3" width="70%">
+  <img src="docs/images/longitudinal_profile_layers__single_photon.png" alt="Longitudinal shower profile, CaloClouds3 against Geant4" width="42%">
+  <img src="docs/images/radial_profile_r30__single_photon.png" alt="Radial shower profile out to 30 mm, CaloClouds3 against Geant4" width="42%">
 </p>
 
-*Top: single photons of 10–100 GeV, CaloClouds3 (orange) against Geant4 (grey), with the relative deviation below. Bottom: the time each pipeline step takes.*
+*Single photons of 10–100 GeV, CaloClouds3 (orange) against Geant4 (grey), with the relative deviation below.
 
 More: [the stages, observables and figures](docs/stages.md) · [the models](docs/models.md)
 
