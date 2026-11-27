@@ -1507,7 +1507,13 @@ def compute_simulator(observables, simulator, files, profiles, out_path, relativ
                 per_file[(name, profile)][1])
             arrays[profile_key(name, scenario, profile, "settings")] = np.array(settings_json)
 
-    # Written to a hidden file first, so the .npz file is always complete
+    _save(arrays, out_path)
+
+
+def _save(arrays, out_path):
+    """Write the arrays to out_path, through a hidden file first, so the .npz
+    file is always complete."""
+    import numpy as np
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     partial = os.path.join(os.path.dirname(out_path),
                            ".%s.%d.npz" % (os.path.basename(out_path), os.getpid()))
@@ -1518,3 +1524,62 @@ def compute_simulator(observables, simulator, files, profiles, out_path, relativ
     finally:
         if os.path.exists(partial):
             os.remove(partial)
+
+
+def merge_parts(parts, files, out_path, relative=None):
+    """Join measurements of one reconstructed file each (parts: {how the file
+    is recorded, relative(path): the part's .npz file}, each made by
+    compute_simulator() with that file alone) into out_path: the measurements
+    compute_simulator() would make of all the files ({scenario: [path]}) at
+    once, array for array. Of each scenario, the rows of its files (their
+    profiles' sums, files, seeds and event counts) and the values of their
+    events are joined in the files' order, and what is the same for every
+    file (the bin edges, the settings, and the meta__ keys) is kept once. So
+    a simulator's files can be measured apart, e.g. on machines of their own
+    (ddml_bench/github.py), and its .npz file is up to date by its record
+    (is_up_to_date()) as if they were measured together. Raises
+    ObservableError if a file has no part, or a part isn't of its file alone,
+    or differs from the others in what should be the same."""
+    import numpy as np
+    meta = "meta" + SEP
+    arrays, first = {}, None
+    for scenario, paths in files.items():
+        joined = {}  # key: [array of each part], in the order of the first part
+        for path in paths:
+            name = relative(path) if relative else path
+            if name not in parts:
+                raise ObservableError("there is no measurement of %s alone to merge" % name)
+            with np.load(parts[name], allow_pickle=False) as stored:
+                data = dict((key, stored[key]) for key in stored.files)
+            recorded = [str(f) for f in data.get(SEP.join((scenario, "files")), [])]
+            if recorded != [name]:
+                raise ObservableError("%s is the measurement of %s, not of %s alone"
+                                      % (parts[name], " and ".join(recorded) or "nothing", name))
+            if first is None:
+                first = (name, data)
+                arrays.update((key, value) for key, value in data.items()
+                              if key.startswith(meta))
+            for key in set(first[1]) | set(data):
+                if key.startswith(meta) and str(first[1].get(key)) != str(data.get(key)):
+                    raise ObservableError("the measurements of %s and %s are of other simulators, "
+                                          "or described otherwise (%s)" % (first[0], name, key))
+            keys = [key for key in data if not key.startswith(meta)]
+            if joined and sorted(keys) != sorted(joined):
+                raise ObservableError("the measurements of %s don't have what those of the other "
+                                      "files of %s have" % (name, scenario))
+            for key in keys:
+                joined.setdefault(key, []).append(data[key])
+        for key, values in joined.items():
+            if key.endswith((SEP + "edges", SEP + "settings")):
+                # The same for every file
+                if any(v.shape != values[0].shape or not np.array_equal(v, values[0])
+                       for v in values[1:]):
+                    raise ObservableError("the measurements of the files of %s differ in %s, "
+                                          "which should be the same for all" % (scenario, key))
+                arrays[key] = values[0]
+            else:
+                # A row or a value of each file, or of each of its events
+                arrays[key] = np.concatenate(values, axis=0)
+    if first is None:
+        raise ObservableError("there are no files to merge the measurements of")
+    _save(arrays, out_path)

@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+"""A stand-in for GitHub's gh, for the tests: what ddml_bench/github.py asks
+of it about the artifacts of a repository's workflow runs, kept as folders
+$FAKE_GH_DIR/<artifact>/<run>/ (the artifact's files), with the time each was
+made in <run>.created (ISO 8601) beside it, if it has one.
+
+  gh api -X GET repos/<repository>/actions/artifacts -f name=<artifact> [-f ...]
+      prints the artifacts of that name, as GitHub's REST API lists them
+  gh run download <run> --repo <repository> --name <artifact> --dir <folder>
+      copies the artifact of that run into folder
+
+Every call is noted in $FAKE_GH_DIR/calls.log; anything else fails.
+"""
+
+import json
+import os
+import shutil
+import sys
+
+root = os.environ.get("FAKE_GH_DIR")
+args = sys.argv[1:]
+if not root:
+    print("gh (fake): FAKE_GH_DIR isn't set", file=sys.stderr)
+    sys.exit(4)
+os.makedirs(root, exist_ok=True)
+with open(os.path.join(root, "calls.log"), "a") as log:
+    log.write(" ".join(args) + "\n")
+
+
+def option(name):
+    if name not in args or args.index(name) + 1 >= len(args):
+        print("gh (fake): %s is missing" % name, file=sys.stderr)
+        sys.exit(1)
+    return args[args.index(name) + 1]
+
+
+if args[:3] == ["api", "-X", "GET"] and args[3].endswith("/actions/artifacts"):
+    fields = dict(args[i + 1].split("=", 1) for i in range(4, len(args) - 1) if args[i] == "-f")
+    name = fields.get("name", "")
+    found = []
+    folder = os.path.join(root, name)
+    for run in sorted(os.listdir(folder)) if name and os.path.isdir(folder) else []:
+        if not os.path.isdir(os.path.join(folder, run)):
+            continue
+        created = os.path.join(folder, run + ".created")
+        found.append({"id": 1000 + len(found), "name": name, "expired": False,
+                      "created_at": open(created).read().strip()
+                      if os.path.isfile(created) else "2026-11-01T00:00:00Z",
+                      "workflow_run": {"id": int(run), "head_branch": "main"}})
+    print(json.dumps({"total_count": len(found), "artifacts": found}))
+elif args[:2] == ["run", "download"]:
+    run, name, target = args[2], option("--name"), option("--dir")
+    source = os.path.join(root, name, run)
+    if not os.path.isdir(source):
+        print("gh (fake): no artifact %s in run %s" % (name, run), file=sys.stderr)
+        sys.exit(1)
+    os.makedirs(target, exist_ok=True)
+    for entry in os.listdir(source):
+        shutil.copy2(os.path.join(source, entry), os.path.join(target, entry))
+else:
+    print("gh (fake): can't do: gh %s" % " ".join(args), file=sys.stderr)
+    sys.exit(1)

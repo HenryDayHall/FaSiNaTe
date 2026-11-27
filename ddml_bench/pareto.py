@@ -56,7 +56,9 @@ others hollow; Geant4 is off a front only where a model faster than it is as
 close to it as its own second sample. The legend gives each model's speed-up
 on Geant4 as drawn (Geant4's time over the model's), and each metric's marker,
 with the models' mean distance in it (in the units of the bins, for a
-Wasserstein distance). Everything drawn is in pareto<sample>.csv: a row per
+Wasserstein distance). In the dashboard (ddml_bench/dashboard.py), a click on
+a model's legend entry hides its points, and on a metric's entry, that
+metric's points, Geant4's too. Everything drawn is in pareto<sample>.csv: a row per
 point of each metric of each figure of each version, with the distance and
 the time, their uncertainties, and whether it is on its metric's front;
 Geant4's rows have its second sample's distances, at its own time.
@@ -265,6 +267,12 @@ def node_times(times, node, scenario, reference_name):
         if wanted in timed:
             return models, (timed[wanted], wanted)
     return models, None
+
+
+def metric_group(k):
+    """The group (plot.mark()) of the figure's kth metric's points and its
+    legend entry, by which the dashboard shows or hides them all."""
+    return "m%d" % k
 
 
 def metric_label(metric, version_metric):
@@ -538,7 +546,7 @@ def plot_fronts(figure, ylim, out, suffix, formats):
                 # Projected from a sample's metric: its error bar dashed
                 for bars in drawn[2]:
                     bars.set_linestyle((0, (2, 1.5)))
-            plot.mark(simulator, DATA, drawn)
+            plot.mark(simulator, DATA, drawn, group=metric_group(k))
 
     ax.set_xscale("log")
     # The times, with their errors, and a margin on either side of a sixth of
@@ -585,11 +593,11 @@ def plot_fronts(figure, ylim, out, suffix, formats):
         entries.append((Line2D([], [], color=simulator.color, linewidth=5,
                                solid_capstyle="butt"), label, simulator))
     entries.append((Line2D([], [], linestyle="none"), "Metrics (the models' mean):", None))
-    for metric in figure["metrics"]:
+    for k, metric in enumerate(figure["metrics"]):
         entries.append((Line2D([], [], linestyle="none", marker=metric["marker"],
                                markersize=MARKER_SIZE * MARKER_SCALE.get(metric["marker"], 1.0),
                                color=plot.MUTED, markeredgecolor="white", markeredgewidth=0.9),
-                        metric_label(metric, measures[0][0]), None))
+                        metric_label(metric, measures[0][0]), None, metric_group(k)))
     plot.legend(ax, entries, fontsize=7.5, loc="upper left", bbox_to_anchor=(1.02, 1.0),
                 borderaxespad=0.0)
     note = "%s, %s nodes\nhollow: off its metric's Pareto front\n%s" % (

@@ -26,6 +26,10 @@
       (inputs, measurements, bulk), and with --stage the files to upload;
       needs only numpy (ddml_bench/manifest.py).
 
+  ddml-bench github keys|plan|check|shard|report [options]
+      The low-cost mode as the jobs of the GitHub workflow
+      .github/workflows/low-cost.yml (ddml_bench/github.py, docs/github.md).
+
 Outside the environment from setup.sh, run and stage work out the plan where
 they are, then carry on in that environment (scripts/run_in_environment.sh)
 with these steps, which they run themselves:
@@ -47,6 +51,7 @@ from .config import ConfigError
 from .environment import in_environment, run_in_environment
 from .executors import ExecutorError
 from .fetch import FetchError
+from .github import GitHubError
 from .graph import PlanError, make_plan
 from .layout import LayoutError
 from .low_cost import LowCostError
@@ -55,7 +60,7 @@ from .models import ModelError, model_names
 from .stages import STAGE_NAMES, StageError
 
 ERRORS = (ConfigError, PlanError, StageError, ExecutorError, ModelError, LayoutError,
-          ObservableError, FetchError, LowCostError)
+          ObservableError, FetchError, LowCostError, GitHubError)
 
 
 class UsageError(Exception):
@@ -323,6 +328,12 @@ def command_manifest(argv):
     return main(argv)
 
 
+def command_github(argv):
+    from .github import main
+    use_config_files([])
+    return main(argv)
+
+
 def command_local(argv):
     parser = argparse.ArgumentParser(prog="ddml-bench local")
     parser.add_argument("plan")
@@ -361,6 +372,7 @@ COMMANDS = {
     "stage": command_stage,
     "plot": command_plot,
     "manifest": command_manifest,
+    "github": command_github,
     "local": command_local,
     "tasks": command_tasks,
     "run-task": command_run_task,

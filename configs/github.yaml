@@ -1,0 +1,30 @@
+# The configuration of the low-cost mode on GitHub's runners
+# (.github/workflows/low-cost.yml, ddml_bench/github.py, docs/github.md),
+# merged over configs/default.yaml: the workflow sets FASINATE_CONFIG to it.
+#
+# The runners run Key4hep's AlmaLinux 9 image with CVMFS
+# (ghcr.io/key4hep/key4hep-images/alma9-cvmfs), as DDML's own CI does, so the
+# pipeline needs no container of its own there. The software is pinned to what
+# the published measurements were made with (published.records: the stack of
+# their manifest), so that a model simulated on a runner is compared like with
+# like: the plan job stops, saying what to pin, if they differ.
+#
+# To test with other settings in a fork, change them here (a push that changes
+# this file runs the workflow), e.g. fewer events of the tau pairs:
+#
+#   low_cost:
+#     events:
+#       tau_pairs: 500
+
+container:
+  enabled: false
+
+key4hep:
+  release: "2026-04-08"
+
+ddml:
+  commit: "263256cca31b37335cd2aae34b81e899bd2a5851"
+
+detector_configs:
+  ildconfig:
+    commit: "582efec42467362c389da073e7e21fb53a110315"

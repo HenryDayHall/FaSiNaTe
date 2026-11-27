@@ -395,9 +395,19 @@ def test_the_dashboard_can_hide_each_model_in_the_fronts(figures, tmp_path):
     assert page.count('data-observable="pareto_wasserstein"') == 3
     # Each one's points and legend entry, in each figure it is in, to hide
     for k, figures_in in enumerate((6, 6, 4, 2)):
-        assert len(re.findall(r'class="fsn-d fsn-s%d"' % k, page)) >= 2 * figures_in
+        assert len(re.findall(r'class="fsn-d fsn-s%d fsn-gm\d+"' % k, page)) >= 2 * figures_in
         assert len(re.findall(r'class="fsn-k fsn-s%d"' % k, page)) == 2 * figures_in
         assert len(re.findall(r'class="fsn-t fsn-s%d"' % k, page)) == figures_in
+    # and each metric's points, whatever their simulator, with its legend entry,
+    # in each figure: two metrics in each
+    cards = re.findall(r'<figure class="fsn-card"([^>]*)>', page)
+    assert len(cards) == 6 and all('data-groups="m0 m1"' in card for card in cards)
+    for group in ("m0", "m1"):
+        assert len(re.findall(r'class="fsn-d fsn-s\d+ fsn-g%s"' % group, page)) >= 2 * 6
+        assert len(re.findall(r'class="fsn-k fsn-g%s"' % group, page)) == 2 * 6
+        assert len(re.findall(r'class="fsn-t fsn-g%s" data-g="%s"' % (group, group),
+                              page)) == 6
+        assert ".fsn-card.fsn-x%s .fsn-d.fsn-g%s{display:none}" % (group, group) in page
 
 
 def test_the_points_are_marked_as_their_simulators_geant4s_as_its_second_sample(figures,
@@ -408,10 +418,21 @@ def test_the_points_are_marked_as_their_simulators_geant4s_as_its_second_sample(
     for name in ("geant4_2", "alpha", "beta", "gamma"):
         assert found[(dashboard.DATA, name)] >= 2
         assert found[(dashboard.KEY, name)] == 2
-    # The reference itself and the metrics' markers in the legend are always
-    # there
+    # The reference itself is always there
     assert not any(name == "geant4" for _, name in found)
-    assert sum(count for (kind, _), count in found.items() if kind == dashboard.KEY) == 8
+    assert sum(count for (kind, name), count in found.items()
+               if kind == dashboard.KEY and name is not None) == 8
+    # The metrics' markers in the legend are their metrics' keys, and every
+    # point is of its metric, Geant4's too
+    assert found[(dashboard.KEY, None)] == 2 * 2
+    groups = {}
+    for artist in figures[0].findobj():
+        found = dashboard.read_mark((artist.get_gid() or "") + ".1")
+        if found and found[0] == dashboard.DATA:
+            assert found[2] in ("m0", "m1")
+            groups.setdefault(found[2], set()).add(found[1])
+    assert groups == {"m0": {"geant4_2", "alpha", "beta", "gamma"},
+                      "m1": {"geant4_2", "alpha", "beta", "gamma"}}
 
 
 def test_without_a_second_sample_geant4_isnt_on_the_fronts(figures, tmp_path, capsys):

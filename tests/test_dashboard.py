@@ -290,6 +290,54 @@ def test_marks_are_read_back_whatever_the_simulators_name():
         assert dashboard.parse_mark(ident) is None
 
 
+def test_marks_can_be_of_a_group_of_a_figures_parts_too():
+    assert dashboard.read_mark("fsn.data.other.v2.3") == ("data", "other.v2", None)
+    assert dashboard.read_mark("fsn.data.other.v2:m1.3") == ("data", "other.v2", "m1")
+    assert dashboard.read_mark("fsn.key.:m0.7") == ("key", None, "m0")
+    assert dashboard.parse_mark("fsn.target.with%3Acolon:m2.1") == ("target", "with:colon")
+    for ident in ("fsn.data.model:bad group.1", "fsn.data.:.1"):
+        assert dashboard.read_mark(ident) is None
+    # plot.mark() writes them so, and won't give a group a name the page can't use
+    fig, axes = plot.new_figure(False)
+    line, = axes[0][0].plot([0, 1], [0, 1])
+    plot.mark(MODEL, dashboard.DATA, line, group="m3")
+    assert dashboard.read_mark(line.get_gid() + ".1") == ("data", "model", "m3")
+    with pytest.raises(ValueError):
+        plot.mark(MODEL, dashboard.DATA, line, group="m 3")
+    import matplotlib.pyplot as plt
+    plt.close(fig)
+
+
+def test_a_groups_legend_entry_hides_its_parts_in_that_figure(tmp_path):
+    """Its parts, of any simulator, hide with the class fsn-x<group> on the
+    card, which a click on the group's legend entry toggles."""
+    fig, axes = plot.new_figure(False)
+    ax = axes[0][0]
+    first, = ax.plot([0, 1], [0, 1], color=MODEL.color)
+    second, = ax.plot([0, 1], [1, 0], color=OTHER.color)
+    plot.mark(MODEL, dashboard.DATA, first, group="m0")
+    plot.mark(OTHER, dashboard.DATA, second, group="m0")
+    plot.legend(ax, [(first, "Model", MODEL), (second, "Other", OTHER),
+                     (first, "A metric", None, "m0")])
+    collector = dashboard.Collector(str(tmp_path))
+    collector.section(str(tmp_path), GEANT4)
+    collector.context("pareto_js", "single_photon")
+    collector.simulator(MODEL)
+    collector.simulator(OTHER)
+    collector.add(str(tmp_path / "pareto_js_cpu__single_photon"), plot.svg_of(fig))
+    import matplotlib.pyplot as plt
+    plt.close(fig)
+    page = dashboard.render(collector)
+    assert 'data-groups="m0"' in page
+    assert re.search(r'class="fsn-d fsn-s0 fsn-gm0"', page)
+    assert re.search(r'class="fsn-d fsn-s1 fsn-gm0"', page)
+    assert len(re.findall(r'class="fsn-k fsn-gm0"', page)) == 2
+    assert len(re.findall(r'class="fsn-t fsn-gm0" data-g="m0"', page)) == 1
+    assert ".fsn-card.fsn-xm0 .fsn-d.fsn-gm0{display:none}" in page
+    assert ".fsn-card.fsn-xm0 .fsn-k.fsn-gm0{opacity:.28}" in page
+    assert 'classList.toggle("fsn-x" + group' in page
+
+
 def test_a_notebook_shows_the_dashboard(tmp_path):
     pytest.importorskip("IPython")
     where = tmp_path / "dashboard.html"
