@@ -92,7 +92,7 @@ Fork FaSiNaTe, keeping the fork public, enable Actions in it, and push your mode
 When the pipeline has completed, you can see the performance plots for your model in the artefacts of the job. The dashboard is html, so you can preview without downloading.
 
 <p align="center">
-  <img src="docs/images/see_new_model_in_artefacts.png" alt="Visual description of navigating to the dashboard.html in job artefacts." width="42%">
+  <img src="docs/images/see_new_model_in_artefacts.png" alt="Visual description of navigating to the dashboard.html in job artefacts." width="72%">
 </p>
 
 *Select "Actions" -> your commit name for the "low-cost benchmark" -> "Artifacts" -> "dashboard.html"*
