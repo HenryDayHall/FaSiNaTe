@@ -200,7 +200,7 @@ figures and the π⁰ categories), divided by the mean of the models', so that
 every metric is on the same scale. Geant4 is drawn at its own time and at its
 own distance from itself: that of its second sample, `geant4_2`, divided by
 the same mean.
-The README's [Pareto fronts](../README.md#the-pareto-fronts) section has the
+[The Pareto fronts](stages.md#the-pareto-fronts) in stages.md has the
 details. The pipeline draws the plots again when the table is newer than
 `metrics.csv`.
 

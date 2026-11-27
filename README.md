@@ -1,47 +1,100 @@
 # FaSiNaTe
 
-FaSiNaTe benchmarks generative fast-simulation models of calorimeter showers in a full detector chain.
-Each model runs inside ILD's `ddsim` simulation through [DDML](https://github.com/key4hep/DDML), its events go through ILD's standard reconstruction, and observables measured on the reconstructed events are compared with full Geant4 simulation of the same inputs.
-
-The benchmark follows the paper *"A First Full Physics Benchmark for Highly Granular Calorimeter Surrogates"*, starting with its single-photon shower profiles, energy linearity and resolution, and intrinsic shower angles, its di-photon separation, and the reconstructed π⁰s of its τ-pair physics benchmark. 
-The models are those DDML runs: CaloClouds3, both through DDML's embedded Python and compiled against LibTorch, ConvL2LFlows, two BIB-AEs, a GAN (with LibTorch and with ONNX Runtime) and the Par04 example's VAE ([The models](#the-models)). Where a model runs through two of DDML's backends, the two are compared with each other as well, a [closure test](#closure-tests).
+FaSiNaTe benchmarks generative fast-simulation models of calorimeter showers in ILD's full detector chain. Each model runs inside `ddsim` through [DDML](https://github.com/key4hep/DDML), its events go through ILD's standard reconstruction, and the observables of *"A First Full Physics Benchmark for Highly Granular Calorimeter Surrogates"* are compared with Geant4.
 
 <p align="center">
-  <img src="docs/images/longitudinal_profile_layers__single_photon.png" alt="Longitudinal shower profile, CaloClouds3 against Geant4" width="48%">
-  <img src="docs/images/radial_profile_r30__single_photon.png" alt="Radial shower profile out to 30 mm, CaloClouds3 against Geant4" width="48%">
+  <img src="docs/images/longitudinal_profile_layers__single_photon.png" alt="Longitudinal shower profile, CaloClouds3 against Geant4" width="32%">
+  <img src="docs/images/radial_profile_r30__single_photon.png" alt="Radial shower profile out to 30 mm, CaloClouds3 against Geant4" width="32%">
+  <img src="docs/images/radial_profile_r100__single_photon.png" alt="Radial shower profile out to 100 mm, CaloClouds3 against Geant4" width="32%">
+</p>
+<p align="center">
+  <img src="docs/images/step_times.png" alt="Wall time per job of each pipeline step, Geant4 against CaloClouds3" width="70%">
 </p>
 
-*Example output of `plot_observables.sh` for the `single_photon` scenario (30 000 Geant4 events, 10–100 GeV): the mean reconstructed ECAL energy per layer (left) and against distance to the shower axis (right). Geant4 is the grey filled histogram, CaloClouds3 the orange line; the lower panels show the relative deviation from Geant4 with statistical uncertainties, and the legend gives the Jensen–Shannon divergence.*
+*Top: single photons of 10–100 GeV, CaloClouds3 (orange) against Geant4 (grey), with the relative deviation below. Bottom: the time each pipeline step takes.*
 
-## Contents
+More: [the stages, observables and figures](docs/stages.md) · [the models](docs/models.md)
 
-- [The pipeline](#the-pipeline)
-- [Quick start](#quick-start)
-- [The whole pipeline at once](#the-whole-pipeline-at-once)
-- [Configuration](#configuration)
-- [The environment](#the-environment)
-- [Stage by stage](#stage-by-stage)
-  - [1. Generate the inputs](#1-generate-the-inputs)
-  - [2. Simulate with Geant4](#2-simulate-with-geant4)
-  - [3. Simulate with the models](#3-simulate-with-the-models)
-  - [4. Reconstruct](#4-reconstruct)
-  - [5. Measure the observables](#5-measure-the-observables)
-  - [6. Plot](#6-plot)
-- [Where the data goes](#where-the-data-goes)
-  - [Inputs in segments](#inputs-in-segments)
-- [Reusing published measurements](#reusing-published-measurements)
-- [Testing a model at low cost](#testing-a-model-at-low-cost)
-- [Timing](#timing)
-- [The models](#the-models)
-  - [Closure tests](#closure-tests)
-- [Extending the benchmark](#extending-the-benchmark)
-- [Tests](#tests)
-- [Repository layout](#repository-layout)
-- [Credits](#credits)
+## How to add a model
 
-## The pipeline
+### 1. Describe it, with its inference code and weights
 
-Every stage is one script at the top of the repository. The scripts take their settings from the configuration, find the work left to do from what is already on disk, and skip what is finished, so any stage can be re-run safely after a failure or timeout. Behind them is one harness, [`ddml_bench/`](ddml_bench/) ([`docs/harness.md`](docs/harness.md)): a single module names every file, each stage declares its tasks, one per file, and the same task graph is run one task after another by `pipeline.sh` and the stage scripts, or as slurm jobs by `slurm_pipeline.sh`.
+A model is a YAML file in [`models/`](models/), whose name is the model's name in commands and output folders, with its inference code in a Python module of the same name beside it and its weights in `models/weights/`. For example, `models/my_model.yaml`:
+
+```yaml
+name: My model                  # the label in the figures
+representation: point_cloud     # or regular_grid
+
+fixed_at_training:              # what the model has no input for
+  detector:
+    name: ILD_l5_o1_v02
+    calorimeter: EcalBarrel
+    compact_file: ILD/compact/ILD_l5_o1_v02/ILD_l5_o1_v02.xml  # simulated in this, relative to k4geo
+  particle:
+    name: gamma
+    pdg: 22
+
+context:                        # what each shower is conditioned on
+  energy:
+    unit: GeV
+    training_range: [1, 127]
+  direction:
+    unit: deg
+    training_range:
+      frame: global
+      theta: [30, 150]
+      phi: [80, 110]
+
+ddml:                           # how DDML runs it
+  model_configs:
+    - preset: CC3_BARREL_PY_INTERFACE   # a DDML embedded-Python plugin, with its geometry and trigger
+      plugin_properties:
+        PythonModule: my_model          # runs models/my_model.py
+  weights_in: fasinate                  # the weights are in this repository,
+  weights: models/weights/my_model.pt   # here (under GitHub's 100 MB per file)
+  weights_md5: "0123456789abcdef0123456789abcdef"   # md5sum models/weights/my_model.pt
+
+plot:
+  color: "#7b3294"
+  linestyle: "--"               # every model needs its own line style, as well as a colour
+```
+
+and `models/my_model.py`, which DDML's plugin runs inside `ddsim`:
+
+```python
+import os
+import numpy as np
+import torch
+import yaml
+
+_here = os.path.dirname(os.path.abspath(__file__))
+with open(os.path.join(_here, "my_model.yaml")) as stream:
+    _weights = yaml.safe_load(stream)["ddml"]["weights"]   # the file whose md5 sum is checked
+_model = torch.jit.load(os.path.join(_here, "..", _weights)).eval()
+
+
+@torch.inference_mode()
+def run_inference(inputs):
+    # inputs: float32 arrays of shape (1, 1), for CaloClouds3's plugin the energy
+    # (GeV) and the polar and azimuthal angles (degrees, local frame); don't modify them
+    out = _model(*[torch.from_numpy(a) for a in inputs])
+    # one flat float32 array, as the plugin reads it
+    return out.cpu().numpy().astype(np.float32, copy=False).ravel()
+```
+
+[`models/caloclouds3_recompiled.yaml`](models/caloclouds3_recompiled.yaml) and [`.py`](models/caloclouds3_recompiled.py) are a working example. Keep a model's own code in its one module. The model is then part of every run; `./simulate_models.sh --dry-run my_model` shows what it would simulate.
+
+Models can also come from DDML directly, with DDML's own inference code and weights and no Python file, as in [`models/bibae_two_angle.yaml`](models/bibae_two_angle.yaml) (`presets: [BIBAE_BARREL]`).
+
+### 2. Test it on GitHub's runners
+
+Fork FaSiNaTe, keeping the fork public, enable Actions in it, and push your model. The [low-cost workflow](.github/workflows/low-cost.yml) then simulates, reconstructs and measures the first 1000 events of each input, and draws them against the published full samples. The plots and `dashboard.html` are on the run's page. A CaloClouds3-like model takes about 14 runner-hours. The runners don't time the model, so there are no Pareto fronts there: see [timing](#how-to-run-locally) below. The same test runs locally with `./low_cost.sh my_model`.
+
+More: [models.md](docs/models.md) (every field, the models, closure tests) · [github.md](docs/github.md) (the GitHub runners, step by step) · [low_cost.md](docs/low_cost.md) (the low-cost mode, statistical floors)
+
+## How to run locally
+
+Six stages, one script each, run from the repository root. Each skips what is already done, so any of them can be run again after a failure.
 
 ```mermaid
 flowchart TD
@@ -60,577 +113,62 @@ flowchart TD
     obs -->|one npz file per simulator| plot
 ```
 
-| Stage | Script | Reads | Writes (under `paths.data_dir`) |
-|---|---|---|---|
-| 1 | `generate_input.sh` | `scenarios` in the configuration | `input_single_particle_gun/*.slcio` (+ `.h5` truth); the physics samples, made elsewhere, are taken as they are from `input_physics_samples/` |
-| 2 | `simulate_geant4.sh` | scenario inputs | `sim_output/<scenario>/geant4/*.edm4hep.root`, and Geant4's second sample in `sim_output/<scenario>/geant4_2/` |
-| 3 | `simulate_models.sh` | scenario inputs, `models/*.yaml` | `sim_output/<scenario>/<model>/*.root` |
-| 4 | `reconstruct_simulation.sh` | everything in `sim_output/` | `rec_output/<scenario>/<simulator>/*_REC.edm4hep.root` |
-| 5 | `observables_from_reconstruction.sh` | finished reconstructions | `observables/<simulator>.npz` |
-| 6 | `plot_observables.sh` | `observables/*.npz` | `observables/plots/*.{pdf,png}`, `dashboard.html`, `metrics.csv`, `fits.csv` |
-
-Stages 2 and 3 are independent of each other; a "simulator" below means either Geant4 (`geant4`, or its second sample, `geant4_2`) or one of the models. [`pipeline.sh`](#the-whole-pipeline-at-once) runs all six stages in one go, and on a slurm cluster [`slurm_pipeline.sh`](#the-whole-pipeline-at-once) runs them as jobs of one file each.
-
-## Quick start
+**1. Clone the repository.**
 
 ```bash
 git clone https://github.com/HenryDayHall/FaSiNaTe.git
 cd FaSiNaTe
+```
 
-# Say where software and (large) data should live
-cat > configs/local.yaml <<'EOF'
+**2. Say where software and data go.** Save this as `configs/local.yaml`, which git ignores and every script reads:
+
+```yaml
 paths:
-  software_dir: /data/dust/user/$USER/fasinate/external
-  data_dir: /data/dust/user/$USER/fasinate/data
-EOF
-
-./generate_input.sh                 # 1. inputs for every scenario
-./simulate_geant4.sh                # 2. Geant4 (slow: on slurm, use slurm_pipeline.sh)
-./simulate_models.sh                # 3. every model in models/
-./reconstruct_simulation.sh         # 4. every simulation
-./observables_from_reconstruction.sh  # 5. one .npz per simulator
-./plot_observables.sh               # 6. figures and metrics.csv
-```
-
-or all six at once with `./pipeline.sh`, or `./slurm_pipeline.sh` on a slurm cluster. The first script to run builds DDML (and anything else the environment needs, see [below](#the-environment)), which takes a while; later runs reuse the build.
-
-Before a full run, try the chain on a handful of events. Stages 2–6 take `-n N`: the simulation of the first N events of each input is named `<input>_n<N>`, and everything made from it carries that name on (`<input>_n<N>_REC.edm4hep.root`, `<simulator>_n<N>.npz`, `metrics_n<N>.csv`), so a test run never mixes with the full samples:
-
-```bash
-./simulate_geant4.sh -n 10
-./simulate_models.sh -n 10
-./reconstruct_simulation.sh -n 10
-./observables_from_reconstruction.sh -n 10
-./plot_observables.sh -n 10
-```
-
-Every script takes `--help`, and stages 1–5 also take `--dry-run`, showing what would be done and what is already done, `-f/--force` to make their outputs again, and `-c/--config FILE` to merge a configuration file over the others. Run them from the repository root (or set `FASINATE_REPO_DIR`). Apart from `slurm_pipeline.sh`, which submits its own jobs, the long-running ones can be submitted directly with `sbatch` from the repository root; their `#SBATCH` defaults are set for DESY's Maxwell cluster.
-
-## The whole pipeline at once
-
-`pipeline.sh` runs every stage here, one task after another, and `slurm_pipeline.sh` runs them on a slurm cluster. Both work out what each stage still has to do from what is on disk, as tasks of one file each, each waiting for the tasks that make what it reads; `slurm_pipeline.sh` submits each task as a job (`sbatch --dependency=afterok`):
-
-| Stage | One task (job) for each | Waiting for |
-|---|---|---|
-| generate | input file still to make | |
-| geant4 | input still to simulate with Geant4, and again for its second sample | the task making its input |
-| models | input and model still to simulate | the task making its input |
-| reconstruct | simulation still to reconstruct | the task simulating it |
-| observables | simulator whose measurements aren't up to date | the tasks reconstructing its simulations |
-| plot | (one task) | the measurement tasks |
-
-Try it first with [`configs/pipeline_test.yaml`](configs/pipeline_test.yaml), a very light test of every stage: two inputs of 10 photons each and one of 10 photon pairs in three segments, each simulated with two seeds, in a data folder of its own, with short time limits. With the four models in `models/`, and Geant4's second sample, that is 108 tasks (57 with one model).
-
-```bash
-./slurm_pipeline.sh --config configs/pipeline_test.yaml --dry-run  # what is done, and what would be submitted
-./slurm_pipeline.sh --config configs/pipeline_test.yaml            # the test
-./slurm_pipeline.sh                                                # the full benchmark
-./pipeline.sh --config configs/pipeline_test.yaml                  # the test, here, one task after another
-```
-
-Run `slurm_pipeline.sh` on a login node, from the repository root. Before submitting anything it works out what is done and runs the stages' checks in the environment the jobs get (building DDML first if needed, which `--dry-run` does too), so that a missing model weight or compact file stops it there rather than failing every job. Like the stage scripts, both take simulators and `-s SCENARIO` to run only those, and `-n N` for a test on the first N events of each input; `-c/--config FILE` merges a configuration file over the others, for this run and all its jobs. `--stages` runs only some stages, `--force STAGE` makes a stage's outputs again and with them everything made from them, and for `slurm_pipeline.sh`, options after `--` go to every `sbatch` call:
-
-```bash
-./slurm_pipeline.sh caloclouds3               # this model's jobs, then the plots
-./slurm_pipeline.sh --stages generate,geant4  # only the inputs and the Geant4 reference
-./slurm_pipeline.sh --force reconstruct       # reconstruct everything again, and measure and plot it
-./slurm_pipeline.sh -- --account=myproject    # more sbatch options
-```
-
-Either can be run again at any time. What is done is skipped, and whatever failed or timed out is run again. A task needing one that failed isn't run (a job waiting for one that fails is cancelled), so after a failure, fix what went wrong and run the script again. A task that a job of an earlier submission is still queued or running for is waited for, not submitted again. Adding a model to `models/` and running it again runs that model's tasks and the plots.
-
-The simulations and reconstructions are only made for what is still to be made from them. One that isn't there isn't made while what it is for is done: a simulation whose reconstruction is there, or the simulations and reconstructions of a simulator whose measurements are up to date, as its `.npz` file records what it was measured from. So once a simulator is measured, its simulations and reconstructions can be deleted (to save space) without being made again, and measurements fetched along with the inputs need no simulation at all ([Reusing published measurements](#reusing-published-measurements)). The stage scripts work the same way; `--dry-run` reports such tasks as `not needed`, and `--force` (`-f`) makes them anyway.
-
-Each submission of `slurm_pipeline.sh` gets a folder, `slurm/pipeline_<time>/` in `paths.data_dir`, with the job script, the jobs submitted (`jobs.tsv`), what was done and why (`tasks.json`) and each job's slurm log in `logs/`. Every job runs one task of `tasks.json`, `scripts/ddml-bench run-task`, in the environment from `setup.sh`; the tasks write their logs next to their outputs, as the stage scripts do. The partition, constraint, time limit and other `sbatch` options of each stage's jobs are in the `slurm` section of the configuration.
-
-## Configuration
-
-Shared settings live in [`configs/default.yaml`](configs/default.yaml):
-
-- `paths`: where external software is built (`software_dir`), where all inputs and outputs go (`data_dir`), and where the steering file finds model weights (`model_dir`);
-- `ddml`, `key4hep`, `container`, `detector_configs`, `patches`: the software stack (see [The environment](#the-environment));
-- `geant4`, `reconstruction`: settings for the reference simulation and the reconstruction;
-- `scenarios`: the sets of events every simulator simulates (one with `enabled: false` is left out of every run);
-- `observables`: what is measured on them, and how it is compared with Geant4;
-- `published`: the published data (Zenodo records) a run fetches instead of making it ([Reusing published measurements](#reusing-published-measurements));
-- `slurm`: the jobs of [`slurm_pipeline.sh`](#the-whole-pipeline-on-slurm), stage by stage.
-
-Don't edit `default.yaml` for your own setup. Put the settings you change in `configs/local.yaml`, which git ignores and every script reads automatically. An override file only needs the keys it changes, e.g. a smaller single-photon sample for testing:
-
-```yaml
-scenarios:
-  single_photon:
-    input:
-      n_events: 100
-```
-
-(Input file names don't include the number of events, so this replaces the full samples; use `-n` instead to test without touching them, or a data folder of its own, as [`configs/pipeline_test.yaml`](configs/pipeline_test.yaml) does.)
-
-Values can refer to other settings (`${paths.software_dir}`) and to environment variables (`$USER`); relative paths are relative to the repository. More override files can be layered on top by listing them in `FASINATE_CONFIG`. Inspect the merged result with
-
-```bash
-python3 scripts/fasinate_config.py                      # everything
-python3 scripts/fasinate_config.py --get paths.data_dir  # one setting
-```
-
-This needs Python 3 with PyYAML (`python3 -m pip install --user pyyaml`).
-
-Each model has its own file in [`models/`](models/); see [Adding a model](#adding-a-model).
-
-## The environment
-
-Every stage runs in the same environment: a Key4hep release, a build of DDML's `python-inference` branch against it, ILDConfig for the reconstruction, and any patches the release still needs. You don't normally have to set this up yourself: each script builds what is missing, then runs its work in a clean shell inside an Apptainer/Singularity container (`container.image`, AlmaLinux 9 by default) with `/cvmfs` mounted. Set `container.enabled: false` to run directly on a host with a matching OS and `/cvmfs`, e.g. in CI. One launcher does this for every script, `scripts/run_in_environment.sh`, with the clean shell and the container set up by `scripts/environment.sh`, which the build scripts use too.
-
-For interactive work, get the same environment in a clean bash shell with
-
-```bash
-source setup.sh
-```
-
-Source it only once per shell, as the Key4hep setup can only run once. In a shell that has sourced it, the stage scripts run in place rather than starting a container.
-
-What it sets up, and the scripts that do it:
-
-- **DDML** — `scripts/build_ddml.sh` clones DDML into `ddml.source_dir` (at `ddml.commit` if set, otherwise the head of `ddml.branch`), pulls the container image if needed, builds DDML inside it against `key4hep.release`, and writes `ddml.env_file`. Building also downloads DDML's reference models into DDML's `models/` folder, and then those of `ddml.extra_models`, which DDML's build leaves out ([`scripts/fetch_ddml_models.py`](scripts/fetch_ddml_models.py)). It rebuilds only when the DDML commit or branch, the build options, the Key4hep release or the image change. Run it by hand to move to the head of the branch (`--dry-run`, `--clean`, `--config FILE` and `--set section.key=value` are available); it prints the commit and release used, ready to pin in `configs/local.yaml`.
-- **ILDConfig** — Key4hep releases don't include it, so `scripts/fetch_detector_configs.sh` clones it to `detector_configs.ildconfig.source_dir`. Pin `detector_configs.ildconfig.commit` for benchmark runs.
-- **Patches** — fixes that are upstream but not yet in a Key4hep release, built by `scripts/build_patches.sh` (see [Patches to the Key4hep release](#patches-to-the-key4hep-release)).
-
-For benchmark runs, pin `ddml.commit`, `key4hep.release` and `detector_configs.ildconfig.commit` so results are reproducible.
-
-### Patches to the Key4hep release
-
-Each entry under `patches` rebuilds one package of the release from a newer version and swaps its library into `MARLIN_DLL`. There is one so far:
-
-- `marlintrkprocessors`: up to version 2.12.8, ILD's TPC digitisation (`DDTPCDigiProcessor`) aborts the whole job with `padTheta = nan` on some hit triplets, which backscatter from Geant4 showers can produce. The fix, [iLCSoft/MarlinTrkProcessors#79](https://github.com/iLCSoft/MarlinTrkProcessors/commit/f2da912fa583eb6da3e9aac4c8ba43fcde64efab), is in `v02-12-09`, which is what gets built.
-
-A patch is only used while the release's own version is older than its `fixed_in`. Once DDML is built against a release that has the fix, `setup.sh` stops using it and says the entry can be deleted from `configs/default.yaml`. To run without a patch before then, set `patches.<name>.enabled: false` in `configs/local.yaml`. The patches in use are printed by `setup.sh` and recorded in each reconstruction log.
-
-## Stage by stage
-
-### 1. Generate the inputs
-
-```bash
-./generate_input.sh                # every scenario
-./generate_input.sh single_photon  # just this one
-```
-
-Each scenario's `input` section says how its events are made. The `particle_gun` type runs [`ILD_Particle_Gun.py`](ILD_Particle_Gun.py) once per energy, with the remaining keys passed as its options; the i-th energy uses `seed + i`, so the samples are independent. Each energy gives an `.slcio` file of starting particles and an `.h5` file of the true energies, momenta and gun positions, in `input_single_particle_gun/`. Each is made in a hidden folder and moved into place when complete; inputs that exist are skipped, unless `-f` is given.
-
-The default `single_photon` scenario fires photons from the IP into one stave of the ECAL barrel, at 10, 20, …, 100 GeV with 3000 events each, spread uniformly over the front face of the stave.
-
-The `di_photon_gun` type runs [`ILD_Di_Photon_Gun.py`](ILD_Di_Photon_Gun.py) in the same way. The default `di_photon` scenario makes pairs of photons of the same energy, 20 and 100 GeV with 15 000 pairs each, both starting on the front face of the ECAL barrel's top stave and flying from the IP. They are placed as in the earlier di-photon analysis: the pair's midpoint uniform over a disc of 10 mm (`centre_radius`) about x = 0, z = 70 mm (`centre_x`, `centre_z`), the separation uniform from 0 to 90 mm (`max_separation`), and the line between the two photons at a random angle. Its `.h5` file holds both photons' momenta and starting points, and their separation. The paper's 5 GeV set needs a model trigger below 10 GeV, which CaloClouds3's preset doesn't have yet, so it is left out for now.
-
-Each scenario's inputs go in the folder its `input.folder` names, under `paths.data_dir`: `input_single_particle_gun` for the guns, unless it says otherwise.
-
-An input's events can be in several files, so that each simulation and reconstruction is a shorter job: with `input.segments: N`, each input (each energy of a gun, each file made elsewhere) is N files of its events, `<input>_seg<i>of<N>.slcio`, the first events in the first and so on, as evenly as they go, and each segment is an input of its own at every stage. A gun makes all of an input's events, as without segments, and writes those of one segment (`--segment i --segments N`), so the segments together are the whole input. `di_photon` has its inputs in 3 segments of 5000 pairs, and `tau_pairs` its files in 3 of 2264, 2264 and 2263 events; `single_photon`'s are whole (`segments: 1`). See [Inputs in segments](#inputs-in-segments) for data made before.
-
-The `external` type is for inputs that can't be made in this repository, such as the physics samples of ILD's MC production. `input.files` names the files (LCIO, `.slcio`) in the scenario's folder, by default `input_physics_samples`, and nothing makes them: an input that is there is used as it is (`generate_input.sh -f` leaves it alone), and one that isn't is fetched from a published record that has it ([Reusing published measurements](#reusing-published-measurements)). A scenario runs with all of its inputs or not at all: without them, a run leaves it out, and the observables measured on it alone, says which files to put where, and runs everything else as usual (exiting 0). Asking for it by name (`-s`, `--file`) is then an error. The default `tau_pairs` scenario is the paper's τ physics dataset: e⁺e⁻ → τ⁺τ⁻ at 250 GeV from ILD's MC-2020 production, in three files of 6791 events, kept for having a π⁰ from a τ decay with both photons above 5 GeV in the models' trigger region:
-
-```
-<data_dir>/input_physics_samples/gen_tau_pi0_250-SetA_2f_leptonic_eL_pR_42.slcio
-<data_dir>/input_physics_samples/gen_tau_pi0_250-SetA_2f_leptonic_eL_pR_1764.slcio
-<data_dir>/input_physics_samples/gen_tau_pi0_250-SetA_2f_leptonic_eL_pR_74088.slcio
-```
-
-These aren't published yet, so put them there by hand, then split each into its segments, the files the pipeline takes, with `python3 scripts/split_data.py --apply` (which moves the whole files to `<data_dir>/.unsplit/`; [Inputs in segments](#inputs-in-segments)). Its events are a generator's, so their reconstruction isn't told they are a particle gun's, and they reach the whole detector: the models simulate the photons their presets trigger on, and Geant4 everything else.
-
-### 2. Simulate with Geant4
-
-Full Geant4 is the reference the models are compared with. `simulate_geant4.sh` runs `ddsim` with DDML's steering file but without DDML's fast simulation ([`scripts/ddsim_steer_geant4.py`](scripts/ddsim_steer_geant4.py)), so every other setting (physics list, crossing angle, filters, …) matches the model simulations, in the detector `geant4.compact`.
-
-Every input is simulated with Geant4 twice. The first simulation is the reference (`geant4`); the second (`geant4_2`) is the same in every way but the `ddsim` seed, which is the first's plus 1 000 000, or 1 000 000 where the first has `ddsim`'s own (single photons). The second sample is then reconstructed, measured and compared with the first as the models are, so its distance from Geant4 is Geant4's own: how far apart two Geant4 samples of the same events are, the statistical floor that the models' distances can be read against. The figures draw it as a black dashed line, "Geant4 (2nd sample)", with its distance in the legend, and the [Pareto fronts](#the-pareto-fronts) draw Geant4 at it. A scenario's `simulation_seeds` must therefore be below 1 000 000. Files given with `-i` are simulated once.
-
-```bash
-./simulate_geant4.sh --dry-run                    # what's left to do
-./simulate_geant4.sh -s single_photon             # one scenario, all inputs in sequence
-./simulate_geant4.sh --file <input>.slcio         # a single input
-```
-
-Geant4 is slow, so on a slurm cluster use `slurm_pipeline.sh --stages geant4`, which submits one job per input and sample (`slurm_simulate_geant4.sh` now runs just that):
-
-```bash
-./slurm_pipeline.sh --stages geant4                         # one job per input still to simulate
-./slurm_pipeline.sh --stages geant4 -- --time 3-00:00:00    # options after -- go to sbatch
-```
-
-### 3. Simulate with the models
-
-`simulate_models.sh` simulates every scenario's inputs with every model in `models/` (or those named), running `ddsim` as in DDML's README, with DDML's steering file. A model with DDML presets (`ddml.presets`) runs with them (`--ml-model`). One that DDML has no preset for has its DDML model configurations written out in its description (`ddml.model_configs`, see [Adding a model](#adding-a-model)), and runs [`scripts/ddsim_steer_models.py`](scripts/ddsim_steer_models.py) instead, with each configuration as an option `--ml-config '<JSON>'`: it runs DDML's steering file with DDML's own Python package, but with the configurations made from those options in place of presets, so every other setting is the same as for a preset, and it prints the configurations it made into the log. It also puts `models/` first on ddsim's Python path, for a model with [inference code of its own](#a-models-own-inference-code). The log of each model's simulation starts with the sha256 of the model's description and of its own Python code as `ddsim` started.
-
-```bash
-./simulate_models.sh --dry-run
-./simulate_models.sh                              # every model, every scenario
-./simulate_models.sh -s single_photon caloclouds3 # one scenario, one model
-```
-
-Before simulating, it checks that the DDML libraries, the `ddml` Python package and the plugin of each preset or configuration come from the configured build, that each gives DDML the particles the model is for, that each model's weights match their recorded md5 sum, that the weights each plugin loads (its `ModelPath`) are those weights, and that the Python module each embedded-Python plugin runs is there (and says where: in `models/`, or DDML's). Each model is simulated in the detector it was trained for (`fixed_at_training.detector.compact_file`).
-
-Both simulation scripts accept `-i FILE` to simulate an arbitrary input file (written under the scenario name `custom`), `--file FILE` to simulate just that one of the scenarios' inputs, and `-f/--force` to redo existing outputs (and make those that [nothing needs](#the-whole-pipeline-at-once), e.g. for measurements that are up to date). `ddsim` writes to a hidden file that is renamed only on success, so an output that exists is always complete. An input that isn't made yet is an error, unless nothing needs its simulation.
-
-A scenario with `simulation_seeds` (`di_photon` has `[1, 2, 3]`) has each of its inputs simulated once with each seed, passed to `ddsim` as `--random.seed`, each a task of its own named `<input>_simseed<S>`, so that the plots can take the spread over the seeds. With `one_seed_per_input: true`, each input is simulated once instead, with the seed in the same place in the list (one for each input, in order): `tau_pairs` simulates each of its three files with the seed it is named after, as `ddsim --random.seed=42` for `..._42.slcio`. Otherwise `ddsim` chooses the seed, and writes it in its log. The segments of an input ([1. Generate the inputs](#1-generate-the-inputs)) are each simulated with that input's seeds, and the figures put the segments of a seed together, as one sample. Geant4's [second sample](#2-simulate-with-geant4) takes each of these seeds plus 1 000 000.
-
-### 4. Reconstruct
-
-The simulations are reconstructed with ILD's standard reconstruction under Gaudi: ILDConfig's `ILDReconstruction.py` run with `k4run`, as in the Key4hep tutorial [ILD Simulation and Reconstruction with Key4hep](https://key4hep.github.io/key4hep-doc/main/tutorials/key4hep-tutorials/gaudi_ild_reco/README.html).
-
-```bash
-./reconstruct_simulation.sh --dry-run
-./reconstruct_simulation.sh                         # every finished simulation
-./reconstruct_simulation.sh -s single_photon geant4 # one scenario, one simulator
-./reconstruct_simulation.sh path/to/sim.root        # one file
-```
-
-It reconstructs the simulations of the scenarios' inputs, by Geant4 and by every model, each in the detector it was simulated in (`--compact FILE` overrides this). Each `<name>.root` becomes `<name>_REC.edm4hep.root`, alongside `<name>_AIDA.root`, `<name>_PfoAnalysis.root` and the log. With `-n N` it reconstructs the simulations of the first N events, `<input>_n<N>`, whole; simulation files can also be given directly, and `-s custom` reconstructs what was simulated with `-i`. `--noBeamCalReco` is always passed, and `--usingParticleGun` for particle-gun scenarios (not for the physics samples); further arguments for `ILDReconstruction.py` go in `reconstruction.extra_args` (e.g. `[--lcioOutput, "on"]` to also write LCIO). As with simulation, outputs appear only once complete, and existing ones, and those nothing needs, are skipped unless `--force` is given (a simulation file given is reconstructed even if nothing needs it).
-
-### 5. Measure the observables
-
-`observables_from_reconstruction.sh` measures every observable in the configuration for each simulator whose reconstruction is finished, i.e. every input of every scenario the observables use has its `_REC.edm4hep.root`.
-
-```bash
-./observables_from_reconstruction.sh --dry-run
-./observables_from_reconstruction.sh                 # every finished simulator
-./observables_from_reconstruction.sh caloclouds3 geant4
-```
-
-The current observables are the shower profiles, the energy response and the intrinsic shower angles from the benchmark paper, measured in the `single_photon` scenario, the profiles and the angles on reconstructed ECAL barrel hits and the energy on reconstructed particles; the di-photon separation, measured in the `di_photon` scenario; and the reconstructed π⁰s, measured in the `tau_pairs` scenario:
-
-- `radial_profile`: mean hit energy per unit area (GeV/mm²) against the distance from the incident photon's line of flight to the hit's cell centre, i.e. the energy in each ring around the line of flight divided by the ring's area, π(r<sub>out</sub>² − r<sub>in</sub>²), so that the rings growing with the radius don't skew it; once out to 100 mm (50 bins) and once out to 30 mm (30 bins) to resolve the core;
-- `longitudinal_profile`: mean hit energy per ECAL layer, decoded from the hits' cellIDs;
-- `energy`: the reconstructed energy of each event, the sum of the energies of its reconstructed particles (`particle_collections`, PandoraPFA's `PandoraPFOs`; set `pdg`, e.g. `[22]`, to count only those PDG codes), with the incident photon's true energy, from which the plots take the energy linearity and resolution;
-- `intrinsic_angle`: the residuals, reconstructed − true, of the polar angle θ and the azimuth φ of each shower's axis (the paper's iTheta and iPhi). The axis is the first principal component of an energy-weighted principal component analysis (PCA) of the shower's reconstructed hits: the direction in which they spread the most about their centre, both weighted by the hits' energies, taken along the photon's direction, since an axis has no sign of its own. Only the hits in a bounding box about the shower go into it, with sides of `bounding_box` mm (800 in the default configuration; `null` for every hit). In each layer of the top stave (a plane of constant y) the box is a square, its edges along x and z, centred on where the photon's line of flight crosses the layer: each layer is shifted along the shower's axis so that the axis is at its centre, as in CaloClouds3's preprocessing. In depth it reaches half a side in front of the photon's vertex, where the particle gun starts it on the ECAL's front face, and half a side behind. Like the 800 mm box of the paper's optimal shower generators, it leaves out hits far from the shower, such as those of backscatter reaching the other side of the detector, which the models don't make and which can tilt the axis of all the hits a long way. A shower with none of its hits in the box has no axis, and the measurement warns of it. There is one PCA for each fraction in `hit_fractions` of the hits in the box, the most energetic first: all of them, and the top 4% (rounded up, at least 2 hits), which leaves out the peripheral hits, e.g. from backscatter, that tilt the axis. Angles are in degrees in the global frame, θ from the beam axis and φ = atan2(y, x), with Δφ wrapped to ±180°.
-- `photon_separation`: for each event of two incident photons, their separation on the front face of the ECAL barrel, from the MC truth of the reconstructed event (`MCParticles`, its two particles of generator status 1): the distance between the points where their lines of flight cross the plane of the stave they head into, `surface_distance` (1804.7 mm in ILD_l5_o1_v02) from the beam axis, of the `barrel_symmetry` (8) staves. The guns' photons start on the face, so they cross it where they start. With it go the mean of the two photons' energies and the number of the event's reconstructed photons, the reconstructed particles in `particle_collections` (`PandoraPFOs`) of the PDG codes in `pdg` (`[22]`).
-- `pi0`: the π⁰ candidates of ILD's reconstruction (`candidate_collection`, `GammaGammaCandidatePi0s`: pairs of PandoraPFA's photons, `particle_collection`, fitted with the π⁰'s mass as a constraint), each matched to the MC truth through its two photons, as the paper's τ benchmark does. A photon is correct when its reconstructed particle and a photon of an MC π⁰ are each other's best match, by the highest weight of the links each way (`link_collection`, `RecoMCTruthLink`, weighted by each MC particle's share of a reconstructed particle's energy, and `reverse_link_collection`, `MCTruthRecoLink`, by the share of an MC particle's energy in each reconstructed particle; `null` uses the first alone). A candidate is good when both its photons are correct and those of one MC π⁰ (the paper's nGood), confused when only one is, and fake otherwise. The MC π⁰s are those of the generator decaying into two photons with a τ among their ancestors (`ancestor_pdg`, `[15]`). Of every candidate it keeps the invariant mass of its two photons, M = √(2E₁E₂(1 − cos θ₁₂)) (the candidate's own mass is the π⁰'s, which the fit imposes), its fitted energy, the sum of its photons' energies, its θ and φ, its match, and the energy, θ and φ of its MC π⁰; of every event the number of candidates and of MC π⁰s. That is all the π⁰ figures take (the paper's figures 10 to 12), so changing how they are drawn needs no measuring again.
-
-For each simulator it writes `observables/<simulator>.npz`, holding every profile per input file as sums over events of each bin's energy and squared energy, plus the event count and the `ddsim` seed of each file. From these the mean per event and its statistical uncertainty follow, for all energies combined or each separately. The energy, the angles' residuals and the separation are kept per event, and the π⁰ candidates one by one, since the central 90% the plots take needs every event and the residuals, separations and π⁰s can then be binned anew ([`ddml_bench/measure.py`](ddml_bench/measure.py) documents the keys). The reconstructed files are recorded relative to `paths.data_dir`, so the files stay valid when copied elsewhere. A simulator is skipped if its file already has every requested key, computed with the same settings from the same files, by what the file records: the reconstructed files needn't still be there, though any that are mustn't be newer. Adding an observable, or changing its settings, measures every simulator again: only this stage while their reconstructions are there, but a simulator whose reconstructions are gone (or never were, as for measurements fetched elsewhere) is simulated and reconstructed again first.
-
-The cellID encoding is read from the reconstructed file, or failing that from the detector geometry; set `observables.longitudinal_profile.cell_id_encoding` to give it by hand. A warning is printed if more than 1% of a file's hits fall outside layers 0 to `max_layer`, which usually means the encoding is wrong.
-
-### 6. Plot
-
-```bash
-./plot_observables.sh                                     # everything found, to observables/plots/
-./plot_observables.sh caloclouds3                         # just this model (and Geant4's second sample) against Geant4
-./plot_observables.sh -d copied/observables -o figures    # e.g. on a laptop, from copied .npz files
-./plot_observables.sh --format pdf                        # default is pdf,png
-./plot_observables.sh --no-dashboard                      # without dashboard.html
-./plot_observables.sh --timing copied/summary.csv         # the Pareto fronts against this timing table
-./plot_observables.sh --no-fetch                          # without fetching the published timing table
-./plot_observables.sh --sample mymodel:1000               # mymodel's first 1000 events of each input, against the full samples (low_cost.sh draws these)
-```
-
-Each figure, `<observable>_<profile>__<scenario>.<format>` (e.g. `radial_profile_r30__single_photon.png`, shown [at the top](#fasinate)), puts every simulator on the same axes: Geant4 as a grey filled histogram, each model as a line with its uncertainty band, and each model's relative deviation from Geant4 underneath. Each deviation has one band (or error bar), the model's and Geant4's uncertainties combined as for a ratio of independent values, √((σ<sub>model</sub>/model)² + (σ<sub>Geant4</sub>/Geant4)²) of the ratio, so Geant4 has no band of its own there; its own uncertainty is the band of the grey histogram above. The legend gives each model's distance from Geant4 using the observable's `metric` (the Jensen–Shannon divergence for the profiles), and all metrics are collected in `metrics.csv`, with an `uncertainty` column for those that have one. `metrics.csv` also has each model's Wasserstein distance from Geant4, `W1`, for every distribution drawn (the profiles, the intrinsic angles, the separation and the π⁰s, but not the energy figures or the π⁰ categories). This is the earth mover's distance between the two normalised distributions in the figure's bins, each bin's content at its centre, in the units of the bins: mm, layers, degrees or GeV. It is computed seed by seed where the metric is. The legends don't show it. The `.npz` files hold the energy per ring of the radial profiles, which is divided by the rings' areas only when drawn; the metric compares the fractions of the energy in the bins, and the relative deviations are ratios, so neither depends on that division.
-
-The `energy` gives two figures, as in the paper. At each true energy *E*, μ<sub>90</sub> and σ<sub>90</sub> are the mean and standard deviation of the central 90% of the events' reconstructed energies (sorted, without the lowest and highest 5%), with uncertainties from resampling the events (200 bootstrap resamplings, the same every time):
-
-- `energy_linearity__<scenario>`: μ<sub>90</sub> against *E*, fitted with a straight line, slope·*E* + intercept;
-- `energy_resolution__<scenario>`: σ<sub>90</sub>/μ<sub>90</sub> against *E*, fitted with *a* + *b*/√*E* + *c*/*E*.
-
-Each simulator is a set of points with its fit (weighted least squares), Geant4 in grey, and the legend gives each fitted function; below, each model's relative deviation from Geant4, its error bars the uncertainties of both combined. The metric, `l1` by default, is the mean absolute difference from Geant4 over the energies, like the L1 of the paper's summary table. The legend also gives each model's χ² from Geant4 as χ²/ndf. This is Σ (model − Geant4)² / (σ<sub>model</sub>² + σ<sub>Geant4</sub>²) over the energies, with the bootstrap uncertainties drawn, so it sums the squares of the deviations below over their error bars; ndf is the number of energies, as nothing is fitted. `metrics.csv` has it as `chi2`. The fitted parameters, with their uncertainties, χ² and degrees of freedom, go to `fits.csv`. A fit needs at least as many energies as it has parameters, so a run of two energies, such as [`configs/pipeline_test.yaml`](configs/pipeline_test.yaml), draws the resolution without its fit. The inputs must be at fixed energies (the particle gun's `energies`), with at least 3 events at each.
-
-The `intrinsic_angle` gives a figure for each angle and each PCA, `intrinsic_angle_<angle>_<hits>__<scenario>` with `<hits>` `all` or `top4` (e.g. `intrinsic_angle_theta_top4__single_photon`), as in the paper's two angle figures: the distribution of the residuals as the fraction of the showers per degree, drawn like the profiles, with Geant4 filled, the models as lines and the relative deviations below. The metric is the Jensen–Shannon divergence of the fractions in the bins, as in the paper's summary table. The bins go from −`max_residual` to `max_residual` degrees, `n_bins` of them (5° and 100 by default; each is one number for every PCA, or a list with one for each fraction in `hit_fractions`, in the same order, e.g. `max_residual: [10, 3]` for ±10° with all the hits and ±3° with the top 4%). They only affect the figures, so after changing them only `plot_observables.sh` needs to run again, not the measurements. Showers outside the bins still count towards the total, and the share of them is noted on the figure, which also says the side of the bounding box the hits were taken from, as Geant4's measurements record it (the plots warn if the simulators' boxes differ). Showers whose PCA has no axis (fewer than two hits in the box) are left out.
-
-The `photon_separation` gives a figure for each energy of the photons, `photon_separation_<E>GeV__<scenario>` (e.g. `photon_separation_20GeV__di_photon`), as in the paper's di-photon figure: the mean number of reconstructed photons per event in bins of the separation, drawn like the profiles, with a red line at two photons. Each simulator's curve is the mean over the seeds of each seed's mean, and its band the spread over the seeds, their sample standard deviation (with one seed, the statistical uncertainty instead). The metric, by default the Jensen–Shannon divergence, compares the number of reconstructed photons in each bin, seed by seed, Geant4's seeds and the model's paired in order; the legend and `metrics.csv` give the mean over the seeds, with their standard deviation as its uncertainty. The bins go from 0 to `max_separation` mm, `n_bins` of them (90 mm and 18 by default); like the residuals' bins, they only affect the figures. Events without two incident photons heading into the face are left out.
-
-
-The `pi0` gives the four figures of the paper's figures 11 and 12, of the good π⁰s: `pi0_mass__<scenario>`, the invariant mass of their two photons; `pi0_energy__<scenario>`, their reconstructed energy less their MC π⁰'s, E<sub>π⁰</sub><sup>reco</sup> − E<sub>π⁰</sub><sup>MC</sup>, the reconstructed energy being the candidate's fitted one (`reconstructed_energy: fitted`) or the sum of its photons' (`photons`); and `pi0_theta__<scenario>` and `pi0_phi__<scenario>`, the polar angle and the azimuth of their direction (the candidate's fitted momentum) less those of their MC π⁰'s, θ<sub>π⁰</sub><sup>reco</sup> − θ<sub>π⁰</sub><sup>MC</sup> and φ<sub>π⁰</sub><sup>reco</sup> − φ<sub>π⁰</sub><sup>MC</sup>, in degrees, φ's taken the shorter way round (between −180° and 180°). Each is drawn as the fraction of the good π⁰s per GeV or per degree, like the profiles, each simulator's curve the mean over the seeds and its band their spread, with the relative deviations from Geant4 below. The metric, by default the Jensen–Shannon divergence, compares the numbers of good π⁰s in the bins seed by seed, as for the separation, giving the mean with the spread over the seeds as its uncertainty (the paper's JS of M<sub>π⁰</sub>, E<sub>π⁰</sub>, θ<sub>π⁰res</sub> and φ<sub>π⁰res</sub>). The bins (`mass_range` and `mass_bins`, by default 0.09–0.18 GeV in 18; `energy_range` and `energy_bins`, −6 to 6 GeV in 48; `theta_range`, `theta_bins`, `phi_range` and `phi_bins`, −0.3° to 0.3° in 40) and `reconstructed_energy` only affect the figures, and the figures note the share of the good π⁰s outside the bins. The Jensen–Shannon divergence of two samples of *N* from the same distribution that fills *k* bins is about (*k* − 1)/4*N*, so more bins raise its floor: compare it between simulators drawn in the same bins. A fifth figure, `pi0_categories__<scenario>`, is the paper's figure 10: the candidates of each category (nRecoPi0, nFake, nGood, nConfused) and the MC π⁰s missed (nMissed) per 1000 events of each seed, so that samples of other sizes compare, a bar for each simulator (the mean over the seeds, with their spread as its error), with each model's relative deviation from Geant4 below, its error bar the spreads of both combined, which `metrics.csv` gives as `dev%` with that uncertainty. The legend gives each model's χ²/ndf from Geant4 over the five categories, with the seed spreads drawn as the uncertainties (`chi2` in `metrics.csv`, profile `categories`). The categories aren't independent, since nRecoPi0 = nGood + nConfused + nFake, so read it as a distance rather than a probability.
-
-A model that is the [closure test](#closure-tests) of another is also drawn against that one alone, as the reference, in `closure/<model>/`, with the metrics between the two there, and `closure.csv` says for each scenario whether the two measured the same. `--no-closure` leaves these out, and `--reference NAME` compares everything with another simulator than Geant4.
-
-Plotting only needs numpy and matplotlib: it uses your own `python3` if it has them, and the `setup.sh` environment otherwise, so the `.npz` files can be copied elsewhere and plotted there.
-
-#### The Pareto fronts
-
-Where the [timing benchmark](#timing) has timed the models (`timing_summary.sh` writes `<data_dir>/timing/summary.csv`), each scenario also gets Pareto fronts of accuracy against time per event, one figure for each kind of node timed. A data folder without that table gets the published one, with the results it is made from, before it plots ([Reusing published measurements](#reusing-published-measurements)). Every metric of the scenario is on the same axes: each model's points are in its colour, and each metric has a marker of its own. There are two versions, by how the distributions are measured:
-
-- `pareto_js_<node>__<scenario>.<format>` (e.g. `pareto_js_cpu__single_photon.png`) uses the Jensen–Shannon distance from Geant4, the square root of the divergence in `metrics.csv`.
-- `pareto_wasserstein_<node>__<scenario>.<format>` uses the Wasserstein distance from Geant4 (`W1` in `metrics.csv`).
-
-The energy figures and the π⁰ categories aren't distributions, so both versions measure them by their χ² from Geant4 (`chi2` in `metrics.csv`, as in their legends). Each metric's distances are divided by their mean over the models:
-
-- **The same scale for every metric.** The models' mean is at 1 for each one, which puts them all on one axis. A model has the same values on the CPU and the GPU nodes, as the mean is over every model measured, timed there or not. Every figure of a version also has the same range of distance, so the scenarios can be compared side by side. Neither the square root nor the division changes which models are on a front. The legend gives each metric's mean itself, so the Wasserstein distances can be read in mm, degrees or GeV.
-- **The time** is the summary's row of the scenario over all its inputs (input `all`): the mean of the inputs' mean wall-clock times per event, each input weighing the same, with its standard error. Every metric of a scenario has the same times, so each di-photon energy has the time of both energies. A model's metrics are drawn side by side, a few points apart about its time, so that they and their error bars don't hide each other.
-- **Geant4** is drawn at its own time and at its own distance, which is its [second sample's](#2-simulate-with-geant4) distance from the first, a point for each metric like a model's, as "Geant4 (2nd sample)". So it sits at the statistical floor of each metric rather than at 0. Its distances are divided by the models' mean like the models', which leaves the second sample out. Where it wasn't timed on the figure's kind of node, such as the GPU nodes, it is drawn at its time on the CPU nodes, as the summary's speed-ups are, and its legend entry says so. Where the second sample hasn't been measured, Geant4 isn't drawn on those fronts, and the plots say so.
-- **The fronts**: each metric has its own. A point, Geant4's or a model's, is on it if no other point of that metric is both as fast and as close (and better in one), by their central values. Points on their metric's front are filled; the others are hollow. Geant4 is off a front only where a faster model is as close to it as its own second sample. The legend gives each model's speed-up on Geant4.
-- **The error bars** are the times' standard errors and, where `metrics.csv` has one (the spread over the seeds of the separation and the π⁰s), the metric's uncertainty. The JS uncertainty is carried to the distance as σ/(2√JSD).
-
-`pareto.csv` has every point of every metric of each figure: the version, the node, the figure, the time and the distance with their uncertainties (and the distance's unit), the metric's mean distance, the speed-up, and whether the point is on its metric's front. Geant4's rows have its second sample's distances. The closure tests get no front. In the dashboard, each version is its own observable, `pareto_js` and `pareto_wasserstein`, so the menu can show one at a time. `--timing FILE` takes another timing table (e.g. one copied with the `.npz` files), and `--no-pareto` leaves the fronts out. In the pipeline, the plots are drawn again when the timing table is newer than `metrics.csv`.
-
-#### The dashboard
-
-Every run of the plots also writes `dashboard.html` (`dashboard_n<N>.html` for the first *N* events): every figure, the closure tests' too, in one page with a menu of the models. Untick a model to hide it in every figure, or click its entry in a figure's legend to hide or show it in that figure alone (the figure's *Reset* puts it back as the menu has it); *only* next to a model shows it alone. The menu also picks a scenario or an observable, and how many figures go in a row. Geant4, as the reference, is always shown; its second sample has an entry of its own, like a model's, which hides its lines and its points on the Pareto fronts. The figures are the same as the PNG and PDF files, so the axes stay as drawn with every model: hiding one doesn't zoom in on the others. Opened on its own, the page keeps what it hides in its address (`dashboard.html#hide=par04_vae_onnx&scenario=single_photon`), to come back to or to send.
-
-The page is a single file with nothing to fetch, so it works wherever it is opened:
-
-- **In a notebook** on Maxwell's JupyterHub (as in [`Display_outputs.ipynb`](Display_outputs.ipynb)):
-
-  ```python
-  from ddml_bench.dashboard import show
-  show()              # the plots in paths.data_dir; show(events=3) for dashboard_n3.html
-  ```
-
-  The menu works in the output of a cell you ran; after opening the notebook again, run the cell again.
-- **From JupyterHub's file browser**: open `dashboard.html`, then click *Trust HTML* in the viewer's toolbar.
-- **Through ssh**, in your own browser: on Maxwell, `python3 -m http.server 8765 --bind 127.0.0.1` in the plots folder; on your computer, `ssh -L 8765:localhost:8765 <the same login node>`, then open `http://localhost:8765/dashboard.html`.
-- **Copied**: `scp` it anywhere and open it; it needs nothing else.
-- **As a GitHub artifact**: upload it on its own with `actions/upload-artifact@v7` and `archive: false`, and it opens in the browser from the run's page (the CI uploads the dashboard of its pipeline test this way).
-
-The page is made from SVG copies of the figures, in which each model's curves, bands, points, fits and legend entry are marked with its name ([`ddml_bench/dashboard.py`](ddml_bench/dashboard.py)); `--format svg` keeps those copies too. With ten simulators it takes about 70 kB per figure.
-
-## Where the data goes
-
-Everything is written under `paths.data_dir`:
-
-```
-<data_dir>/
-├── input_single_particle_gun/     # stage 1: <input>.slcio + <input>.h5
-├── input_physics_samples/         # the physics samples' <input>.slcio, made elsewhere
-├── sim_output/
-│   └── <scenario>/
-│       ├── geant4/                # stage 2: <input>.edm4hep.root + log
-│       ├── geant4_2/              # stage 2, the second sample: <input>_simseed<S>.edm4hep.root + log
-│       └── <model>/               # stage 3: <input>.root + log
-├── rec_output/
-│   └── <scenario>/<simulator>/    # stage 4: <input>_REC.edm4hep.root, _AIDA.root, _PfoAnalysis.root, .log
-├── observables/
-│   ├── <simulator>.npz            # stage 5
-│   └── plots/                     # stage 6: figures, dashboard.html, metrics.csv, fits.csv and pareto.csv
-├── timing/                        # the timing benchmark's results, and summary.csv
-└── slurm/
-    └── pipeline_<time>/           # submissions of slurm_pipeline.sh (slurm.log_dir)
-```
-
-One module, [`ddml_bench/layout.py`](ddml_bench/layout.py), names all of these; each scenario's inputs are in the folder its `input.folder` names. The segments of a scenario with `input.segments` are inputs named `<input>_seg<i>of<N>`. Test runs with `-n N` add `_n<N>` to every file name after the inputs, the simulations of a scenario's `simulation_seeds` add `_simseed<S>` after that (and those of Geant4's second sample always do, as every one has a seed of its own), and files simulated with `-i` go under the scenario `custom` (reconstructions of files outside `sim_output` go to `rec_output/custom/files/`).
-
-### Inputs in segments
-
-When a scenario's inputs go into segments (`input.segments`), what was made from its whole inputs is the same events, so it is split rather than made again, by [`scripts/split_data.py`](scripts/split_data.py), before the pipeline runs with the new configuration (until then a run stops, saying so, rather than simulating every segment anew):
-
-```bash
-python3 scripts/split_data.py               # says what it would split, changing nothing
-python3 scripts/split_data.py --apply       # splits
-./slurm_pipeline.sh --dry-run               # only the measurements and the plots to do
-```
-
-It splits, for each whole input of each scenario with segments, the input (and the gun's `.h5` truth), and every simulation and reconstruction of it in `sim_output/` and `rec_output/`, of every simulator there, event by event, into the segments' files the pipeline expects (ddsim and the reconstruction keep their input's events in order, so segment i of a simulation is the simulation of the input's segment i). Each segment's log has the header of its whole job's log (the software, the command), which the manifests read, and a line saying which of its events it has, but no time, so [`scripts/plot_step_times.py`](scripts/plot_step_times.py) leaves it out. `_AIDA.root` and `_PfoAnalysis.root`, histograms of the whole job, are kept whole. Each segment is written to a hidden file and checked against the whole (its events, every category of podio frames, and some of its events collection by collection and value by value) before it goes in place; then the whole file moves to `<data_dir>/.unsplit/`, at the same path, so nothing is deleted, and nothing of the harness looks there. A file that doesn't have as many events as its input, or whose segments fail a check, is left as it is with its log, and said so. It can be run again at any time: segments there already are checked rather than made, so after an interruption it does what is left. It needs the environment from `setup.sh` (pyLCIO, podio, h5py and uproot), and goes there itself.
-
-The measurements record the reconstructions they were made from, so after the split every simulator is measured again from the segments, which gives the same numbers: `--apply` first copies `observables/*.npz` and the metrics to `.unsplit/observables/`, to compare. Then delete `.unsplit` (it holds the space of the whole files; its logs keep the times the whole jobs took: `scripts/plot_step_times.py --data-dir <data_dir>/.unsplit`). Splitting reads and writes everything once: on the full data (about 400 GB), run it as a job, e.g. `sbatch --time=1-00:00:00 --wrap "python3 scripts/split_data.py --apply"`, or in parallel by simulator, the inputs first: `--only inputs`, then a job for each `--only <simulator>`.
-
-## Reusing published measurements
-
-The benchmark's inputs and the measurements of Geant4 and CaloClouds3 are published on Zenodo: [FaSiNaTe essential data](https://doi.org/10.5281/zenodo.23670827), version 0.1.0, with its manifest. Every run fetches from it what it would otherwise make, so a model can be compared with them without running anything of theirs again. Geant4's [second sample](#2-simulate-with-geant4) isn't in that version, so a fresh data folder simulates, reconstructs and measures it once. (Version 0.1.0's measurements were made before the intrinsic angle had a bounding box, so a run fetches them only with `bounding_box: null` under `observables.intrinsic_angle` in `configs/local.yaml`; otherwise it makes the references' measurements itself, simulating and reconstructing them first.) In a fresh data folder:
-
-```bash
-./pipeline.sh --dry-run    # would fetch the inputs and measurements, make Geant4's second sample, and plot
-./slurm_pipeline.sh        # fetches them, makes Geant4's second sample, then plots (but see below: 0.1.0 predates the segments)
-# add your model to models/, then
-./slurm_pipeline.sh        # simulates, reconstructs and measures only your model, and plots
-```
-
-Before working out what is to do, a run reads the manifests of the records in the configuration's `published` section and fetches into the data folder each published file that isn't there yet and is what the run would make:
-
-- an input, when its gun options are this configuration's (the inputs' names don't say everything, e.g. the number of events), so the new model simulates the same events as the references; an input made elsewhere (`external`) when it is the published file of its name in its folder, even with `--force generate`, as it can't be made here;
-- a simulator's measurements, `observables/<simulator>.npz`, when they are what the observables stage would make: the same observables with the same settings, measured on the same scenarios' reconstructions, by a simulator of this configuration (a model with the same presets or configurations and detector, and, where the manifest records them, the same weights, description and own Python code, by their sha256: a change to a model's description other than to its comments, label or plot style makes it another model), from inputs that are the published ones (fetched, or here already and the same by sha256).
-
-The [timing benchmark's](#timing) results and their table, which the [Pareto fronts](#the-pareto-fronts) read, are made apart from the pipeline, so no task makes them. Like the inputs made elsewhere, they are fetched where they aren't there. A data folder with no `timing/summary.csv` gets the published ones (`timing.tar` in the essential record) into `timing/`. A run that plots does this before it starts, and `plot_observables.sh` before it plots. Each file is checked by its sha256, the table is put in place last, and nothing there is replaced. A data folder whose `timing/` has results of its own fetches nothing; `timing_summary.sh` makes its table from them. Being newer than the plots, the table fetched has them drawn again. If it can't be fetched, the run or the plots go on without the Pareto fronts, and the next run tries again; `--no-fetch` doesn't try. The results fetched also count as done for the timing benchmark, which would time the same tasks with the same settings. A model added is then the only one timed, which compares like with like only on the kind of node the published results were timed on (the nodes are in the table).
-
-Each file is checked against the sha256 and size in the manifest before it is put in place, and the manifest against the md5 sum Zenodo gives it, pinned in the configuration. Nothing that is there is replaced, a forced stage (`--force`) fetches nothing, and a run says why a published file isn't used, e.g. after changing an observable's settings. Measurements that are up to date need no simulation or reconstruction, so those of the references aren't made (`not needed` in the report). `slurm_pipeline.sh` fetches on the login node, before submitting, so the jobs need no internet. `--no-fetch` (or `published.enabled: false`) makes a run make everything itself, and a record that can't be read stops the run, rather than quietly making everything (hundreds of GB for the references).
-
-The inputs are chosen first and the measurements then, for the scenarios that will run: a scenario whose inputs made elsewhere are neither here nor published is left out, and so are its observables, so the published measurements made without it are still fetched. Once its inputs are there, every simulator is measured again with it, and measuring a simulator needs its reconstructions of every scenario: one whose measurements were fetched is then simulated and reconstructed again for the other scenarios too, until published measurements include the new scenario.
-
-Version 0.1.0 predates `di_photon`'s segments, so only `single_photon`'s inputs are fetched from it: no task makes its whole `di_photon` inputs, and its measurements were made from the whole inputs' reconstructions (a run says so). A new version with the segments' inputs and measurements will replace it.
-
-The configuration should be the one the published data was made with: its `scenarios` and `observables`, and to compare like with like the software, `key4hep.release`, `ddml.commit` and `detector_configs.ildconfig.commit`; a run that fetches measurements says which of these differ from what made them. A new version of a record is used once its id (and its manifest's md5) replaces the old one in `published.records`.
-
-The simulations and reconstructions are needed only to measure those simulators again: adding an observable, or changing the settings of one, simulates them again. What the published measurements don't cover:
-
-- the test samples (`-n N`), whose measurements are files of their own, `<simulator>_n<N>.npz` (their inputs are fetched all the same);
-- the step timings of [`scripts/plot_step_times.py`](scripts/plot_step_times.py), which come from the logs next to the simulations and reconstructions and from the slurm logs (and compare only between runs on the same machines).
-
-### Publishing a data folder
-
-`ddml-bench manifest` prepares a data folder for publishing as several records:
-
-- `essential`: everything the pipeline needs to add a model, the `.slcio` inputs (of every scenario's folder), the full samples' `.npz` measurements and the [timing benchmark's](#timing) results with their table (`timing.tar`: `timing/summary.csv` and each task's `.json` and `.events.csv`, fetched for the Pareto fronts where a data folder has no table), all `required`. A table missing, or older than a result, is warned about: make it with `timing_summary.sh` before publishing;
-- `input_truth__<scenario>`: the guns' `.h5` truth of each scenario's inputs, `optional` (no stage reads it);
-- `sim_output__<scenario>__<simulator>` and `rec_output__<scenario>__<simulator>`: the simulations and reconstructions, with their logs, file by file, never fetched automatically (`archive`). Where they are more than a record takes (`--max-record-gb`, 50 by default, Zenodo's quota without asking, and 99 files) they are split into `__part1`, `__part2`, ..., each simulation's or reconstruction's files together;
-- `other`: the rest, small, as a tar archive per folder (`observables.tar`: the plots and test samples' `.npz` files; `slurm.tar`: the submissions and their slurm logs; `timing_logs.tar`: the rest of `timing/`, the timing runs' logs, failures and slurm submissions), members named by their paths in the data folder.
-
-```bash
-python3 scripts/ddml-bench manifest --dry-run                     # the records, and what goes in each
-python3 scripts/ddml-bench manifest --out /path/to/zenodo --stage
-python3 scripts/ddml-bench manifest --out /path/to/zenodo --stage --records 'essential,input_truth__*'
-```
-
-Each record gets a folder with its `manifest.json` and a suggested title, and with `--stage` the files to upload under the flat names the manifest gives them: links to the data folder's files (`--copy` to copy them), so nothing big is copied, and the archives (the essential record's `timing.tar`, and the `other` record's). Files in a record's folder that its manifest doesn't list, e.g. from an earlier run, are warned about, so that they aren't uploaded. For every file the manifest has its path in the data folder, sha256, size and role. For an input it adds the scenarios and gun options that made it, or `external: true` for one made elsewhere. For a measurement it adds the simulator, scenarios and observable settings, the reconstructions it was measured from with their seeds and events, the inputs behind them with their sha256, the software from the logs of their simulations and reconstructions (Key4hep release, DDML and ILDConfig commits, patches, detector, presets or model configurations, the sha256 of a model's description and of its own Python code as each simulation started, reconstruction arguments), a model's description as it is now (`model`: presets or configurations, detector, weights with their md5 sum, and the sha256 of the description and of each module of its own Python code), and whether it is up to date with this configuration. Every manifest also has the configuration's scenarios, observables and stack pins, and the essential record's lists every record (`catalogue`), so that it says where everything else is. Warnings point out inputs missing from the configuration, measurements out of date, logs that aren't there, mixed software versions, and records over the limits. Hashing reads every file once, which takes a while for the simulations; `--records` makes some records at a time. It needs numpy (and PyYAML for the configuration), so it runs on a login node.
-
-## Testing a model at low cost
-
-`low_cost.sh` tests a model on the first events of each input, against the full samples of Geant4, its second sample and the published models. Only the model's sample is simulated, reconstructed and measured, at a part of the full benchmark's cost, and it is drawn against the others' full measurements, fetched as published ([Reusing published measurements](#reusing-published-measurements)). It is what a GitHub runner will run for a new model, and runs anywhere the pipeline does:
-
-```bash
-# add your model to models/ (models/mymodel.yaml), then
-./low_cost.sh --dry-run mymodel          # what it fetches, what it costs, and what it would run
-./low_cost.sh mymodel                    # here, one task after another
-./low_cost.sh --executor slurm mymodel   # as slurm jobs (options after -- go to sbatch)
-./low_cost.sh -n 250 mymodel             # the first 250 events of every input
-```
-
-A run, in order:
-
-- checks that the configuration pins the software the published measurements were made with: `key4hep.release`, `ddml.commit` and `detector_configs.ildconfig.commit`. A model simulated with other software isn't compared like with like, so a run stops, printing the lines to put in `configs/local.yaml` (the next run builds DDML again at that commit, if needed). `--any-stack` compares anyway, with a warning;
-- fetches what the full benchmark would fetch, where it isn't there: the inputs, the full measurements of Geant4, its second sample and the published models, and the timing table. A data folder with the full benchmark's own measurements (on a cluster, say) fetches none of them, and `--no-fetch` compares with what is there;
-- prints what the sample costs, scenario by scenario, estimated from the published time per event of a model like it on the CPU nodes (`low_cost.estimate`);
-- simulates, reconstructs and measures the model's first N events of each input (of each segment, for inputs in segments), `observables/<model>_n<N>.npz`, then draws them against the full measurements in `observables/plots/low_cost_n<N>/`: every figure, `metrics.csv`, `fits.csv`, the Pareto fronts and `dashboard.html`. The full sample's plots aren't touched.
-
-The number of events is `low_cost.events` in the configuration, 1000 of each input of each scenario by default, and `-n N` gives every scenario N. Cost and statistics trade differently in each scenario, so each can have a number of its own: the τ pairs cost the most per event, as Geant4 simulates most of their particles whatever the model (about two thirds of a CaloClouds3-like model's 20 core-hours at 1000 events each). The sample is then named after all of them, the most common number first and each scenario of another after it, e.g. `observables/<model>_n1000_tau_pairs500.npz` and `plots/low_cost_n1000_tau_pairs500/`, and each simulation after its own scenario's number (`<input>_n500_simseed42...`), so what a scenario has simulated already with that number isn't simulated again. To leave a scenario out, disable it (`scenarios.<scenario>.enabled: false`).
-
-A sample of few events is noisier than a full one, which pushes its metrics up. So in its figures:
-
-- its legend entry gives its events of each input, e.g. `MyModel (n=1000)`, the text in the corner its events (showers, π⁰s) in the figure, and each of its metrics has its **statistical floor**: what the metric would be if the model were Geant4 itself, with as many events of each input. A metric within its floor (and the floor's spread) is as close to Geant4 as that many events can tell. The model and Geant4 simulate the same events, so the floor of an observable stored per event (the energy, the angles, the separation, the π⁰s) is the mean over 100 draws of as many of Geant4's second sample's events of the same inputs, compared with Geant4 as the model is. A profile, stored as each input's sums, has each bin's sums drawn about their means with their variances, file by file ([`ddml_bench/floors.py`](ddml_bench/floors.py)). The χ² has no floor, as its uncertainties already take both samples' sizes;
-- `metrics.csv` gives each of its metrics its `events`, `floor` and `floor_uncertainty` (the spread of the draws, the metric's scatter from statistics alone), and `projected`, the metric taken to the full sample's size. That is, for a divergence (JS), its value less its floor plus the full sample's floor, what Geant4's second sample measures; for a distance (W1, L1), the same in quadrature; and for a χ², its excess over its degrees of freedom, scaled as its uncertainties shrink with more events, on top of the second sample's χ². These are first order: exact for the Jensen–Shannon divergence's expected value, approximate for the rest, and noisy where the metric is near its floor. For Geant4's second sample, `floor` gives the profiles' floors at the full size, drawn as a sample's are, beside what it measured: a check of how the profiles are drawn;
-- the [Pareto fronts](#the-pareto-fronts) draw the sample at its projected metrics, with the floor's spread as a dashed error bar, where the model is timed (the [timing benchmark](#timing), on the kind of node the published timing is of);
-- the π⁰ categories are counted per 1000 events of each seed, so samples of other sizes compare;
-- a closure test needs its twin's sample of the same size, and is otherwise skipped.
-
-`plot_observables.sh --sample MODEL[:N]` draws the same figures again (without `:N`, of the sample of `low_cost.events`).
-
-## Timing
-
-The time per event of every simulator on every scenario's inputs is measured by a workflow of its own, [`ddml_timing/`](ddml_timing/) ([`docs/timing.md`](docs/timing.md)). It runs in slurm jobs apart from the pipeline's, so that each kind of node can be asked for. It uses the pipeline's configuration, inputs, models, environment and `ddsim` command, and its own section of the configuration, `timing`.
-
-Each task times one input with one simulator on one kind of node, on its first `timing.events` events (200), after `timing.warmup_events` that aren't counted (10). It records each event's wall-clock and CPU time, from the moment ddsim prints the event's start, and the model's showers and embedded-Python inference calls within it.
-
-- **`cpu` nodes** (`--constraint=EPYC&7402&512G`): every simulator, Geant4 too, with the models' inference on the CPU.
-- **`gpu` nodes** (`--constraint=A100-PCIE-80GB&GPUx1`): the models DDML runs through embedded Python, with their inference on the GPU. DDML's LibTorch and ONNX Runtime backends run on the CPU only, so those models are skipped there, and the report says why.
-
-```bash
-./slurm_timing.sh --dry-run     # what is timed, and the jobs it would submit
-./slurm_timing.sh               # a job per input, simulator and kind of node
-./timing.sh -d gpu caloclouds3  # or here, one task after another (e.g. on a GPU node)
-./timing_summary.sh             # mean time per event, its uncertainty and the speed-up on Geant4
-```
-
-The results go to `<paths.data_dir>/timing/<node>/<scenario>/<simulator>/`: a `.json` with the statistics and what ran where, an `.events.csv` with each event, and the log. `timing_summary.sh` tabulates them in `timing/summary.csv`, input by input, and over each scenario's inputs. The plots then draw [the Pareto fronts](#the-pareto-fronts) of each model's accuracy against these times. The results and the table are published with the essential record, and a data folder without a table fetches them before it plots ([Reusing published measurements](#reusing-published-measurements)).
-
-## The models
-
-Each model in [`models/`](models/) runs through DDML in the ECal barrel, as DDML's presets do: photons above 10 GeV entering the barrel go to the model, and Geant4 simulates everything else. They are DDML's generative models, each with DDML's own weights, which building DDML downloads (and `L2LFlowsx9.pt`, which DDML's build leaves out, `scripts/build_ddml.sh` fetches as DDML would, by its md5 sum: `ddml.extra_models`):
-
-| Model | What it is | How DDML runs it | Backend | Weights |
-|---|---|---|---|---|
-| `caloclouds3` | CaloClouds3, a point-cloud model | preset `CC3_BARREL_PY_INTERFACE` | embedded Python | `CC3_SF_2A.pt` |
-| `caloclouds3_libtorch` | the same, compiled: `caloclouds3`'s closure test | preset `CC3_BARREL`, with `caloclouds3`'s weights | LibTorch | `CC3_SF_2A.pt` |
-| `caloclouds3_paper` | CaloClouds3, the checkpoint of the CaloClouds3 paper | preset `CC3_BARREL` | LibTorch | `CC3_paper_checkpoint.pt` |
-| `caloclouds3_rescaled` | the same checkpoint, with the energy of every point multiplied by its description's `energy_rescale` | its configuration: preset `CC3_BARREL_PY_INTERFACE`, running [its own code](#a-models-own-inference-code), `models/caloclouds3_rescaled.py` | embedded Python | `CC3_paper_checkpoint.pt` |
-| `l2lflows` | ConvL2LFlows, a layer-to-layer normalising flow on a grid three times finer than the cells | its configuration | LibTorch | `L2LFlowsx9.pt` |
-| `bibae_two_angle` | a BIB-AE on a regular grid, conditioned on the energy and both angles | preset `BIBAE_BARREL` | LibTorch | `BIBAE_Two_Angle_Full_PP_cut.pt` |
-| `bibae_one_angle` | a BIB-AE on a regular grid, conditioned on the energy and the polar angle | its configuration | LibTorch | `BIBAE_Full_PP_cut.pt` |
-| `gan_libtorch` | a GAN on a regular grid, at normal incidence, conditioned on the energy | its configuration | LibTorch | `francisca_gan_jit.pt` |
-| `gan_onnx` | the same network: `gan_libtorch`'s closure test | its configuration | ONNX Runtime | `francisca_gan.onnx` |
-| `par04_vae_onnx` | the VAE of Geant4's example Par04 | its configuration | ONNX Runtime | `Generator.onnx` |
-
-Each file says what the model was trained on and where that comes from. A few things to bear in mind when comparing them:
-
-- Only the barrel: the endcap presets (`CC3_ENDCAP`, `BIBAE_ENDCAP`, ...) would add the endcaps, which no scenario reaches yet.
-- The plugins of CaloClouds3, ConvL2LFlows and the two-angle BIB-AE have a trigger of their own that leaves the ends of the barrel and the joins between its staves to Geant4; those of the GAN, the one-angle BIB-AE and the Par04 VAE don't.
-- The Par04 VAE tests DDML's ONNX path through the whole chain; it isn't a surrogate for ILD. It was trained on electrons in Par04's own cylindrical calorimeter, and DDML conditions it on the angle from the normal to the layers, where the example trained it on the angle from the cylinder's axis.
-- Left out: the `LoadHDF5` plugins replay showers from a file rather than generating them, and PionClouds is of hadron showers.
-
-### Closure tests
-
-A model can be the closure test of another: the same model, through another of DDML's inference backends. `caloclouds3_libtorch` is `caloclouds3`'s, its weights through DDML's plugin compiled against LibTorch instead of DDML's embedded Python, and `gan_onnx` is `gan_libtorch`'s, the same network exported to ONNX (its weights are those of `francisca_gan_jit.pt`, number for number). Its description names the other (`closure`), and `plot_observables.sh` (so `pipeline.sh` too) then draws the two against each other alone, the other as the reference, in `plots/closure/<model>/`, with the metrics between them, and writes `plots/closure.csv`, a row for each scenario:
-
-- `seeds`: `same` where each of the two simulated each input with the same ddsim seed (the scenario's `simulation_seeds`), `ddsim's own` where ddsim chose them, `different` otherwise;
-- `identical`: whether everything the two measured on the scenario is the same, number for number;
-- `expected`: `identical` where the description says the events should be (`identical: true`) and the seeds are the same, and `statistical` otherwise; `passed`, for those expected identical, whether they are. A failure is printed too.
-
-Both CaloClouds3 backends run the same TorchScript model on the same LibTorch library, but the model draws its random numbers from LibTorch's own generator, which PyTorch seeds anew in every process, not from ddsim's seed. So two runs give other showers even for the same events and seeds, and the closure test of the embedded Python is statistical: the figures and metrics of `closure/caloclouds3_libtorch/` show whether the distributions agree, in every scenario. The two GANs draw their latent vectors from Geant4's random numbers, so with the same seeds (`di_photon`) they are given the same inputs, but ONNX Runtime and LibTorch round their arithmetic differently, so they too need only agree statistically. `identical: true` is for a pair that should give the same events, number for number, with the same seeds; `passed` then says whether they do. Both of a pair should be simulated with the same software (`key4hep.release`, `ddml.commit`); a run that fetches the published measurements of `caloclouds3` says where its software differs from theirs.
-
-## Extending the benchmark
-
-### Adding a model
-
-Add a YAML file to `models/`; its file name becomes the model's name in commands and output folders. [`models/caloclouds3.yaml`](models/caloclouds3.yaml) is a commented example. It records:
-
-- `representation`: how the model describes a shower, e.g. `point_cloud`;
-- `fixed_at_training`: what the model has no input for, so where it is valid: the detector (and the compact file to simulate it in) and the particle;
-- `context`: what the model is conditioned on for each shower, e.g. energy and direction, with units and training ranges;
-- `ddml`: how DDML runs it, one of
-  - `presets`: DDML's presets (from `python/ddml/configs.py` in DDML), passed to `ddsim --ml-model`;
-  - `model_configs`: for a model DDML has no preset for, or a preset with something changed, DDML's model configurations written out ([`ddml_bench/ddml_configs.py`](ddml_bench/ddml_configs.py)). Each is a preset's name, or the preset it starts from (`preset`), if any, and the fields of DDML's `ModelConfig` it sets: `plugin` (`<factory>/<instance name>`, the factories declared in DDML's `src/MLModelActions.cc`), `geometry` (`ILD_BARREL` or `ILD_ENDCAP` from DDML's `configs.py`, or `{ecal: {detector, region, symmetry}}`), `plugin_properties` (e.g. `ModelPath`, relative to DDML's `scripts/` folder as in DDML's presets, or `PythonModule`, the module an embedded-Python plugin runs, which can be [the model's own](#a-models-own-inference-code); set over a preset's one by one), `applicable_particles`, `triggers` (`{particle: GeV}`), `correct_angles` and `is_hadron`. Without a preset, `plugin`, `geometry`, `applicable_particles` and `triggers` are needed. [`models/caloclouds3_libtorch.yaml`](models/caloclouds3_libtorch.yaml) changes a preset's weights, and [`models/gan_libtorch.yaml`](models/gan_libtorch.yaml) writes a configuration out whole;
-
-  then the weights file, relative to the DDML clone, with its md5 sum (the check of the environment makes sure that the plugins load that file), and `particles`, the particles DDML gives the model, if they aren't just the one it was trained on;
-- `closure` (optional): the model this one is the [closure test](#closure-tests) of, `of`, and whether their events should be the same where both are simulated with the same seeds, `identical`;
-- `plot`: its colour and line style in the figures (each model needs a distinct line style as well as a colour, so curves can be told apart without colour).
-
-The weights are found in the DDML clone, where building DDML downloads DDML's own into its `models/` folder, so put new weights there too. The model then takes part in stages 3–6 automatically.
-
-#### A model's own inference code
-
-A model can run inference code of its own in place of DDML's: a Python module in `models/`, which a configuration names as the `PythonModule` of one of DDML's embedded-Python plugins, as [`models/caloclouds3_rescaled.yaml`](models/caloclouds3_rescaled.yaml) has DDML's `CC3_BARREL_PY_INTERFACE` run [`models/caloclouds3_rescaled.py`](models/caloclouds3_rescaled.py), which multiplies the energy of every point of the shower by the description's `energy_rescale`:
-
-```yaml
+  software_dir: /data/dust/user/$USER/fasinate/external   # DDML, ILDConfig, the container image
+  data_dir: /data/dust/user/$USER/fasinate/data           # inputs and outputs: hundreds of GB
+
+# The software the published measurements were made with, to compare like with like
+key4hep:
+  release: "2026-04-08"
 ddml:
-  model_configs:
-    - preset: CC3_BARREL_PY_INTERFACE
-      plugin_properties:
-        PythonModule: caloclouds3_rescaled
+  commit: "263256cca31b37335cd2aae34b81e899bd2a5851"
+detector_configs:
+  ildconfig:
+    commit: "582efec42467362c389da073e7e21fb53a110315"
 ```
 
-The module keeps DDML's contract for embedded Python, `run_inference(inputs)`, as DDML's own `python/examples/cc3_sf_2a_wrapper.py` does. `scripts/ddsim_steer_models.py` puts `models/` first on ddsim's Python path, so the plugin imports the module from there, and nothing needs to be set before running `ddsim`: the module can read what it needs from the model's description beside it, with the DDML clone at `$DDML_SOURCE_DIR` (which `setup.sh` sets) for the weights, the file `ddml.weights` names and whose md5 sum is checked. The check of the environment says where each plugin's module is found, and stops a run where a module of `models/` would stand in for a preset's own without the description naming it. Each simulation's log records the sha256 of the model's description (as read, so not its comments, label, plot style or closure test) and of each module of its own code as `ddsim` started, so the [manifest](#publishing-a-data-folder) of the published measurements has them, and published measurements are fetched only for a model that is still the same. A module is hashed alone, so keep a model's own code in its one module.
-
-### Adding a scenario
-
-Add an entry under `scenarios` with an `input` section, in `configs/default.yaml` (override files can change a scenario, and disable it with `enabled: false`, but not add one). Input types are defined in `INPUT_TYPES` in [`ddml_bench/scenarios.py`](ddml_bench/scenarios.py) (currently `particle_gun`, `di_photon_gun` and `external`); a new type of inputs made here needs a function that returns the commands making the inputs, one that names the files they produce without running them, the option that makes a command write into a given folder, the Python modules its commands need, whether its events are a particle gun's (for `--usingParticleGun`), and the folder its inputs go in by default. Inputs made elsewhere need no new type: list the files under an `external` input. To simulate each input several times with different `ddsim` seeds, list them in the scenario's `simulation_seeds` (with `one_seed_per_input: true`, each input once with its own). For shorter jobs, put each input's events in several files with `input.segments` (a new gun needs `--segment` and `--segments` options for it, as the two guns have). List the scenario under the `scenarios` of each observable that should be measured on it.
-
-### Adding an observable
-
-Observables are implemented in [`ddml_bench/measure.py`](ddml_bench/measure.py), keyed by the name used under `observables` in the configuration: binned profiles of the hits in `KINDS`, and quantities kept per event in `PER_EVENT` (each with a function that checks its settings, one that names what it stores of each event, and one that measures those on a chunk of events; those that keep some items per object of an event, as `pi0` does per candidate, say which in `PER_CANDIDATE`), whose figures are in `EVENT_FIGURES` in [`ddml_bench/plot.py`](ddml_bench/plot.py), as are the comparison metrics. Settings that only change the figures go in `DRAWING`, so that changing them doesn't measure again.
-
-### Adding a stage
-
-Each stage is a class in [`ddml_bench/stages/`](ddml_bench/stages/) that adds its tasks to the graph and says when one is done, what it needs from the environment and how to run one; [`docs/harness.md`](docs/harness.md) describes them.
-
-## Tests
+**3. Run the stages.** The first script builds DDML in a container, which takes a while; later runs reuse the build. Published inputs and measurements are fetched from Zenodo instead of being made, where they match the configuration. For a first test, add `-n 10` to stages 2–6: the first 10 events of each input, kept apart from the full samples.
 
 ```bash
-python3 -m pip install pyyaml numpy awkward uproot matplotlib h5py particle pytest
-python3 -m pytest tests
+./generate_input.sh                   # 1. the inputs of every scenario
+./simulate_geant4.sh                  # 2. Geant4 (slow)
+./simulate_models.sh                  # 3. every model in models/
+./reconstruct_simulation.sh           # 4. every simulation
+./observables_from_reconstruction.sh  # 5. one .npz per simulator
+./plot_observables.sh                 # 6. figures, metrics.csv and dashboard.html
 ```
 
-The tests run the scripts end to end, `pipeline.sh` and `slurm_pipeline.sh` included, through the same launcher and `setup.sh` as on the cluster, with only the programs at the ends faked ([`tests/fakes/`](tests/fakes/)): `ddsim` (which runs the steering files as `ddsim` does, with stand-ins for DD4hep's `DDSim` and `g4units`), `k4run` (which writes real EDM4hep-style ROOT files, so the observables and plots run for real), pyLCIO, DDML's Python package (with DDML's presets), and slurm's `sbatch` and `squeue`. They need no Key4hep, CVMFS or slurm, and run in CI on every push ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)), with shellcheck on the scripts.
+Every script takes `--help`, and stages 1–5 take `--dry-run` to show what is done and what is left.
 
-## Repository layout
+**4. Time the simulators**, on the inputs of stage 1. The time per event, which the Pareto fronts plot accuracy against, is only measured locally, on slurm nodes or here, not on GitHub's runners. Times compare only between runs on the same kind of node.
 
-```
-├── generate_input.sh                   # stage 1
-├── simulate_geant4.sh                  # stage 2
-├── simulate_models.sh                  # stage 3
-├── reconstruct_simulation.sh           # stage 4
-├── observables_from_reconstruction.sh  # stage 5
-├── plot_observables.sh                 # stage 6
-├── pipeline.sh                         # all six stages, here, one task after another
-├── slurm_pipeline.sh                   # all six stages, as slurm jobs of one file each
-├── low_cost.sh                         # a model on the first events of each input, against the published full samples
-├── slurm_simulate_geant4.sh            #   ... just the Geant4 stage
-├── slurm_timing.sh                     # the timing benchmark, as slurm jobs on CPU and GPU nodes
-├── timing.sh                           #   ... here, one task after another
-├── timing_summary.sh                   #   ... and its results in one table
-├── setup.sh                            # interactive environment
-├── ILD_Particle_Gun.py                 # particle-gun input generator
-├── ILD_Di_Photon_Gun.py                # di-photon input generator
-├── configs/default.yaml                # shared configuration (override in configs/local.yaml)
-├── configs/pipeline_test.yaml          # a very light test run of the whole pipeline
-├── models/                             # one YAML file per model
-├── ddml_bench/                         # the harness: layout, stages, task graph, executors
-├── ddml_timing/                        # the timing benchmark (docs/timing.md)
-├── scripts/                            # building, the environment launcher, the steering files, ddml-bench, ddml-timing
-├── tests/                              # the tests, with the fakes they run the pipeline on
-├── docs/                               # harness.md, timing.md, and figures for this README
-└── di_photon_old/                      # the earlier di-photon separation analysis (legacy)
+```bash
+./slurm_timing.sh --dry-run  # what would be timed, and the jobs it would submit
+./slurm_timing.sh            # a job per input, simulator and kind of node (CPU and GPU)
+./timing.sh my_model         # or here, one task after another (-d gpu on a GPU node)
+./timing_summary.sh          # the table the plots read: timing/summary.csv
 ```
 
-Some files predate the current pipeline and are kept for reference only: `di_photon_old/` (the di-photon separation analysis by Peter McKeown and Anatolii Korol, which the `di_photon` scenario and the `photon_separation` observable replace; its `ddml_diphoton_analysis_submodule` is the only git submodule, and the pipeline doesn't need it), `MarlinStdReco_WITH_GAPS.xml` (the earlier Marlin reconstruction, replaced by the Gaudi one in stage 4), `create_singularity.sh` (an old Ubuntu 22.04 container setup; the image is now pulled automatically) and `MODELS.md` (names of older CaloClouds variants).
+**5. Or run all six stages at once**, instead of step 3.
+
+```bash
+./pipeline.sh --config configs/pipeline_test.yaml  # a very light test of every stage
+./pipeline.sh                                      # every stage, here, one task after another
+./slurm_pipeline.sh --dry-run                      # on slurm: what is done, and what would be submitted
+./slurm_pipeline.sh                                # on slurm: a job per file, from a login node
+```
+
+More: [running.md](docs/running.md) (options, configuration, environment, where the data goes) · [stages.md](docs/stages.md) (each stage, the observables, the figures) · [published.md](docs/published.md) (published data) · [timing.md](docs/timing.md) (the timing benchmark) · [development.md](docs/development.md) (extending, tests, layout)
 
 ## Credits
 

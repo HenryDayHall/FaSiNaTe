@@ -2,9 +2,10 @@
 # Test models on the first events of each input, against the full samples of
 # Geant4, its second sample and the other models, as published: only the
 # models' tasks of that sample are run, here one after another (or as slurm
-# jobs, with --executor slurm), then its plots against the full samples. It is
-# what a GitHub runner will run for a new model, at a part of the cost of the
-# full benchmark.
+# jobs, with --executor slurm), then its plots against the full samples, at a
+# part of the cost of the full benchmark. GitHub's runners run it for a model
+# pushed to a fork, split into jobs (.github/workflows/low-cost.yml,
+# docs/github.md).
 #
 # Usage: ./low_cost.sh [options] MODEL ... [-- SBATCH_OPTION ...]
 #
