@@ -314,8 +314,8 @@ clean shell and the container are set up by `scripts/environment.sh`, which
 with fakes for the programs at the ends (`tests/fakes/`): `ddsim`, `k4run`
 (writing real EDM4hep-style ROOT files, so the observables and the plots run
 for real), pyLCIO, DDML's Python package, and slurm's `sbatch` and `squeue`
-(running each job as it is submitted, or queueing them). See the README's
-Tests section; CI runs them on every push.
+(running each job as it is submitted, or queueing them). See
+[development.md](development.md#tests); CI runs them on every push.
 
 ## The timing benchmark
 

@@ -1,6 +1,6 @@
 # Testing a model on GitHub's runners
 
-The [low-cost mode](../README.md#testing-a-model-at-low-cost) tests a model on the first events of each input, against the published full samples of Geant4, its second sample and the published models. The workflow [`.github/workflows/low-cost.yml`](../.github/workflows/low-cost.yml) runs it on GitHub's free runners. Fork FaSiNaTe, add a model to `models/`, push, and the model is simulated, reconstructed, measured and drawn against the others, with the plots on the run's page.
+The [low-cost mode](low_cost.md) tests a model on the first events of each input, against the published full samples of Geant4, its second sample and the published models. The workflow [`.github/workflows/low-cost.yml`](../.github/workflows/low-cost.yml) runs it on GitHub's free runners. Fork FaSiNaTe, add a model to `models/`, push, and the model is simulated, reconstructed, measured and drawn against the others, with the plots on the run's page.
 
 Nothing is simulated at full statistics on GitHub. The full samples are made on a cluster and published on Zenodo, and every run compares with them.
 
@@ -8,7 +8,7 @@ Nothing is simulated at full statistics on GitHub. The full samples are made on 
 
 1. **Fork** the repository and keep the fork public. Runners are free for public repositories; a private one has a few dollars of minutes a month, which a run would use up.
 2. **Turn Actions on.** In a fork, workflows stay off until you open the *Actions* tab and enable them.
-3. **Add your model** as `models/<name>.yaml` ([Adding a model](../README.md#adding-a-model)), with its own Python module if it has one. Its weights go either in DDML's build, as DDML's presets' do, or in the repository (`ddml.weights_in: fasinate`), under GitHub's 100 MB per file.
+3. **Add your model** as `models/<name>.yaml` ([How to add a model](../README.md#how-to-add-a-model), [Models](models.md)), with its own Python module if it has one. Its weights go either in DDML's build, as DDML's presets' do, or in the repository (`ddml.weights_in: fasinate`), under GitHub's 100 MB per file.
 4. **Push**, to any branch. A push that changes `models/`, `configs/github.yaml` or the workflow runs it. The run is under *Actions* → *low-cost benchmark*. The plan job's summary says what is tested and what it should cost. The report's summary has the metrics and links to the plots.
 
 A push of the default branch can also put the plots on the fork's GitHub Pages:
@@ -61,7 +61,7 @@ Runs are kept small:
 
 ## The results
 
-- **The report's summary**, on the run's page, has a table for each model. Each row has the metric of a figure, its statistical floor at the sample's size, and its value projected to the full sample's size. Next to these are Geant4's second sample's value and the best published model's. A metric within its floor is as close to Geant4 as that many events can tell. ([Testing a model at low cost](../README.md#testing-a-model-at-low-cost) explains the floors and projections.)
+- **The report's summary**, on the run's page, has a table for each model. Each row has the metric of a figure, its statistical floor at the sample's size, and its value projected to the full sample's size. Next to these are Geant4's second sample's value and the best published model's. A metric within its floor is as close to Geant4 as that many events can tell. ([Testing a model at low cost](low_cost.md) explains the floors and projections.)
 - **`dashboard.html`**, uploaded unzipped, opens in the browser from the run's page. It has every figure, with a menu to show or hide each model.
 - **`low-cost-results`** has the figures as PNG and PDF, plus `metrics.csv`, `fits.csv`, `run.json` (the plan, with what each chain took) and the models' merged measurements (`samples/<model>_n<N>.npz`). `plot_observables.sh --sample <model>:<N>` draws them again elsewhere, next to the published full samples.
 
