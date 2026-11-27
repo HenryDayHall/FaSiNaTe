@@ -89,6 +89,13 @@ Models can also come from DDML directly, with DDML's own inference code and weig
 
 Fork FaSiNaTe, keeping the fork public, enable Actions in it, and push your model. The [low-cost workflow](.github/workflows/low-cost.yml) then simulates, reconstructs and measures the first 1000 events of each input, and draws them against the published full samples. The plots and `dashboard.html` are on the run's page. A CaloClouds3-like model takes about 14 runner-hours. The runners don't time the model, so there are no Pareto fronts there: see [timing](#how-to-run-locally) below. The same test runs locally with `./low_cost.sh my_model`.
 
+When the pipeline has completed, you can see the performance plots for your model in the artefacts of the job. The dashboard is html, so you can preview without downloading.
+<p align="center">
+  <img src="docs/images/see_new_model_in_artiefacts.png" alt="Visual description of navigating to the dashboard.html in job artefacts." width="42%">
+</p>
+
+*Select "Actions" -> your commit name for the "low-cost benchmark" -> "Artifacts" -> "dashboard.html"*
+
 More: [models.md](docs/models.md) (every field, the models, closure tests) · [github.md](docs/github.md) (the GitHub runners, step by step) · [low_cost.md](docs/low_cost.md) (the low-cost mode, statistical floors)
 
 ## How to run locally
