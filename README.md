@@ -87,6 +87,8 @@ Models can also come from DDML directly, with DDML's own inference code and weig
 
 ### 2. Test it on GitHub's runners
 
+*NB: Free runners only have enough compute for this in a public repository. Either make your repo public, add some credit for runners, or run locally ([see here](How-to-run-locally))*
+
 Fork FaSiNaTe, keeping the fork public, enable Actions in it, and push your model. The [low-cost workflow](.github/workflows/low-cost.yml) then simulates, reconstructs and measures the first 1000 events of each input, and draws them against the published full samples. The plots and `dashboard.html` are on the run's page. A CaloClouds3-like model takes about 14 runner-hours. The runners don't time the model, so there are no Pareto fronts there: see [timing](#how-to-run-locally) below. The same test runs locally with `./low_cost.sh my_model`.
 
 When the pipeline has completed, you can see the performance plots for your model in the artefacts of the job. The dashboard is html, so you can preview without downloading.
