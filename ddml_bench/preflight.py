@@ -11,7 +11,8 @@ before it pass:
   3. Python code  the model's own inference code, the modules of models/ its
                   DDML model configurations run (plugin_properties
                   PythonModule), if it has any: each compiles, and conforms to
-                  Black (preflight.black, its major version)
+                  Black, whichever the environment has (the Key4hep
+                  release's), its version noted in the summary
   4. import       each of those modules imports, from models/ as ddsim imports
                   it, in a Python of its own (preflight.import_timeout), with
                   its entry point (EntryPoint, run_inference by default)
@@ -96,10 +97,6 @@ def settings(config):
     section = config.get("preflight")
     if not isinstance(section, dict):
         raise PreflightError("the configuration has no preflight section")
-    black = section.get("black")
-    if black is not None and not (isinstance(black, (str, int)) and str(black).isdigit()):
-        raise PreflightError("preflight.black should be Black's major version, quoted, e.g. "
-                             "\"26\", or null for any")
     timeout = section.get("import_timeout")
     if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0:
         raise PreflightError("preflight.import_timeout should be a number of seconds")
@@ -137,7 +134,7 @@ def settings(config):
     seed = barrel.get("seed")
     if not isinstance(seed, int) or isinstance(seed, bool) or seed < 0:
         raise PreflightError("preflight.barrel.seed should be ddsim's seed for the shots")
-    return {"version": VERSION, "black": None if black is None else str(black),
+    return {"version": VERSION,
             "import_timeout": float(timeout),
             "barrel": {"detector": detector, "energy": float(energy),
                        "position": vector(barrel.get("position"), "position"),
@@ -319,7 +316,7 @@ def _run(command, log, timeout=None, cwd=None):
     return result.returncode, result.stdout or ""
 
 
-def check_code(model, preflight, log):
+def check_code(model, preflight, log, record=None):
     """Step 3."""
     code = own_code(model)
     if not code:
@@ -340,10 +337,9 @@ def check_code(model, preflight, log):
     if status != 0 or not match:
         raise StepFailed("Black doesn't run here (see %s)" % LOG)
     version = match.group(0)
-    if preflight["black"] and match.group(1) != preflight["black"]:
-        raise StepFailed("Black %s is here, but the code is checked with Black %s "
-                         "(preflight.black), whose style may differ"
-                         % (version, preflight["black"]))
+    if record is not None:
+        record["black"] = version
+    log.write("checked with Black %s (%s)" % (version, " ".join(command)))
     paths = [path for _, path in code]
     status, output = _run(command + ["--check", "--diff", "--quiet"] + paths, log,
                           timeout=300, cwd=REPO_DIR)
@@ -756,7 +752,7 @@ def run_model(model, preflight, folder, marker, planned, context=None):
               "started": time.strftime("%Y-%m-%d %H:%M:%S"), "host": socket.gethostname(),
               "key4hep": os.environ.get("DDML_KEY4HEP_RELEASE") or "unknown",
               "ddml": os.environ.get("DDML_COMMIT") or "unknown",
-              "black": preflight["black"], "steps": [], "plots": [], "context": context}
+              "black": None, "steps": [], "plots": [], "context": context}
     log.write("# ddml-bench preflight of %s (%s), %s on %s\n# Key4hep %s, DDML %s" % (
         model["name"], model["config"], record["started"], record["host"], record["key4hep"],
         record["ddml"]))
@@ -781,7 +777,7 @@ def run_model(model, preflight, folder, marker, planned, context=None):
             elif number == 2:
                 details = check_weights(current, log)
             elif number == 3:
-                details = check_code(current, preflight, log)
+                details = check_code(current, preflight, log, record)
             elif number == 4:
                 details = check_import(current, preflight, log)
             else:
@@ -844,9 +840,11 @@ def summary_text(record, folder):
                                             else "FAILED at step %d, %s" % (
                                                 record["failed_step"],
                                                 dict(STEPS)[record["failed_step"]])),
-             "  %s to %s on %s; Key4hep %s, DDML %s; checked as %s" % (
+             "  %s to %s on %s; Key4hep %s, DDML %s%s; checked as %s" % (
                  record["started"], record.get("finished", "?"), record["host"],
-                 record["key4hep"], record["ddml"], record["digest"]), ""]
+                 record["key4hep"], record["ddml"],
+                 ", Black %s" % record["black"] if record.get("black") else "",
+                 record["digest"]), ""]
     for step in record["steps"]:
         lines.append("%d. %-12s %s" % (step["number"], step["title"], step["status"]))
         for detail in step["details"]:

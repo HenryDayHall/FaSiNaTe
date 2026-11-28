@@ -95,9 +95,6 @@ observables:
     cell_id_encoding: "{encoding}"
 published:
   enabled: false
-preflight:
-  # (whichever Black the tests have: the newest for Python 3.9 is older)
-  black: null
 """
 
 # The tau_pairs scenario of the tests (Bench.with_tau_pairs()): two inputs made

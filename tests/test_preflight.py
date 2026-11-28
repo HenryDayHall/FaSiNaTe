@@ -47,7 +47,7 @@ def control(bench, name, on=True):
 # The settings, and what a model is checked as
 
 
-SETTINGS = {"black": "26", "import_timeout": 600,
+SETTINGS = {"import_timeout": 600,
             "barrel": {"detector": "EcalBarrel", "energy": 100, "position": [2, 0, 0],
                        "directions": {"up": [0, 1, 0], "tilted": [0, 1, 0.5]},
                        "hit_collections": ["ECalBarrelSiHitsEven"], "seed": 1}}
@@ -59,14 +59,12 @@ def test_the_default_settings_are_the_shots_asked_for():
     barrel = found["barrel"]
     assert barrel["energy"] == 100.0 and barrel["position"] == [2.0, 0.0, 0.0]
     assert barrel["directions"] == {"up": [0.0, 1.0, 0.0], "tilted": [0.0, 1.0, 0.5]}
-    assert barrel["detector"] == "EcalBarrel" and found["black"] == "26"
+    assert barrel["detector"] == "EcalBarrel" and "black" not in found
 
 
 def test_the_settings_are_checked():
-    assert preflight.settings({"preflight": SETTINGS})["black"] == "26"
-    assert preflight.settings({"preflight": dict(SETTINGS, black=None)})["black"] is None
-    for change, message in (({"black": "latest"}, "preflight.black"),
-                            ({"import_timeout": 0}, "import_timeout"),
+    assert preflight.settings({"preflight": SETTINGS})["import_timeout"] == 600
+    for change, message in (({"import_timeout": 0}, "import_timeout"),
                             ({"barrel": dict(SETTINGS["barrel"], energy=-1)}, "energy"),
                             ({"barrel": dict(SETTINGS["barrel"], position=[0, 0])}, "position"),
                             ({"barrel": dict(SETTINGS["barrel"], directions={"x": [0, 0, 0]})},
@@ -88,7 +86,7 @@ def test_what_a_model_is_checked_as(config_env):
     # Its description, weights, settings and software make it another check
     assert preflight.digest(dict(model, description_sha256="0" * 64), SETTINGS, pins) != first
     assert preflight.digest(dict(model, weights_md5="0" * 32), SETTINGS, pins) != first
-    assert preflight.digest(model, dict(SETTINGS, black=None), pins) != first
+    assert preflight.digest(model, dict(SETTINGS, import_timeout=60), pins) != first
     assert preflight.digest(model, SETTINGS, dict(pins, ddml="abc")) != first
     # and its own code
     assert preflight.digest(dict(model, python={"m": {"path": "models/m.py", "sha256": "1"}}),
@@ -200,8 +198,10 @@ def test_python_code_must_conform_to_black_and_import(bench):
         assert "%s FAILED at %s" % (name.ljust(32), step) in summary, summary
     for name in (MODEL, "fine"):
         assert "%s passed" % name.ljust(32) in summary, summary
-    # What Black would change is in the full log
-    assert "models/unformatted.py would be reformatted by Black" in read(
+    # What Black would change is in the full log, and the summary says which
+    # Black (whichever is here) checked it
+    import black
+    assert "models/unformatted.py would be reformatted by Black %s" % black.__version__ in read(
         bench, "unformatted", "summary.txt")
     assert "+def run_inference(inputs):" in read(bench, "unformatted", "preflight.log")
     # and the traceback of the import

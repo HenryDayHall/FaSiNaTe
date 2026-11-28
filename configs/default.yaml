@@ -129,16 +129,13 @@ container:
 # order: 1. its description is well formed and has every field the pipeline
 # needs, its weights and their md5 sum too; 2. its weights are there, with that
 # md5 sum; 3. its own Python inference code, if any, compiles and conforms to
-# Black; 4. that code imports, with its entry point; 5. if DDML runs it in the
+# Black (the environment's, whichever version); 4. that code imports, with its entry point; 5. if DDML runs it in the
 # ECal barrel, a shot of each particle it takes there in each of the
 # directions below deposits energy, from showers DDML has the model place.
 # A model's simulations wait until it passes; it is checked again when its
 # description, code or weights, these settings or the pinned software change.
 # What it found goes to <paths.data_dir>/preflight_output (summary.txt).
 preflight:
-  # The major version of Black (quoted) the code must conform to, as Black's
-  # style changes from year to year; null for whichever the environment has
-  black: "26"
   # Seconds that importing the code (PyTorch, the weights) may take
   import_timeout: 600
   barrel:
