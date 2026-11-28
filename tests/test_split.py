@@ -288,9 +288,10 @@ def test_a_fresh_data_folder_takes_the_inputs_in_segments(bench):
     status, output = bench.run("scripts/split_data.py", "--apply")
     assert "split 2 file(s)" in output and "moved 2 file(s)" in output, output
     status, output = bench.run("pipeline.sh")
-    # 5 inputs made, 14 simulations by each simulator (Geant4's second sample
-    # too), each reconstructed, 3 measurements and the plots
-    assert "made 93 of 93" in output, output
+    # The model's preflight, 5 inputs made, 14 simulations by each simulator
+    # (Geant4's second sample too), each reconstructed, 3 measurements and the
+    # plots
+    assert "made 94 of 94" in output, output
     assert bench.files("input_single_particle_gun").count(DI_PHOTON + "_seg3of3.h5") == 1
     rows = read_csv(bench.path("observables", "plots", "metrics.csv"))
     assert {row["observable"] for row in rows} >= {"photon_separation", "pi0"}

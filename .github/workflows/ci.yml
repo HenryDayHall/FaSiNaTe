@@ -35,7 +35,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Install what the pipeline's Python uses
-        run: python -m pip install pyyaml numpy awkward uproot matplotlib h5py particle pytest
+        run: python -m pip install pyyaml numpy awkward uproot matplotlib h5py particle pytest black
       - name: Run the tests
         # in a folder of their own, to keep the pipeline test's plots
         run: python -m pytest -q tests --basetemp="$RUNNER_TEMP/pytest"
@@ -64,6 +64,6 @@ jobs:
         run: |
           shellcheck --version
           shellcheck -x --shell=bash pipeline.sh slurm_pipeline.sh slurm_simulate_geant4.sh \
-            generate_input.sh simulate_geant4.sh simulate_models.sh reconstruct_simulation.sh \
+            generate_input.sh simulate_geant4.sh simulate_models.sh preflight_models.sh reconstruct_simulation.sh \
             observables_from_reconstruction.sh plot_observables.sh setup.sh scripts/*.sh \
             slurm_timing.sh timing.sh timing_summary.sh low_cost.sh

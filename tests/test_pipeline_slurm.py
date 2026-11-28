@@ -28,15 +28,15 @@ def by_stage(jobs):
 
 def test_slurm_pipeline_runs_every_stage_as_jobs(bench):
     status, output = bench.run("slurm_pipeline.sh", "--dry-run")
-    assert "would submit 31 job(s)" in output, output
+    assert "would submit 32 job(s)" in output, output
     assert submissions(bench) == [] and bench.slurm_jobs() == []
 
     status, output = bench.run("slurm_pipeline.sh", "--", "--account=test")
-    assert "submitting 31 job(s)" in output, output
+    assert "submitting 32 job(s)" in output, output
     jobs = bench.slurm_jobs()
-    assert [job["state"] for job in jobs] == ["COMPLETED"] * 31, jobs
+    assert [job["state"] for job in jobs] == ["COMPLETED"] * 32, jobs
     folder, = submissions(bench)
-    assert len(records(folder)) == 31
+    assert len(records(folder)) == 32
     for name in ("plan.json", "tasks.json", "job.sh", "report.txt"):
         assert os.path.isfile(os.path.join(folder, name))
     for job in jobs:
@@ -51,6 +51,12 @@ def test_slurm_pipeline_runs_every_stage_as_jobs(bench):
     # (each simulator's 2 reconstructions of single_photon, and 2 of di_photon)
     for job in stages["observables"]:
         assert len(job["after"]) == 4
+    # The model's simulations wait for its preflight, as well as their inputs
+    preflight, = stages["preflight"]
+    for job in stages["models"]:
+        assert preflight["id"] in job["after"] and len(job["after"]) == 2, job
+    assert "--job-name=fasinate-caloclouds3_paper" in preflight["options"]
+    assert "--time=02:00:00" in preflight["options"]
     plot, = stages["plot"]
     assert sorted(plot["after"]) == sorted(j["id"] for j in stages["observables"])
     geant4 = stages["geant4"][0]
@@ -82,16 +88,16 @@ def test_slurm_pipeline_runs_every_stage_as_jobs(bench):
 def test_slurm_pipeline_waits_for_queued_jobs(bench):
     queue = {"FAKE_SLURM_MODE": "queue"}
     status, output = bench.run("slurm_pipeline.sh", env=queue)
-    assert [job["state"] for job in bench.slurm_jobs()] == ["PENDING"] * 31
+    assert [job["state"] for job in bench.slurm_jobs()] == ["PENDING"] * 32
 
     # The jobs are still queued, so they are waited for, not submitted again
     status, output = bench.run("slurm_pipeline.sh", env=queue)
-    assert "nothing new to submit; 31 job(s) of earlier submissions are still queued" in output, \
+    assert "nothing new to submit; 32 job(s) of earlier submissions are still queued" in output, \
         output
-    assert len(bench.slurm_jobs()) == 31
+    assert len(bench.slurm_jobs()) == 32
 
     bench.run_fake("sbatch", "--drain")
-    assert [job["state"] for job in bench.slurm_jobs()] == ["COMPLETED"] * 31
+    assert [job["state"] for job in bench.slurm_jobs()] == ["COMPLETED"] * 32
     status, output = bench.run("slurm_pipeline.sh")
     assert "everything selected is done" in output, output
 
@@ -108,13 +114,13 @@ def test_slurm_pipeline_cancels_what_needs_a_failed_job(bench):
                                     for key in failed)
     assert cancelled == ["observables", "observables", "plot", "reconstruct", "reconstruct"], \
         states
-    assert list(states.values()).count("COMPLETED") == 24
+    assert list(states.values()).count("COMPLETED") == 25
 
     # Run again: only what failed, or was cancelled, is submitted
     bench.fail_ddsim(None)
     status, output = bench.run("slurm_pipeline.sh")
     assert "submitting 7 job(s)" in output, output
-    assert [job["state"] for job in bench.slurm_jobs()[31:]] == ["COMPLETED"] * 7
+    assert [job["state"] for job in bench.slurm_jobs()[32:]] == ["COMPLETED"] * 7
     assert "metrics.csv" in bench.files("observables", "plots")
 
 
@@ -151,4 +157,4 @@ def test_a_scenario_left_out_is_reported_and_the_rest_submitted(bench):
     bench.with_tau_pairs(write=False)
     status, output = bench.run("slurm_pipeline.sh", "--dry-run")
     assert "the scenario tau_pairs is left out of this run" in output, output
-    assert "would submit 31 job(s)" in output, output
+    assert "would submit 32 job(s)" in output, output

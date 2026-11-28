@@ -167,9 +167,13 @@ def test_the_records_of_a_data_folder(bench):
     assert all(entry["role"] == "optional" for entry in truth["files"])
 
     # The rest in tar archives of their folders: the plots, the test sample's
-    # measurements, which unpacked in another data folder go in place
+    # measurements, which unpacked in another data folder go in place, and the
+    # models' preflight
     other = load(out, "other")
-    archive, = other["files"]
+    archive, preflight = other["files"]
+    assert preflight["name"] == "preflight_output.tar" and preflight["role"] == "archive"
+    assert "preflight_output/caloclouds3_paper/summary.txt" in [
+        m["path"] for m in preflight["members"]]
     assert archive["name"] == "observables.tar" and archive["role"] == "archive"
     assert archive["sha256"] == digest(os.path.join(out, "other", "observables.tar"))
     names = [m["path"] for m in archive["members"]]

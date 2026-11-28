@@ -6,9 +6,10 @@
       (slurm_pipeline.sh). See pipeline.sh --help for the options.
 
   ddml-bench stage STAGE [options] [ARGUMENT ...]
-      Run one stage locally, with the options of its script: generate
-      (generate_input.sh), geant4 (simulate_geant4.sh), models
-      (simulate_models.sh), reconstruct (reconstruct_simulation.sh),
+      Run one stage locally, with the options of its script: preflight
+      (preflight_models.sh), generate (generate_input.sh), geant4
+      (simulate_geant4.sh), models (simulate_models.sh, which runs the
+      preflight of the models first), reconstruct (reconstruct_simulation.sh),
       observables (observables_from_reconstruction.sh) or plot.
 
   ddml-bench low-cost [options] MODEL ... [-- SBATCH_OPTION ...]
@@ -247,7 +248,7 @@ def stage_parser(name):
         positional = "scenarios"
         parser.add_argument("scenarios", nargs="*", metavar="SCENARIO",
                             help="only these scenarios (default: all of them)")
-    elif name == "models":
+    elif name in ("models", "preflight"):
         positional = "simulators"
         parser.add_argument("simulators", nargs="*", metavar="MODEL",
                             help="only these models in models/ (default: all of them)")
@@ -268,18 +269,56 @@ def stage_parser(name):
                             help="simulate FILE too, as the scenario custom (repeatable)")
         parser.add_argument("--file", action="append", default=[], metavar="FILE",
                             help="only this input of the scenarios (repeatable)")
-    if name != "generate":
+    if name not in ("generate", "preflight"):
         parser.add_argument("-n", "--events", type=positive_int, metavar="N",
                             help="the test sample of the first N events of each input")
     if name == "reconstruct":
         parser.add_argument("--compact", metavar="FILE",
                             help="reconstruct in this detector (relative to k4geo unless "
                                  "absolute)")
-    parser.add_argument("-f", "--force", action="store_true",
-                        help="make the outputs again where they exist, and where nothing "
-                             "needs them")
+    if name == "preflight":
+        parser.add_argument("-f", "--force", action="store_true",
+                            help="check the models again, even those that passed as they are")
+    else:
+        parser.add_argument("-f", "--force", action="store_true",
+                            help="make the outputs again where they exist, and where nothing "
+                                 "needs them")
     common_options(parser)
     return parser, positional
+
+
+def describe_broken_models(data_dir):
+    """The preflight's summary of each model in models/ whose description
+    can't be read as a model (step 1), which stops any plan from being made;
+    a ModelError saying so, if there are any."""
+    from .layout import Layout
+    from .models import load_model
+    from . import preflight
+    layout = Layout(data_dir)
+    broken = []
+    for name in model_names():
+        try:
+            load_model(name)
+        except ModelError as error:
+            folder = layout.preflight_model_dir(name)
+            try:
+                preflight.check_description(name)
+                why = str(error)
+            except preflight.StepFailed as failure:
+                why = str(failure)
+            preflight.failed_description(name, folder, why)
+            broken.append("the preflight of %s failed at step 1, description: %s\n  summary: %s"
+                          % (name, why, os.path.join(folder, preflight.SUMMARY)))
+    if broken:
+        raise ModelError("\n".join(broken))
+
+
+def print_preflight_summary(plan):
+    from .layout import Layout
+    from . import preflight
+    path = os.path.join(Layout(plan["data_dir"]).preflight_dir, preflight.SUMMARY)
+    if os.path.isfile(path):
+        print("ddml-bench: the preflight of the models is summed up in %s" % path)
 
 
 def command_stage(argv):
@@ -291,12 +330,15 @@ def command_stage(argv):
     use_config_files(args.config)
     simulators, simulations = [], []
     scenarios = getattr(args, "scenario", None) or getattr(args, "scenarios", None) or []
-    if name == "models":
+    stages, force = [name], [name] if args.force else []
+    if name in ("models", "preflight"):
         for model in args.simulators:
             if model not in model_names():
                 raise UsageError("there is no model '%s'; models/ has: %s"
                                  % (model, ", ".join(model_names()) or "nothing"))
         simulators = args.simulators
+        from .config import load_config
+        describe_broken_models(load_config()["paths"]["data_dir"])
     elif name == "observables":
         simulators = args.simulators
     elif name == "reconstruct":
@@ -308,13 +350,16 @@ def command_stage(argv):
     inputs = getattr(args, "input", [])
     files = getattr(args, "file", [])
     compact = getattr(args, "compact", None)
-    plan = make_plan(simulators=simulators, scenarios=scenarios, stages=[name],
-                     events=getattr(args, "events", None), force=[name] if args.force else [],
+    plan = make_plan(simulators=simulators, scenarios=scenarios, stages=stages,
+                     events=getattr(args, "events", None), force=force,
                      inputs=inputs, files=files, simulations=simulations, compact=compact)
     fetch_published(plan, args)
     binds = folders_of(list(inputs) + list(files) + simulations
                        + ([compact] if compact and os.path.isabs(compact) else []))
-    return run_locally(plan, args.dry_run, binds)
+    status = run_locally(plan, args.dry_run, binds)
+    if name in ("models", "preflight") and not args.dry_run:
+        print_preflight_summary(plan)
+    return status
 
 
 def command_plot(argv):

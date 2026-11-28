@@ -3,8 +3,11 @@ EDM4hep, read and written back as podio does it, category by category.
 
   the fake ddsim's simulations   JSON: an "events" frame for each event, its
                                  number a parameter (as an event's header is
-                                 in EDM4hep), and a "metadata" frame of the
-                                 rest (simulator, detector, seed, models)
+                                 in EDM4hep), its MCParticles and the
+                                 simulated calorimeter hits of its calo_hits
+                                 (getPosition(), getEnergy()), and a
+                                 "metadata" frame of the rest (simulator,
+                                 detector, seed, models)
   the fake k4run's REC files     an "events" tree, written with uproot: a
                                  frame for each entry, its collections the
                                  names before the "." of the branches
@@ -15,12 +18,37 @@ A Writer writes them back as they were read, when it finishes.
 import json
 
 
+class Position(object):
+    def __init__(self, x, y, z):
+        self.x, self.y, self.z = x, y, z
+
+
+class Hit(object):
+    """A simulated calorimeter hit of the fake ddsim's calo_hits."""
+
+    def __init__(self, values):
+        self._values = values
+
+    def getPosition(self):
+        return Position(*self._values[:3])
+
+    def getEnergy(self):
+        return self._values[3]
+
+
 class Collection(object):
-    def __init__(self, size):
+    def __init__(self, size, elements=()):
         self._size = size
+        self._elements = list(elements)
 
     def size(self):
         return self._size
+
+    def __len__(self):
+        return self._size
+
+    def __iter__(self):
+        return iter(self._elements)
 
 
 class Frame(object):
@@ -36,7 +64,10 @@ class Frame(object):
 
     def _sizes(self):
         if self.kind == "json":
-            return {"MCParticles": len(self.data["particles"])}
+            sizes = {"MCParticles": len(self.data["particles"])}
+            for name, hits in (self.data.get("calo_hits") or {}).items():
+                sizes[name] = len(hits)
+            return sizes
         if self.kind == "metadata":
             return {}
         sizes = {}
@@ -51,6 +82,8 @@ class Frame(object):
         sizes = self._sizes()
         if name not in sizes:
             raise KeyError(name)
+        if self.kind == "json" and name in (self.data.get("calo_hits") or {}):
+            return Collection(sizes[name], [Hit(h) for h in self.data["calo_hits"][name]])
         return Collection(sizes[name])
 
 

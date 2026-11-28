@@ -41,6 +41,11 @@ class Stage(object):
     #: tasks of this stage that can't run, because what they need isn't there
     #: and won't be made, make a run fail rather than just being reported
     blocked_is_error = False
+    #: the stage checks what the tasks needing it will run (the preflight of
+    #: the models), rather than making what they read: a task of it made again
+    #: doesn't make them again, and run without the stages needing it (on its
+    #: own), it runs whether or not they still have anything to make
+    checks = False
 
     def add_tasks(self, graph):
         """Add this stage's tasks to the graph."""

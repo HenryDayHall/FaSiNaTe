@@ -12,6 +12,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import types
@@ -450,12 +451,15 @@ def test_caloclouds3_recompiled_runs_the_weights_kept_in_this_repository(monkeyp
 def test_every_model_of_the_repository_runs_in_ddsim(bench):
     """Each of the repository's models, presets or configurations, set up in
     ddsim by the steering file it needs, as its description says, with its
-    weights where it keeps them: in DDML's build, or in this repository."""
+    weights where it keeps them: in DDML's build, or in this repository, each
+    after its preflight (which checks the models' own code with Black)."""
+    pytest.importorskip("black")
     for name in REPO_MODELS:
         bench.add_model(name)
     bench.run("generate_input.sh", "single_photon")
     status, output = bench.run("simulate_models.sh", "-n", "2", "-s", "single_photon")
-    assert "made %d of %d" % (2 * len(REPO_MODELS), 2 * len(REPO_MODELS)) in output, output
+    # each one's preflight, then its two simulations
+    assert "made %d of %d" % (3 * len(REPO_MODELS), 3 * len(REPO_MODELS)) in output, output
     for model in REPO_MODELS:
         with open(os.path.join(bench.repo, "models", model + ".yaml")) as stream:
             described = yaml.safe_load(stream)
@@ -576,9 +580,12 @@ def test_the_environment_check_finds_what_a_model_gets_wrong(bench):
     bench.run("generate_input.sh", "single_photon")
     status, output = bench.run("simulate_models.sh", "--dry-run", "-n", "1", "-s",
                                "single_photon", check=False)
-    assert status == 1, output
+    # Each model's preflight runs first, and stops what it finds wrong, model
+    # by model, so what the check finds here is only said
+    assert status == 0, output
     assert "no_module: model configuration 1 runs the Python module nowhere, which isn't in " \
-        "models/ or on PYTHONPATH" in output, output
+        "models/ or on PYTHONPATH (its preflight, which runs first, will stop it)" \
+        in output, output
     assert ("unnamed_module: model configuration 1 runs the Python module cc3_sf_2a_wrapper, "
             "which ddsim would take from %s, ahead of DDML's" % os.path.join(
                 bench.repo, "models", "cc3_sf_2a_wrapper.py")) in output, output
@@ -608,6 +615,23 @@ def test_the_environment_check_finds_what_a_model_gets_wrong(bench):
     # which is no problem
     assert not [line for line in output.splitlines()
                 if line.startswith("ddml-bench: par04_vae_onnx")], output
+
+    # Run, each model with a problem fails its preflight, and isn't simulated,
+    # and the rest are
+    status, output = bench.run("simulate_models.sh", "-n", "1", "-s", "single_photon",
+                               check=False)
+    assert status == 1, output
+    summary = open(bench.path("preflight_output", "summary.txt")).read()
+    failed = dict((name, step) for name, step in (
+        ("missing_weights", "2. weights"), ("changed_weights", "2. weights"),
+        ("no_module", "5. barrel"), ("unnamed_module", "5. barrel"), ("no_plugin", "5. barrel"),
+        ("electrons", "5. barrel"), ("no_preset", "5. barrel"), ("other_weights", "5. barrel")))
+    for name, step in failed.items():
+        assert re.search(r"\n  %s +FAILED at %s " % (name, re.escape(step)), summary), summary
+        assert bench.files("sim_output", "single_photon", name) == [], name
+    for name in ("caloclouds3_paper", "python_preset", "par04_vae_onnx"):
+        assert re.search(r"\n  %s +passed " % name, summary), summary
+        assert len(bench.files("sim_output", "single_photon", name)) == 4, name
 
 
 def test_a_compiled_model_is_its_python_twins_closure_test(bench):

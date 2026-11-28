@@ -81,7 +81,9 @@ def run_inference(inputs):
     return out.cpu().numpy().astype(np.float32, copy=False).ravel()
 ```
 
-[`models/caloclouds3_recompiled.yaml`](models/caloclouds3_recompiled.yaml) and [`.py`](models/caloclouds3_recompiled.py) are a working example. Keep a model's own code in its one module. The model is then part of every run; `./simulate_models.sh --dry-run my_model` shows what it would simulate.
+[`models/caloclouds3_recompiled.yaml`](models/caloclouds3_recompiled.yaml) and [`.py`](models/caloclouds3_recompiled.py) are a working example. Keep a model's own code in its one module, formatted with [Black](https://black.readthedocs.io). The model is then part of every run; `./simulate_models.sh --dry-run my_model` shows what it would simulate.
+
+Check it first with `./preflight_models.sh my_model`: its description is complete, its weights match their md5 sum, its code conforms to Black and imports, and a 100 GeV shot of each particle it takes into the ECal barrel, straight up and tilted towards the beam, deposits energy from showers the model places. Every run does this before simulating a model, and simulates nothing of it until it passes. What it found, the plots of the shots and where the full logs are go to `preflight_output/summary.txt` in the data folder ([stages.md](docs/stages.md#0-check-the-models)).
 
 Models can also come from DDML directly, with DDML's own inference code and weights and no Python file, as in [`models/bibae_two_angle.yaml`](models/bibae_two_angle.yaml) (`presets: [BIBAE_BARREL]`).
 
@@ -103,10 +105,11 @@ More: [models.md](docs/models.md) (every field, the models, closure tests) · [g
 
 ## How to run locally
 
-Six stages, one script each, run from the repository root. Each skips what is already done, so any of them can be run again after a failure.
+Six stages, one script each, run from the repository root, and the check of each model before it is simulated (stage 0, which stage 3 runs first). Each skips what is already done, so any of them can be run again after a failure.
 
 ```mermaid
 flowchart TD
+    pre["Stage 0: preflight_models.sh"]
     gen["Stage 1: generate_input.sh"]
     g4["Stage 2: simulate_geant4.sh"]
     ml["Stage 3: simulate_models.sh"]
@@ -114,6 +117,7 @@ flowchart TD
     obs["Stage 5: observables_from_reconstruction.sh"]
     plot["Stage 6: plot_observables.sh"]
 
+    pre -->|each model checked| ml
     gen -->|input events| g4
     gen -->|input events| ml
     g4 -->|Geant4 simulations| reco
@@ -151,7 +155,7 @@ detector_configs:
 ```bash
 ./generate_input.sh                   # 1. the inputs of every scenario
 ./simulate_geant4.sh                  # 2. Geant4 (slow)
-./simulate_models.sh                  # 3. every model in models/
+./simulate_models.sh                  # 3. every model in models/ (each checked first, as by ./preflight_models.sh)
 ./reconstruct_simulation.sh           # 4. every simulation
 ./observables_from_reconstruction.sh  # 5. one .npz per simulator
 ./plot_observables.sh                 # 6. figures, metrics.csv and dashboard.html

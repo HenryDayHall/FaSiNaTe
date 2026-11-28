@@ -27,6 +27,11 @@ Everything is written under paths.data_dir:
       each; ddml_timing/plan.py names them, with the endings below
   timing/slurm/                                               its slurm submissions
   timing/summary.csv                                          and the results' table
+  preflight_output/summary.txt                                every model's last preflight
+  preflight_output/<model>/                                   a model's checks before it is
+      simulated (the preflight stage, ddml_bench/preflight.py): summary.txt, the
+      full log preflight.log, the plots of the barrel shots, barrel_<particle>.png,
+      their simulation in barrel/, and passed_<digest>.json once it passes
 
 <sample> is empty for the full inputs, and _n<N> for a test on the first N
 events of each (-n N). It is set once, when an input is simulated: the
@@ -90,8 +95,10 @@ TIMING_RESULT, TIMING_EVENTS, TIMING_LOG, TIMING_FAILED = (".json", ".events.csv
 # The folder of TIMING_DIR with its slurm submissions, beside those of the
 # kinds of node
 TIMING_SUBMISSIONS = "slurm"
+# The checks of each model before it is simulated (the preflight stage)
+PREFLIGHT_DIR = "preflight_output"
 # The folders the harness keeps for itself, which no inputs may go in
-RESERVED_FOLDERS = (SIM_DIR, REC_DIR, OBSERVABLES_DIR, "slurm", TIMING_DIR)
+RESERVED_FOLDERS = (SIM_DIR, REC_DIR, OBSERVABLES_DIR, "slurm", TIMING_DIR, PREFLIGHT_DIR)
 
 # The reference simulator, which no model may be named after
 GEANT4 = "geant4"
@@ -487,6 +494,21 @@ class Layout(object):
     def timing_summary(self):
         """The timing benchmark's table (made by timing_summary.sh)."""
         return os.path.join(self.data_dir, TIMING_DIR, TIMING_SUMMARY)
+
+    # The checks of the models before they are simulated
+
+    @property
+    def preflight_dir(self):
+        return os.path.join(self.data_dir, PREFLIGHT_DIR)
+
+    def preflight_model_dir(self, model):
+        """Where a model's preflight writes its summary, log and plots."""
+        return os.path.join(self.preflight_dir, model)
+
+    def preflight_passed(self, model, digest):
+        """The record that a model passed its preflight, as it is now (digest:
+        ddml_bench/preflight.py's digest()), which marks the task done."""
+        return os.path.join(self.preflight_model_dir(model), "passed_%s.json" % digest)
 
     # Records of files, e.g. in the .npz files
 

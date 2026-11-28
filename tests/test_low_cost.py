@@ -48,9 +48,10 @@ def test_a_low_cost_plan_runs_only_the_models_sample_and_its_plots(full):
                      low_cost=True)
     graph = Graph(plan).find_status()
     todo = collections.Counter(task["stage"] for task in graph.list if task["status"] == TODO)
-    # The model's 2 single-photon inputs and its di-photon input with 2
-    # seeds, reconstructed, measured, and plotted against the full samples
-    assert todo == {"models": 4, "reconstruct": 4, "observables": 1, "plot": 1}
+    # The model's preflight, its 2 single-photon inputs and its di-photon
+    # input with 2 seeds, reconstructed, measured, and plotted against the
+    # full samples
+    assert todo == {"preflight": 1, "models": 4, "reconstruct": 4, "observables": 1, "plot": 1}
     assert all(task["status"] == UNSELECTED for task in graph.list
                if task["stage"] == "geant4" or task["simulator"] in ("geant4", "geant4_2"))
     simulations = dict((task["name"], task) for task in graph.list
@@ -180,11 +181,11 @@ def test_a_new_model_is_tested_on_a_part_of_the_events_against_the_published_one
         "samples of geant4 (to fetch), geant4_2 (to fetch), caloclouds3_paper (to fetch)" \
         in output, output
     assert "  all                        4                      12                                        0.2" in output, output
-    assert "would run 13 task(s)" in output, output
+    assert "would run 14 task(s)" in output, output
     assert not os.path.exists(bench.path("observables"))
 
     status, output = bench.run("low_cost.sh", "another", "-n", "3")
-    assert "fetching 6 published file(s)" in output and "made 10 of 10" in output, output
+    assert "fetching 6 published file(s)" in output and "made 11 of 11" in output, output
     # Only the model's sample was made, and nothing of the others
     assert bench.files("sim_output", "single_photon") == ["another"]
     assert all("_n3" in name for name in bench.files("sim_output", "single_photon", "another"))
@@ -242,7 +243,7 @@ def test_the_plots_of_a_sample_against_the_full_ones(bench, published):
     pinned(bench, published)
     another_model(bench)
     status, output = bench.run("low_cost.sh", "another", "-n", "2")
-    assert "made 10 of 10" in output, output
+    assert "made 11 of 11" in output, output
     shutil.rmtree(bench.path("observables", "plots"))
     status, output = bench.run("plot_observables.sh", "--sample", "another:2", "--format", "png")
     assert "floor" in output, output
@@ -261,6 +262,7 @@ def test_without_published_measurements_it_compares_with_what_is_here(bench):
     assert status == 1 and "no full measurements of Geant4" in output, output
     bench.run("pipeline.sh")
     status, output = bench.run("low_cost.sh", "another", "-n", "2", "--no-fetch")
+    # (its preflight passed in the pipeline's run)
     assert "against the full samples of geant4 (here), geant4_2 (here), caloclouds3_paper " \
         "(here)" in output and "made 10 of 10" in output, output
     # The model's full measurements are there too, but its sample is drawn
@@ -273,7 +275,7 @@ def test_a_low_cost_run_as_slurm_jobs(bench, published):
     pinned(bench, published)
     another_model(bench)
     status, output = bench.run("low_cost.sh", "another", "-n", "3", "--executor", "slurm")
-    assert "submitting 10 job(s)" in output, output
+    assert "submitting 11 job(s)" in output, output
     jobs = bench.slurm_jobs()
     assert all(job["state"] == "COMPLETED" for job in jobs), jobs
     assert "metrics.csv" in bench.files("observables", "plots", "low_cost_n3")

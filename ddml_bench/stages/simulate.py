@@ -76,15 +76,21 @@ class Simulate(Stage):
         given the input's (None for ddsim's own): those."""
         return seeds
 
+    def checked_by(self, graph, simulator):
+        """The keys of the tasks that check a simulator before it simulates
+        anything: none."""
+        return []
+
     def add_tasks(self, graph):
         layout = graph.layout
         for simulator in self.simulators(graph):
+            checks = self.checked_by(graph, simulator)
             for scenario, path, source, seeds in graph.inputs:
                 # Once with each of the input's seeds, or once with ddsim's own
                 for seed in self.seeds(simulator, scenario, seeds):
                     task = graph.add(
                         self.name, layout.simulation(scenario, simulator["name"], path, seed),
-                        [source["key"]] if source else [], scenario=scenario,
+                        ([source["key"]] if source else []) + checks, scenario=scenario,
                         simulator=simulator["name"],
                         name=layout.sample_name(path, seed, scenario),
                         inputs=[path], input_file=path, seed=seed,
@@ -253,6 +259,12 @@ class Models(Simulate):
     def simulators(self, graph):
         return graph.plan["models"]
 
+    def checked_by(self, graph, simulator):
+        """The model's preflight (ddml_bench/stages/preflight.py), which its
+        simulations wait for."""
+        key = getattr(graph, "preflight", {}).get(simulator["name"])
+        return [key] if key else []
+
     def params(self, simulator, layout, scenario, path, events, seed):
         params = Simulate.params(self, simulator, layout, scenario, path, events, seed)
         params.update(presets=list(simulator["presets"]),
@@ -301,11 +313,23 @@ class Models(Simulate):
                                                      os.environ.get("DDML_INSTALL_DIR"))
 
     def check_environment(self, tasks):
-        models = []
+        """What each model needs of the DDML build (check_models()). For the
+        models whose preflight is still to run first, which checks the same
+        and which their simulations wait for, what is wrong is only said: their
+        preflight stops them, and not the rest of the run."""
+        models, checked_first = [], []
         for task in tasks:
-            if task["params"]["model"]["name"] not in [m["name"] for m in models]:
-                models.append(task["params"]["model"])
-        return check_models(models)
+            model = task["params"]["model"]
+            first = any(key.startswith("preflight:") for key in task.get("after") or [])
+            group = checked_first if first else models
+            if model["name"] not in [m["name"] for m in models + checked_first]:
+                group.append(model)
+        problems = check_models(models) if models or not checked_first else []
+        if checked_first:
+            for problem in check_models(checked_first):
+                if problem not in problems:
+                    say("%s (its preflight, which runs first, will stop it)" % problem)
+        return problems
 
     def job_name(self, task):
         return task["simulator"]

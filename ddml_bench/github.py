@@ -12,13 +12,16 @@ the github section of configs/default.yaml has its settings.
                                         into chains, pack them into shards
   ddml-bench github check               build the software, if needed, and check
                                         that it can run the chains
+  ddml-bench github preflight           check the models with chains to run
+                                        before any of them is simulated
   ddml-bench github shard INDEX         run a shard's chains
   ddml-bench github report [--out DIR]  merge, draw and summarise
 
 each with --dir DIR, the folder of the run (default: low_cost_run in the
-repository). check and shard carry on in the environment from setup.sh
-(scripts/run_in_environment.sh) with `ddml-bench github tasks-check FILE`,
-`chains FILE` and, for each chain, `chain FILE ID`.
+repository). check, preflight and shard carry on in the environment from
+setup.sh (scripts/run_in_environment.sh) with `ddml-bench github tasks-check
+FILE`, `preflight-tasks FILE`, `chains FILE` and, for each chain, `chain FILE
+ID`.
 
 A run, job by job:
 
@@ -49,6 +52,16 @@ check   In Key4hep's container with CVMFS (check()). scripts/run_in_environment.
         builds DDML, ILDConfig and the patches where the workflow's cache of
         the software hasn't them, then, in the environment from setup.sh, the
         stages check that it can run every chain.
+
+preflight
+        In the container, after check (preflight()). Each model with chains
+        to run has its preflight (ddml_bench/preflight.py), as the pipeline
+        runs it before simulating it: its description, its weights, its own
+        Python code (Black, which the workflow installs as the plan job's
+        output black says, and importing it) and shots into the ECal barrel.
+        What it found goes to <paths.data_dir>/preflight_output, which the
+        workflow keeps as the artifact low-cost-preflight, and to the job's
+        summary. The shards start only once every model passes.
 
 shard   In the container, a job each (run_shard()). Works out the tasks of its
         chains here (from the plan job's commit and configuration they are the
@@ -182,6 +195,17 @@ def add_summary(text):
     if path:
         with open(path, "a") as stream:
             stream.write(text.rstrip("\n") + "\n\n")
+
+
+def black_requirement(config):
+    """What pip installs for the preflight's check against Black: the major
+    version of preflight.black, or any."""
+    from .preflight import PreflightError, settings
+    try:
+        black = settings(config)["black"]
+    except PreflightError as error:
+        raise GitHubError(str(error))
+    return "black==%s.*" % black if black else "black"
 
 
 def github_settings(config):
@@ -659,6 +683,72 @@ def check_tasks(path):
     say("this environment can run the %d chain(s) of the plan (Key4hep %s, DDML %s)" % (
         len(chains), os.environ.get("DDML_KEY4HEP_RELEASE") or "?",
         os.environ.get("DDML_COMMIT") or "?"))
+    return 0
+
+
+def preflight(work):
+    """The preflight job: each model with chains in the plan checked as the
+    pipeline checks it before simulating it, in the environment; returns 0 if
+    every one passes. What it found goes to the job's summary."""
+    from . import preflight as checks
+    from .graph import Graph
+    record = read_plan(work)
+    models = sorted({chain["model"] for chain in record["chains"]})
+    if not models:
+        say("the plan has no chains to run, so no model needs its preflight")
+        return 0
+    plan = make_plan(simulators=models, events=record["events"], low_cost=True)
+    plan["published"]["enabled"] = False
+    # (with every scenario: the preflight needs none of their inputs)
+    graph = Graph(plan, keep_unavailable=True)
+    context = {"github_run": os.environ.get("GITHUB_RUN_ID") or "?"}
+    tasks = []
+    for model in models:
+        task = graph.by_key[graph.preflight[model]]
+        task["params"]["context"] = context
+        tasks.append(task)
+    path = os.path.join(work, "preflight.json")
+    _write_json(path, {"tasks": tasks})
+    try:
+        return in_the_environment(["preflight-tasks", path], work)
+    finally:
+        lines = ["## Preflight of the models"]
+        for task in tasks:
+            summary = os.path.join(task["params"]["folder"], checks.SUMMARY)
+            if os.path.isfile(summary):
+                with open(summary) as stream:
+                    lines += ["", "```", stream.read().rstrip("\n"), "```"]
+            else:
+                lines += ["", "%s: no summary (see the job's log)" % task["simulator"]]
+        lines += ["", "The plots and the full logs are in the artifact low-cost-preflight."]
+        add_summary("\n".join(lines))
+
+
+def preflight_tasks(path):
+    """In the environment: run the preflight tasks of path; 0 if all pass."""
+    from .executors import run_task
+    from .stages import BY_NAME, StageError
+    tasks = _read_json(path)["tasks"]
+    problems = BY_NAME["preflight"].check_environment(tasks) if tasks else []
+    for problem in dict.fromkeys(problems):
+        say(problem)
+    if problems:
+        say("this environment can't run the preflight (see above)")
+        return 1
+    failed = []
+    for task in tasks:
+        task["redo"] = True
+        try:
+            run_task(task)
+        except StageError as error:
+            say("FAILED: %s" % error)
+            failed.append(task["simulator"])
+    if failed:
+        say("the preflight of %s failed, so none of the chains is run"
+            % " and ".join(failed))
+        return 1
+    say("every model with chains passed its preflight: %s"
+        % ", ".join(task["simulator"] for task in tasks))
     return 0
 
 
@@ -1182,8 +1272,9 @@ def main(argv):
     parser = argparse.ArgumentParser(
         prog="ddml-bench github", description="The low-cost mode on GitHub's runners "
         "(.github/workflows/low-cost.yml; see ddml_bench/github.py and docs/github.md).")
-    parser.add_argument("command", choices=("keys", "plan", "check", "shard", "report",
-                                            "tasks-check", "chains", "chain"))
+    parser.add_argument("command", choices=("keys", "plan", "check", "preflight", "shard",
+                                            "report", "tasks-check", "preflight-tasks",
+                                            "chains", "chain"))
     parser.add_argument("arguments", nargs="*")
     parser.add_argument("--dir", default=DEFAULT_DIR,
                         help="the folder of the run (default: low_cost_run in the repository)")
@@ -1234,11 +1325,16 @@ def main(argv):
         add_summary(plan_summary(record))
         set_outputs(shards=list(range(len(record["shards"]))), chains=len(record["chains"]),
                     report="true" if record["models"] else "false",
-                    models=" ".join(record["models"]))
+                    models=" ".join(record["models"]), black=black_requirement(load_config()))
         return 0
     if args.command == "check":
         arguments(0, "no arguments")
         return check(work)
+    if args.command == "preflight":
+        arguments(0, "no arguments")
+        return preflight(work)
+    if args.command == "preflight-tasks":
+        return preflight_tasks(arguments(1, "the file of the preflight's tasks")[0])
     if args.command == "shard":
         index, = arguments(1, "the number of the shard")
         if not index.isdigit():

@@ -123,6 +123,45 @@ container:
   tmp_dir: ${paths.software_dir}/containers/tmp
   cache_dir: ${paths.software_dir}/containers/cache
 
+# The checks of each model in models/ before it is simulated (the preflight
+# stage: ./preflight_models.sh, and the start of ./simulate_models.sh, the
+# pipeline, low_cost.sh and the GitHub workflow; ddml_bench/preflight.py). In
+# order: 1. its description is well formed and has every field the pipeline
+# needs, its weights and their md5 sum too; 2. its weights are there, with that
+# md5 sum; 3. its own Python inference code, if any, compiles and conforms to
+# Black; 4. that code imports, with its entry point; 5. if DDML runs it in the
+# ECal barrel, a shot of each particle it takes there in each of the
+# directions below deposits energy, from showers DDML has the model place.
+# A model's simulations wait until it passes; it is checked again when its
+# description, code or weights, these settings or the pinned software change.
+# What it found goes to <paths.data_dir>/preflight_output (summary.txt).
+preflight:
+  # The major version of Black (quoted) the code must conform to, as Black's
+  # style changes from year to year; null for whichever is installed. Install
+  # it where the stages run, e.g.
+  #   scripts/run_in_environment.sh python3 -m pip install --user 'black==26.*'
+  black: "26"
+  # Seconds that importing the code (PyTorch, the weights) may take
+  import_timeout: 600
+  barrel:
+    # The ECal barrel, as DDML's geometries name its detector: a model runs in
+    # the barrel where one of its presets or configurations places showers
+    # there, for the particles it gives to the model (applicable_particles)
+    detector: EcalBarrel
+    # Each particle is shot once in each direction (the global ILD frame, y up,
+    # z along the beam), with this energy (GeV), from this point (mm), just
+    # off the interaction point, each shot an event of its own
+    energy: 100
+    position: [2, 0, 0]
+    directions:
+      up: [0, 1, 0]
+      tilted: [0, 1, 0.5]
+    # The simulated calorimeter hits whose energy is summed and drawn: ILD's
+    # ECal and HCal barrels
+    hit_collections: [ECalBarrelSiHitsEven, ECalBarrelSiHitsOdd, HcalBarrelRegCollection]
+    # ddsim's seed for the shots
+    seed: 1
+
 # Full Geant4 simulation of the scenarios, the reference that the models are
 # compared to (the geant4 stage: simulate_geant4.sh, or slurm_pipeline.sh).
 # Every input is simulated twice: as the reference (geant4), and as its second
@@ -628,6 +667,11 @@ slurm:
   # For each stage: the partition, a constraint on the nodes (null for none),
   # the time limit of each job (quoted) and more sbatch options.
   stages:
+    preflight:
+      partition: maxcpu
+      constraint: null
+      time: "02:00:00"
+      sbatch_args: []
     generate:
       partition: maxcpu
       constraint: null

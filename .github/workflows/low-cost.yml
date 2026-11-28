@@ -10,6 +10,10 @@
 #             and pack them into shards; a sample an earlier run made of the
 #             same model, software and settings is taken rather than made
 #   software  build DDML, ILDConfig and the patches once, in the cache
+#   preflight check each model with chains before any is simulated: its
+#             description, weights, own Python code (Black, importing it) and
+#             shots into the ECal barrel; the shards wait for every model to
+#             pass, and its findings are the artifact low-cost-preflight
 #   shard     a job per shard, running its chains in Key4hep's container
 #   report    merge the measurements, draw the plots, write the summary
 #   keep      keep each sample made, as an artifact, for later runs
@@ -68,6 +72,7 @@ jobs:
       shards: ${{ steps.plan.outputs.shards }}
       chains: ${{ steps.plan.outputs.chains }}
       report: ${{ steps.plan.outputs.report }}
+      black: ${{ steps.plan.outputs.black }}
       software-key: ${{ steps.keys.outputs.software-key }}
     steps:
       - uses: actions/checkout@v7
@@ -163,9 +168,54 @@ jobs:
           path: external
           key: ${{ needs.plan.outputs.software-key }}
 
+  # Every model with chains checked before any of them is simulated
+  # (ddml_bench/preflight.py): the shards start only if each one passes
+  preflight:
+    needs: [plan, software]
+    if: needs.plan.outputs.chains != '0'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    container:
+      image: ghcr.io/key4hep/key4hep-images/alma9-cvmfs:latest
+      options: --privileged
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - name: Mount CVMFS
+        run: /mount.sh
+      - uses: actions/cache/restore@v6
+        with:
+          path: external
+          key: ${{ needs.plan.outputs.software-key }}
+          fail-on-cache-miss: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: low-cost-plan
+          path: low_cost_run
+      - name: Install Black, which the models' Python code is checked against
+        env:
+          BLACK: ${{ needs.plan.outputs.black }}
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || dnf install -y -q python3-pyyaml
+          scripts/run_in_environment.sh python3 -m pip install --user --quiet "$BLACK"
+      - name: Check the models
+        run: python3 scripts/ddml-bench github preflight
+      # What it found, each model's summary, full log and plots of the barrel
+      # shots, whether they passed or not
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: low-cost-preflight
+          path: data/preflight_output/
+          retention-days: 30
+          overwrite: true
+          if-no-files-found: warn
+
   shard:
     name: shard ${{ matrix.shard }}
-    needs: [plan, software]
+    needs: [plan, software, preflight]
     if: needs.plan.outputs.chains != '0'
     runs-on: ubuntu-24.04
     # GitHub's limit is 6 h: a shard stops its chains at github.stop_hours

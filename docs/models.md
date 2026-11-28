@@ -18,7 +18,7 @@ Add a YAML file to `models/`; its file name becomes the model's name in commands
 - `closure` (optional): the model this one is the [closure test](#closure-tests) of, `of`, and whether their events should be the same where both are simulated with the same seeds, `identical`;
 - `plot`: its colour and line style in the figures (each model needs a distinct line style as well as a colour, so curves can be told apart without colour).
 
-The weights are found in the DDML clone, where building DDML downloads DDML's own into its `models/` folder, so put new weights there too, or, with `ddml.weights_in: fasinate`, in this repository, e.g. in `models/weights/` (under GitHub's 100 MB per file), which a model with [its own inference code](#a-models-own-inference-code) can load from there. The model then takes part in stages 3–6 automatically.
+The weights are found in the DDML clone, where building DDML downloads DDML's own into its `models/` folder, so put new weights there too, or, with `ddml.weights_in: fasinate`, in this repository, e.g. in `models/weights/` (under GitHub's 100 MB per file), which a model with [its own inference code](#a-models-own-inference-code) can load from there. The model then takes part in stages 3–6 automatically, once it passes its [preflight](stages.md#0-check-the-models) (`./preflight_models.sh <model>`), which every run makes before simulating it. That needs `ddml.weights` and `ddml.weights_md5`, and a model's own code formatted with Black.
 
 ### A model's own inference code
 

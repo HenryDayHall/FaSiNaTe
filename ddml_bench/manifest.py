@@ -31,8 +31,11 @@ The files of the data folder (paths.data_dir) go into records:
                                   samples' .npz files; slurm.tar: the
                                   submissions and their slurm logs;
                                   timing_logs.tar: the rest of timing/, its
-                                  runs' logs and slurm submissions), members
-                                  named by their paths in the data folder
+                                  runs' logs and slurm submissions;
+                                  preflight_output.tar: the models' checks
+                                  before they were simulated, with their logs
+                                  and plots), members named by their paths in
+                                  the data folder
 
 Each record gets OUT/<record>/manifest.json; with --stage, OUT/<record>/ also
 gets the files to upload under the flat names the manifest gives them: links

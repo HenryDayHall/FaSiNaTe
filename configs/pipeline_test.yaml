@@ -78,6 +78,8 @@ timing:
 
 slurm:
   stages:
+    preflight:
+      time: "00:30:00"
     generate:
       time: "00:15:00"
     geant4:

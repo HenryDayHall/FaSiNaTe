@@ -41,10 +41,10 @@ def read_metrics(path):
 
 def test_pipeline_runs_every_stage(bench):
     status, output = bench.run("pipeline.sh", "--dry-run")
-    assert "would run 31 task(s)" in output, output
+    assert "would run 32 task(s)" in output, output
 
     status, output = bench.run("pipeline.sh")
-    assert "made 31 of 31" in output, output
+    assert "made 32 of 32" in output, output
     assert bench.files("input_single_particle_gun") == sorted(
         name + ending for name in INPUTS + [DI_PHOTON_INPUT] for ending in (".h5", ".slcio"))
     assert bench.files("sim_output", "single_photon", "geant4") == sorted(
@@ -252,8 +252,11 @@ def test_a_model_added_to_fetched_measurements_runs_only_its_own_tasks(bench):
 
     status, output = bench.run("pipeline.sh", "--dry-run")
     assert "would run 1 task(s)" in output and "plot         every .npz file" in output, output
-    assert "not needed, so not made, as what they are for is done: the measurements of geant4, " \
-        "the measurements of geant4_2, the measurements of caloclouds3_paper" in output, output
+    # (nor the model's preflight, as nothing of it is to be simulated)
+    assert "  preflight         0      0       0          1            0" in output, output
+    assert "not needed, so not made, as what they are for is done: the measurements of " \
+        "caloclouds3_paper, the measurements of geant4, the measurements of geant4_2" \
+        in output, output
     status, output = bench.run("simulate_geant4.sh", "--dry-run")
     assert "everything selected is done or not needed, so there is nothing to run" in output, \
         output
@@ -263,15 +266,16 @@ def test_a_model_added_to_fetched_measurements_runs_only_its_own_tasks(bench):
     with open(os.path.join(bench.repo, "models", "another.yaml"), "w") as stream:
         stream.write(model.replace('linestyle: "-."', 'linestyle: "--"'))
     status, output = bench.run("pipeline.sh", "--dry-run")
-    # Its 4 simulations and reconstructions, its measurements and the plots
-    assert "would run 10 task(s)" in output, output
+    # Its preflight, 4 simulations and reconstructions, its measurements and
+    # the plots
+    assert "would run 11 task(s)" in output, output
     status, output = bench.run("simulate_models.sh", "--dry-run")
-    assert "would run 4 task(s)" in output, output
+    assert "would run 5 task(s)" in output, output
     assert "models       caloclouds3_paper" not in output, output
     status, output = bench.run("slurm_pipeline.sh", "--dry-run")
-    assert "would submit 10 job(s)" in output, output
+    assert "would submit 11 job(s)" in output, output
     status, output = bench.run("pipeline.sh")
-    assert "made 10 of 10" in output, output
+    assert "made 11 of 11" in output, output
 
     for scenario in ("single_photon", "di_photon"):
         assert bench.files("sim_output", scenario) == ["another"]
@@ -338,7 +342,7 @@ def test_a_failure_stops_only_what_needs_it(bench):
     bench.fail_ddsim("geant4 *en80*")
     status, output = bench.run("pipeline.sh", check=False)
     assert status == 1, output
-    assert "made 24 of 31" in output, output
+    assert "made 25 of 32" in output, output
     log = bench.path("sim_output", "single_photon", "geant4", INPUTS[1] + ".log")
     assert "# FAILED" in open(log).read()
     # Nothing half made is left, and only the Geant4 simulation of en80 is missing
@@ -419,9 +423,9 @@ def test_inputs_made_elsewhere_are_simulated_each_with_its_own_seed(bench):
     assert "left out" not in output, output
     # The two inputs made elsewhere are done, the guns' three are to make
     assert stage_line("generate", 2, 3) in output, output
-    assert "would run 43 task(s)" in output, output
+    assert "would run 44 task(s)" in output, output
     status, output = bench.run("pipeline.sh")
-    assert "made 43 of 43" in output, output
+    assert "made 44 of 44" in output, output
     for simulator, ending in (("geant4", ".edm4hep.root"), ("caloclouds3_paper", ".root")):
         assert bench.files("sim_output", "tau_pairs", simulator) == sorted(
             name + e for name in TAU_SIMULATIONS for e in (ending, ".log"))
@@ -508,7 +512,7 @@ def test_a_scenario_without_its_inputs_is_left_out_and_the_rest_runs(bench):
             "it alone: its 2 inputs, made outside this repository, aren't in %s (taus_a.slcio, "
             "taus_b.slcio); put them there, or publish them in a record of `published`, to run "
             "it" % bench.path("input_physics_samples")) in output, output
-    assert "made 31 of 31" in output, output
+    assert "made 32 of 32" in output, output
     with np.load(bench.path("observables", "geant4.npz")) as data:
         assert not [key for key in data.files if key.startswith(("pi0", "tau_pairs"))]
     # Asking for it is an error

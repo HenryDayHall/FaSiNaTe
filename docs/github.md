@@ -30,6 +30,7 @@ To run it by hand, use *Run workflow* on its page under *Actions*. That button a
 | --- | --- | --- | --- |
 | plan | the runner | Fetches what is published (cached between runs), checks that the software is pinned to what the published measurements were made with, and chooses the models. Splits each model's sample into chains (a simulation, its reconstruction, and the measurement of that one reconstruction). Packs the chains into shards. | ~2 min |
 | software | Key4hep's container | Builds DDML, ILDConfig and the patches against the pinned Key4hep release, once, into the cache, without their build folders. Then checks that what is cached can run every chain. | ~1 min when cached; the first build, longer |
+| preflight | Key4hep's container | Checks each model with chains before any of it is simulated ([stages.md](stages.md#0-check-the-models)), with Black installed as the plan's `black` output says. Keeps what it found, the summaries, full logs and plots of the barrel shots, as the artifact `low-cost-preflight`, and puts the summaries in the job's summary. The shards start only if every model passes. | a few minutes |
 | shard | Key4hep's container, a job each | Runs its chains, `github.parallel` at once, the longest first. Keeps each chain's measurement and logs, and deletes the simulation and reconstruction. | up to `github.shard_hours` |
 | report | the runner | Merges each model's measurements into one `.npz` and draws it against the full samples. Writes the summary. | ~5 min |
 | keep | the runner | Keeps each sample made, as an artifact, for 90 days. | seconds |
@@ -69,6 +70,7 @@ There are no Pareto fronts yet: the model isn't timed on the runners.
 
 ## When something fails
 
+- **A model that fails its preflight** fails the preflight job, so no shard runs. The job's summary says which step failed and why; the artifact `low-cost-preflight` has each model's `preflight.log` and the plots of its barrel shots. Run `./preflight_models.sh <model>` locally to try again faster.
 - **A chain that fails** fails its shard, which still runs its other chains and uploads what it made. The end of the failed chain's log is printed in the shard's log. Its logs (`logs/<chain>.log`, `.simulation.log`, `.reconstruction.log`) are in the shard's `low-cost-parts-<n>` artifact.
 - **The report** draws the models whose chains are all there. For the others, it lists the chains missing and fails.
 - **Re-run failed jobs** re-runs the failed shards, then the report. A shard re-run takes the chains its earlier attempt made, and runs the rest.

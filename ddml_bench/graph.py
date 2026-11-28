@@ -23,6 +23,13 @@ exists stays done even if something it needs is still to be made, unless that
 is made anew (changes): forced (--force), or made from something made anew;
 then it is made again too.
 
+The preflight of each model (ddml_bench/preflight.py), which the model's
+simulations wait for, comes first, and with the models stage whenever that is
+selected. It is intermediate, as below: a model is checked when something of
+it is still to be simulated, or when the preflight runs on its own. A model
+checked again (it changed, or --force) doesn't make what was simulated with it
+again: it is a check (checks), not what the simulations read.
+
 The simulations and reconstructions are intermediate: one that isn't there is
 made only if something still to be made needs it, or if nothing needs it at
 all (the reconstructions of a scenario that nothing measures), whichever
@@ -61,7 +68,7 @@ inputs, by name is an error.
 import os
 import sys
 
-from . import measure
+from . import measure, preflight
 from .config import REPO_DIR, ConfigError, load_config
 from .layout import (CUSTOM_SCENARIO, GEANT4, REC_SUFFIX, SECOND_GEANT4, Layout, LayoutError,
                      second_sample_seed, simulation_stem, simulations_in)
@@ -140,6 +147,10 @@ def make_plan(simulators=(), scenarios=(), stages=(), events=None, force=(), inp
     selected = stage_list(stages, "--stages") if stages else list(STAGE_NAMES)
     if not selected:
         raise PlanError("--stages names no stage")
+    if "models" in selected and "preflight" not in selected:
+        # The models' simulations wait for their preflight, which runs where
+        # they still have something to simulate
+        selected = stage_list(selected + ["preflight"], "--stages")
     forced = stage_list(force, "--force")
     for stage in forced:
         if stage not in selected:
@@ -274,6 +285,10 @@ def make_plan(simulators=(), scenarios=(), stages=(), events=None, force=(), inp
                         "reconstruction.extra_args has --lcioOutput only")
 
     published = published_settings(config)
+    try:
+        checks = preflight.settings(config)
+    except preflight.PreflightError as error:
+        raise PlanError(str(error))
 
     settings = config.get("slurm") or {}
     if slurm:
@@ -304,6 +319,7 @@ def make_plan(simulators=(), scenarios=(), stages=(), events=None, force=(), inp
         "reconstruction": reconstruction,
         "observables": {"observables": observables, "scenarios": measured},
         "published": published,
+        "preflight": checks,
         "slurm": settings,
     }
     # Names every file, and checks that no two tasks make the same one, with
@@ -492,6 +508,7 @@ class Graph(object):
         self.reconstructions = {}  # (simulator, scenario): [reconstruction tasks]
         self.measuring = []  # observables tasks
         self.given = set()  # keys of the reconstructions of simulations given directly
+        self.preflight = {}  # model: the key of its preflight task
         try:
             for stage in STAGES:
                 stage.add_tasks(self)
@@ -600,7 +617,8 @@ class Graph(object):
                 task.update(status=TODO, fetch=True,
                             why="to fetch from %s" % fetching[task["output"]])
                 continue
-            task["changes"] = exists or bool(changing) or forced_here
+            # (A check made again changes nothing made after it)
+            task["changes"] = (exists or bool(changing) or forced_here) and not stage.checks
             if not self.selected(task):
                 task.update(status=UNSELECTED, why=why)
             elif missing and not stage.takes_what_there_is:
@@ -633,6 +651,11 @@ class Graph(object):
         for task in reversed(self.list):
             if (task["status"] == DONE or task["changes"] or task["key"] in self.given
                     or not BY_NAME[task["stage"]].intermediate or not users[task["key"]]):
+                continue
+            if BY_NAME[task["stage"]].checks and task["status"] == TODO and (
+                    task["stage"] in self.plan["force"] or not any(
+                        user["stage"] in self.plan["stages"] for user in users[task["key"]])):
+                # A check forced, or run on its own, without what it checks
                 continue
             found = []
             for user in users[task["key"]]:

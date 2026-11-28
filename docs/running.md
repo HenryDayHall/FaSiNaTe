@@ -8,6 +8,7 @@ Every stage is one script at the top of the repository. The scripts take their s
 
 ```mermaid
 flowchart TD
+    pre["Stage 0: preflight_models.sh"]
     gen["Stage 1: generate_input.sh"]
     g4["Stage 2: simulate_geant4.sh"]
     ml["Stage 3: simulate_models.sh"]
@@ -15,6 +16,7 @@ flowchart TD
     obs["Stage 5: observables_from_reconstruction.sh"]
     plot["Stage 6: plot_observables.sh"]
 
+    pre -->|each model checked| ml
     gen -->|input events| g4
     gen -->|input events| ml
     g4 -->|Geant4 simulations| reco
@@ -25,6 +27,7 @@ flowchart TD
 
 | Stage | Script | Reads | Writes (under `paths.data_dir`) |
 |---|---|---|---|
+| 0 | `preflight_models.sh` | `models/*.yaml`, a model's own code and weights | `preflight_output/summary.txt`, and `preflight_output/<model>/`: its summary, full log, plots of its barrel shots |
 | 1 | `generate_input.sh` | `scenarios` in the configuration | `input_single_particle_gun/*.slcio` (+ `.h5` truth); the physics samples, made elsewhere, are taken as they are from `input_physics_samples/` |
 | 2 | `simulate_geant4.sh` | scenario inputs | `sim_output/<scenario>/geant4/*.edm4hep.root`, and Geant4's second sample in `sim_output/<scenario>/geant4_2/` |
 | 3 | `simulate_models.sh` | scenario inputs, `models/*.yaml` | `sim_output/<scenario>/<model>/*.root` |
@@ -32,7 +35,7 @@ flowchart TD
 | 5 | `observables_from_reconstruction.sh` | finished reconstructions | `observables/<simulator>.npz` |
 | 6 | `plot_observables.sh` | `observables/*.npz` | `observables/plots/*.{pdf,png}`, `dashboard.html`, `metrics.csv`, `fits.csv` |
 
-Stages 2 and 3 are independent of each other; a "simulator" below means either Geant4 (`geant4`, or its second sample, `geant4_2`) or one of the models. [`pipeline.sh`](#the-whole-pipeline-at-once) runs all six stages in one go, and on a slurm cluster [`slurm_pipeline.sh`](#the-whole-pipeline-at-once) runs them as jobs of one file each.
+Stage 0 checks each model before it is simulated ([stages.md](stages.md#0-check-the-models)): stage 3, the pipeline and the low-cost mode run it first, for each model with something still to simulate, and simulate nothing of a model until it passes. Stages 2 and 3 are independent of each other; a "simulator" below means either Geant4 (`geant4`, or its second sample, `geant4_2`) or one of the models. [`pipeline.sh`](#the-whole-pipeline-at-once) runs all six stages in one go, and on a slurm cluster [`slurm_pipeline.sh`](#the-whole-pipeline-at-once) runs them as jobs of one file each.
 
 ## Test runs and options
 
@@ -168,6 +171,9 @@ Everything is written under `paths.data_dir`:
 │   ├── <simulator>.npz            # stage 5
 │   └── plots/                     # stage 6: figures, dashboard.html, metrics.csv, fits.csv and pareto.csv
 ├── timing/                        # the timing benchmark's results, and summary.csv
+├── preflight_output/
+│   ├── summary.txt                # stage 0: every model's last preflight
+│   └── <model>/                   # summary.txt, preflight.log, barrel_<particle>.png, barrel/ (the shots' simulation and ddsim.log)
 └── slurm/
     └── pipeline_<time>/           # submissions of slurm_pipeline.sh (slurm.log_dir)
 ```

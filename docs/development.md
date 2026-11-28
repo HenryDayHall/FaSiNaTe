@@ -25,14 +25,15 @@ python3 -m pip install pyyaml numpy awkward uproot matplotlib h5py particle pyte
 python3 -m pytest tests
 ```
 
-The tests run the scripts end to end, `pipeline.sh` and `slurm_pipeline.sh` included, through the same launcher and `setup.sh` as on the cluster, with only the programs at the ends faked ([`tests/fakes/`](../tests/fakes/)): `ddsim` (which runs the steering files as `ddsim` does, with stand-ins for DD4hep's `DDSim` and `g4units`), `k4run` (which writes real EDM4hep-style ROOT files, so the observables and plots run for real), pyLCIO, DDML's Python package (with DDML's presets), and slurm's `sbatch` and `squeue`. They need no Key4hep, CVMFS or slurm, and run in CI on every push ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)), with shellcheck on the scripts. The jobs of the GitHub workflow run there too, each in a copy of the repository of its own, as on runners of their own (`tests/test_github.py`, with a stand-in for GitHub's `gh`).
+The tests run the scripts end to end, `pipeline.sh` and `slurm_pipeline.sh` included, through the same launcher and `setup.sh` as on the cluster, with only the programs at the ends faked ([`tests/fakes/`](../tests/fakes/)): `ddsim` (which runs the steering files as `ddsim` does, with stand-ins for DD4hep's `DDSim` and `g4units`), `k4run` (which writes real EDM4hep-style ROOT files, so the observables and plots run for real), pyLCIO, podio's reader, a PyTorch that loads anything (for importing the models' own code), DDML's Python package (with DDML's presets), and slurm's `sbatch` and `squeue`. They need no Key4hep, CVMFS or slurm, and run in CI on every push ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)), with shellcheck on the scripts. The jobs of the GitHub workflow run there too, each in a copy of the repository of its own, as on runners of their own (`tests/test_github.py`, with a stand-in for GitHub's `gh`).
 
 ## Repository layout
 
 ```
+├── preflight_models.sh                  # stage 0: each model checked before it is simulated
 ├── generate_input.sh                   # stage 1
 ├── simulate_geant4.sh                  # stage 2
-├── simulate_models.sh                  # stage 3
+├── simulate_models.sh                  # stage 3 (with stage 0 first)
 ├── reconstruct_simulation.sh           # stage 4
 ├── observables_from_reconstruction.sh  # stage 5
 ├── plot_observables.sh                 # stage 6

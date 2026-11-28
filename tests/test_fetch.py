@@ -103,13 +103,14 @@ def test_a_fresh_data_folder_fetches_what_is_published(bench, published):
     status, output = bench.run("pipeline.sh")
     assert "everything selected is done" in output and "fetching" not in output, output
 
-    # A model added runs only its own tasks, against the published measurements
+    # A model added runs only its own tasks (its preflight first), against the
+    # published measurements
     with open(os.path.join(bench.repo, "models", "caloclouds3_paper.yaml")) as stream:
         model = stream.read().replace('linestyle: "-."', 'linestyle: "--"')
     with open(os.path.join(bench.repo, "models", "another.yaml"), "w") as stream:
         stream.write(model)
     status, output = bench.run("pipeline.sh")
-    assert "made 10 of 10" in output and "fetching" not in output, output
+    assert "made 11 of 11" in output and "fetching" not in output, output
     assert sorted({row["simulator"] for row in read_metrics(
         bench.path("observables", "plots", "metrics.csv"))}) == [
         "another", "caloclouds3_paper", "geant4_2"]
@@ -135,7 +136,7 @@ def test_published_measurements_of_other_settings_arent_used(bench, published):
         "energy differ from this configuration's" in output, output
     # The inputs are still fetched, and everything else made from them
     assert "would fetch 3 published file(s)" in output, output
-    assert "would run 31 task(s)" in output, output
+    assert "would run 32 task(s)" in output, output
 
 
 def test_published_inputs_made_otherwise_arent_used(bench, published):
@@ -166,7 +167,7 @@ def test_measurements_of_other_inputs_than_yours_arent_used(bench, published):
 def test_what_a_run_makes_itself_isnt_fetched(bench, published):
     fetching(bench, published)
     status, output = bench.run("pipeline.sh", "--dry-run", "--no-fetch")
-    assert "would fetch" not in output and "would run 31 task(s)" in output, output
+    assert "would fetch" not in output and "would run 32 task(s)" in output, output
     status, output = bench.run("pipeline.sh", "--dry-run", "-f", "observables")
     assert "would fetch 3 published file(s)" in output, output
     # -n N: the test sample's measurements aren't published, its inputs are

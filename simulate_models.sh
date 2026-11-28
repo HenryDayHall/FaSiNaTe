@@ -39,6 +39,11 @@
 # and the plugins load those weights. Make the scenarios' inputs first with
 # ./generate_input.sh.
 #
+# Each model's preflight runs first, as ./preflight_models.sh runs it, where it
+# hasn't passed as the model is now, and the model's simulations wait for it
+# to pass: see <paths.data_dir>/preflight_output/summary.txt. -f forces the
+# simulations again, not the preflight.
+#
 # Run it from the repository root, or submit it from there with sbatch. The
 # environment is checked where the models run, so --dry-run also builds DDML
 # first if needed.

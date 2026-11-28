@@ -39,6 +39,16 @@ $FAKE_CONTROL/ddsim_event_seconds it takes that long over each event, and with
 $FAKE_CONTROL/ddsim_run_inference it calls the run_inference() of each barrel
 configuration's embedded-Python module once per event, as DDML does for each
 shower.
+
+Each shower a model places in the barrel deposits energy: each event of a
+model's simulation gets calo_hits, {collection: [[x, y, z, energy], ...]},
+the hits of ILD's ECal
+barrel (ECalBarrelSiHitsEven and ECalBarrelSiHitsOdd, its layers in turn)
+along the line of flight of each of the event's particles that a barrel
+configuration takes (applicable_particles), which tests/fakes/python/podio
+reads. With $FAKE_CONTROL/ddsim_no_showers the models place no showers (no
+lines, no hits), as if DDML gave Geant4 everything, and with
+$FAKE_CONTROL/ddsim_no_hits they place them without depositing anything.
 """
 
 import fnmatch
@@ -179,6 +189,43 @@ if os.path.exists(os.path.join(control_dir, "ddsim_run_inference")):
         module = dict(config.plugin_properties).get("PythonModule")
         if module:
             inference[index] = importlib.import_module(module).run_inference
+no_showers = os.path.exists(os.path.join(control_dir, "ddsim_no_showers"))
+no_hits = no_showers or os.path.exists(os.path.join(control_dir, "ddsim_no_hits"))
+# The PDG codes of the particles the barrel's configurations take
+PDG = {"gamma": 22, "e-": 11, "e+": -11, "pi+": 211, "pi-": -211, "neutron": 2112}
+taken = set(PDG.get(p) for config, barrel in zip(configs, in_barrel) if barrel
+            for p in config.applicable_particles)
+
+
+def shower_hits(particle):
+    """The hits of a made-up shower along a particle's line of flight, a hit in
+    each of 30 layers from the ECal barrel's front face (1805 mm from the beam,
+    6 mm apart), sharing 1% of its energy."""
+    px, py, pz = particle["momentum"]
+    transverse = (px * px + py * py) ** 0.5
+    if transverse == 0:
+        return []
+    energy = (px * px + py * py + pz * pz) ** 0.5
+    x0, y0, z0 = particle.get("vertex") or (0.0, 0.0, 0.0)
+    hits = []
+    for layer in range(30):
+        scale = (1805.0 + 6.0 * layer) / transverse
+        hits.append([x0 + px * scale, y0 + py * scale, z0 + pz * scale,
+                     0.01 * energy * (layer + 1) * (30 - layer) / 4960.0])
+    return hits
+
+
+if configs:
+    for event in events:
+        # (as EDM4hep keeps a collection of the sensitive detector's hits, if
+        # empty, in every event)
+        found = {"ECalBarrelSiHitsEven": [], "ECalBarrelSiHitsOdd": []}
+        for particle in event["particles"] if not no_hits else ():
+            if particle.get("generatorStatus", 1) == 1 and particle.get("PDG") in taken:
+                for layer, hit in enumerate(shower_hits(particle)):
+                    name = "ECalBarrelSiHits" + ("Even" if layer % 2 == 0 else "Odd")
+                    found[name].append(hit)
+        event["calo_hits"] = found
 started = time.time()
 for number in range(1, len(events) + 1):
     print("GenerationInit   INFO  +++ Initializing event %d. Within run:0 event %d."
@@ -187,7 +234,7 @@ for number in range(1, len(events) + 1):
     print("ParticleHandler  INFO  +++ Event %d Begin event action. Access event related "
           "information." % (number - 1))
     for run_inference, barrel in zip(inference, in_barrel):
-        if not barrel:
+        if not barrel or no_showers:
             continue
         if run_inference is not None:
             run_inference([numpy.array([[50.0]], dtype=numpy.float32),

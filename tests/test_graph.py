@@ -76,16 +76,19 @@ def fetched(configured, monkeypatch):
 def test_a_task_per_file_each_after_what_it_needs(configured):
     graph = Graph(make_plan())
     # single_photon's 2 inputs, and di_photon's 1, simulated with 2 seeds, by
-    # Geant4 twice (its second sample) and by the model
+    # Geant4 twice (its second sample) and by the model, after its preflight
     assert collections.Counter(task["stage"] for task in graph.list) == {
-        "generate": 3, "geant4": 8, "models": 4, "reconstruct": 12, "observables": 3, "plot": 1}
+        "preflight": 1, "generate": 3, "geant4": 8, "models": 4, "reconstruct": 12,
+        "observables": 3, "plot": 1}
     assert collections.Counter(task["simulator"] for task in graph.list
                                if task["stage"] == "geant4") == {"geant4": 4, "geant4_2": 4}
     seen = set()
     for task in graph.list:
         assert set(task["needs"]) <= seen, "%s comes before what it needs" % task["key"]
         for key in task["needs"]:
-            assert graph.by_key[key]["output"] in task["inputs"]
+            # (the record that a model passed its preflight isn't read)
+            if graph.by_key[key]["stage"] != "preflight":
+                assert graph.by_key[key]["output"] in task["inputs"]
         seen.add(task["key"])
     assert len(set(task["output"] for task in graph.list)) == len(graph.list)
 
@@ -100,7 +103,8 @@ def test_with_nothing_on_disk_everything_is_to_do(configured):
 def test_test_samples_are_named_alike_at_every_stage(configured):
     graph = Graph(make_plan(events=5))
     for task in graph.list:
-        if task["stage"] != "generate":
+        # (a model's preflight is the same for every sample)
+        if task["stage"] not in ("generate", "preflight"):
             assert "_n5" in os.path.basename(task["output"]), task["output"]
         assert "_n5_n5" not in task["output"]
     for task in graph.list:

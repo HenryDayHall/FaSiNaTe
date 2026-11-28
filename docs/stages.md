@@ -2,6 +2,26 @@
 
 The benchmark follows the paper *"A First Full Physics Benchmark for Highly Granular Calorimeter Surrogates"*: its single-photon shower profiles, energy linearity and resolution, and intrinsic shower angles, its di-photon separation, and the reconstructed π⁰s of its τ-pair physics benchmark. This page goes through each stage of [the pipeline](running.md): what it makes, what is measured, and the figures.
 
+## 0. Check the models
+
+```bash
+./preflight_models.sh --dry-run          # the models that would be checked
+./preflight_models.sh                    # every model in models/ not checked as it is now
+./preflight_models.sh my_model -f        # this one, again
+```
+
+Every model in `models/` is checked before it is simulated ([`ddml_bench/preflight.py`](../ddml_bench/preflight.py)). The steps run in order, each only once those before it pass:
+
+1. **Description.** `models/<model>.yaml` is well formed YAML, with no key twice, and has every field the pipeline needs, `ddml.weights` and `ddml.weights_md5` among them.
+2. **Weights.** The weights are where `ddml.weights` (and `ddml.weights_in`) say, with that md5 sum.
+3. **Python code.** If the model has [its own inference code](models.md#a-models-own-inference-code), each module compiles and conforms to [Black](https://black.readthedocs.io), of the major version `preflight.black` names (`"26"`), as Black's style changes from year to year. Install it where the stages run, e.g. `scripts/run_in_environment.sh python3 -m pip install --user 'black==26.*'`.
+4. **Import.** Each module imports from `models/`, as `ddsim` imports it, in a Python of its own, and has the entry point DDML calls (its configuration's `EntryPoint`, `run_inference` by default).
+5. **Barrel.** DDML has what the model needs (the check `simulate_models.sh` makes of the environment). If one of the model's presets or configurations places showers in the ECal barrel, each particle it gives the model there is shot at 100 GeV from just off the interaction point, (2, 0, 0) mm: once straight up, (0, 1, 0), and once tilted towards the beam, (0, 1, 0.5), each shot an event, simulated as stage 3 simulates. Each shot must have DDML place a shower of the model in the barrel and deposit energy in ILD's barrel calorimeter hits. Energy alone wouldn't do, as Geant4 simulates whatever the model doesn't take. The hits of each particle's shots are drawn, from the side and along the beam, to look at by eye. A model that DDML doesn't run in the barrel skips the shots. The `preflight` section of the configuration has the settings.
+
+What it found goes to `preflight_output/` in the data folder. `summary.txt` there has a line for each model. Each model's folder has its own `summary.txt` (each step, what it found, the plots, and where the full logs are), `preflight.log` (each step's whole output: Black's diff, the import's traceback, the check of DDML), `barrel_<particle>.png`, and `barrel/` with the shots' input, simulation and `ddsim.log`. Run as slurm jobs, each job's log is in `slurm.log_dir` too.
+
+A model that passes gets `passed_<digest>.json`, and isn't checked again until its description, code or weights, the preflight settings or the pinned software change. Its simulations wait for it to pass: a model that fails is reported and not simulated, and the rest of the run goes on. A model checked again, or forced (`-f`), doesn't make what was already simulated with it again. `simulate_models.sh`, `pipeline.sh`, `slurm_pipeline.sh` and the low-cost mode check a model only when something of it is still to be simulated; `preflight_models.sh` checks every model that hasn't passed as it is now.
+
 ## 1. Generate the inputs
 
 ```bash
@@ -58,7 +78,7 @@ Geant4 is slow, so on a slurm cluster use `slurm_pipeline.sh --stages geant4`, w
 ./simulate_models.sh -s single_photon caloclouds3 # one scenario, one model
 ```
 
-Before simulating, it checks that the DDML libraries, the `ddml` Python package and the plugin of each preset or configuration come from the configured build, that each gives DDML the particles the model is for, that each model's weights match their recorded md5 sum, that the weights each plugin loads (its `ModelPath`) are those weights, and that the Python module each embedded-Python plugin runs is there (and says where: in `models/`, or DDML's). Each model is simulated in the detector it was trained for (`fixed_at_training.detector.compact_file`).
+Each model's [preflight](#0-check-the-models) runs first, where the model has something still to simulate and hasn't passed as it is now, and its simulations wait for it to pass. Before simulating, it checks that the DDML libraries, the `ddml` Python package and the plugin of each preset or configuration come from the configured build, that each gives DDML the particles the model is for, that each model's weights match their recorded md5 sum, that the weights each plugin loads (its `ModelPath`) are those weights, and that the Python module each embedded-Python plugin runs is there (and says where: in `models/`, or DDML's). Each model is simulated in the detector it was trained for (`fixed_at_training.detector.compact_file`).
 
 Both simulation scripts accept `-i FILE` to simulate an arbitrary input file (written under the scenario name `custom`), `--file FILE` to simulate just that one of the scenarios' inputs, and `-f/--force` to redo existing outputs (and make those that [nothing needs](running.md#the-whole-pipeline-at-once), e.g. for measurements that are up to date). `ddsim` writes to a hidden file that is renamed only on success, so an output that exists is always complete. An input that isn't made yet is an error, unless nothing needs its simulation.
 

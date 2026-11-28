@@ -1,5 +1,6 @@
 """The stages of the pipeline, in order: the stage registry.
 
+  preflight    each model in models/, checked before it simulates   (preflight.py)
   generate     each input of each scenario                          (generate.py)
   geant4       each input, simulated with Geant4                     (simulate.py)
   models       each input, simulated with each model                 (simulate.py)
@@ -16,10 +17,11 @@ from .base import Stage, StageError
 from .generate import Generate
 from .observables import Observables
 from .plot import Plot
+from .preflight import Preflight
 from .reconstruct import Reconstruct
 from .simulate import Geant4, Models
 
-STAGES = (Generate(), Geant4(), Models(), Reconstruct(), Observables(), Plot())
+STAGES = (Preflight(), Generate(), Geant4(), Models(), Reconstruct(), Observables(), Plot())
 STAGE_NAMES = tuple(stage.name for stage in STAGES)
 BY_NAME = dict((stage.name, stage) for stage in STAGES)
 

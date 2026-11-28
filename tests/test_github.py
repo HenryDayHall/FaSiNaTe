@@ -11,6 +11,7 @@ plots and metrics are the same."""
 
 import json
 import os
+import re
 import shutil
 import time
 
@@ -77,7 +78,7 @@ def test_the_workflow_runs_the_commands_in_the_container_it_names():
     image = workflow["env"]["FASINATE_GITHUB_IMAGE"]
     assert workflow["env"]["FASINATE_CONFIG"] == "configs/github.yaml"
     # The jobs with the software in DDML CI's container (its key has the image)
-    for name in ("software", "shard"):
+    for name in ("software", "preflight", "shard"):
         assert jobs[name]["container"] == {"image": image, "options": "--privileged"}, name
         steps = jobs[name]["steps"]
         assert any(step.get("run") == "/mount.sh" for step in steps), name
@@ -87,8 +88,14 @@ def test_the_workflow_runs_the_commands_in_the_container_it_names():
                               and cache["key"] == "${{ needs.plan.outputs.software-key }}"
                               for cache in caches), name
     commands = " ".join(step.get("run", "") for job in jobs.values() for step in job["steps"])
-    for command in ("github keys", "github plan", "github check", "github shard", "github report"):
+    for command in ("github keys", "github plan", "github check", "github preflight",
+                    "github shard", "github report"):
         assert "python3 scripts/ddml-bench " + command in commands, command
+    # The shards start only once every model with chains passes its preflight
+    assert jobs["preflight"]["needs"] == ["plan", "software"]
+    assert "preflight" in jobs["shard"]["needs"]
+    assert "pip install" in " ".join(step.get("run", "") for step in jobs["preflight"]["steps"])
+    assert jobs["plan"]["outputs"]["black"] == "${{ steps.plan.outputs.black }}"
     assert "models/**" in workflow[True]["push"]["paths"]
 
 
@@ -223,6 +230,29 @@ def test_a_model_is_tested_on_runners_of_their_own_as_a_low_cost_run_tests_it(
     software.take(plan, "plan.json", "data")
     status, output = software.run("check")
     assert "this environment can run the 4 chain(s) of the plan" in output, output
+    # (the tests' configuration takes any Black)
+    assert outputs["black"] == "black", output
+
+    # The preflight job: the model with chains checked before any is simulated
+    preflight = Runner(tmp_path, published, "preflight")
+    preflight.take(plan, "plan.json")
+    status, output = preflight.run("preflight")
+    assert "every model with chains passed its preflight: another" in output, output
+    checked = preflight.bench.path("preflight_output", "another")
+    assert {"summary.txt", "preflight.log", "barrel_gamma.png"} <= set(os.listdir(checked))
+    summary = open(preflight.summary).read()
+    assert "## Preflight of the models" in summary and "Preflight of another" in summary, summary
+    assert "artifact low-cost-preflight" in open(os.path.join(checked, "summary.txt")).read()
+    # and one that fails it stops the run
+    with open(os.path.join(preflight.bench.repo, "models", "another.yaml")) as stream:
+        text = stream.read()
+    with open(os.path.join(preflight.bench.repo, "models", "another.yaml"), "w") as stream:
+        stream.write(re.sub(r'weights_md5: "[0-9a-f]{32}"', 'weights_md5: "%s"' % ("0" * 32),
+                            text))
+    status, output = preflight.run("preflight", check=False)
+    assert status != 0 and "the preflight of another failed, so none of the chains is run" \
+        in output, output
+    assert "FAILED at step 2, weights" in open(os.path.join(checked, "summary.txt")).read()
 
     # The shards, on runners of their own; only their measurements and logs
     # are passed on, as the simulations and reconstructions are deleted
@@ -273,7 +303,8 @@ def test_a_model_is_tested_on_runners_of_their_own_as_a_low_cost_run_tests_it(
     # The same as a low-cost run measures and draws, in one go, on the fakes
     alone = Runner(tmp_path, published, "alone")
     status, output = alone.bench.run("low_cost.sh", "another", "-n", "3")
-    assert "made 10 of 10" in output, output
+    # (its preflight, then its chains' tasks, the measurements and the plots)
+    assert "made 11 of 11" in output, output
     assert_same_measurements(merged, alone.bench.path("observables", "another_n3.npz"))
     plots = alone.bench.path("observables", "plots", "low_cost_n3")
     for name in ("metrics.csv", "fits.csv"):
