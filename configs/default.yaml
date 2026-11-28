@@ -137,9 +137,7 @@ container:
 # What it found goes to <paths.data_dir>/preflight_output (summary.txt).
 preflight:
   # The major version of Black (quoted) the code must conform to, as Black's
-  # style changes from year to year; null for whichever is installed. Install
-  # it where the stages run, e.g.
-  #   scripts/run_in_environment.sh python3 -m pip install --user 'black==26.*'
+  # style changes from year to year; null for whichever the environment has
   black: "26"
   # Seconds that importing the code (PyTorch, the weights) may take
   import_timeout: 600

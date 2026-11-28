@@ -94,8 +94,6 @@ def test_the_workflow_runs_the_commands_in_the_container_it_names():
     # The shards start only once every model with chains passes its preflight
     assert jobs["preflight"]["needs"] == ["plan", "software"]
     assert "preflight" in jobs["shard"]["needs"]
-    assert "pip install" in " ".join(step.get("run", "") for step in jobs["preflight"]["steps"])
-    assert jobs["plan"]["outputs"]["black"] == "${{ steps.plan.outputs.black }}"
     assert "models/**" in workflow[True]["push"]["paths"]
 
 
@@ -230,8 +228,6 @@ def test_a_model_is_tested_on_runners_of_their_own_as_a_low_cost_run_tests_it(
     software.take(plan, "plan.json", "data")
     status, output = software.run("check")
     assert "this environment can run the 4 chain(s) of the plan" in output, output
-    # (the tests' configuration takes any Black)
-    assert outputs["black"] == "black", output
 
     # The preflight job: the model with chains checked before any is simulated
     preflight = Runner(tmp_path, published, "preflight")

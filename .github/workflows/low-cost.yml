@@ -72,7 +72,6 @@ jobs:
       shards: ${{ steps.plan.outputs.shards }}
       chains: ${{ steps.plan.outputs.chains }}
       report: ${{ steps.plan.outputs.report }}
-      black: ${{ steps.plan.outputs.black }}
       software-key: ${{ steps.keys.outputs.software-key }}
     steps:
       - uses: actions/checkout@v7
@@ -194,14 +193,10 @@ jobs:
         with:
           name: low-cost-plan
           path: low_cost_run
-      - name: Install Black, which the models' Python code is checked against
-        env:
-          BLACK: ${{ needs.plan.outputs.black }}
+      - name: Check the models
         run: |
           python3 -c 'import yaml' 2>/dev/null || dnf install -y -q python3-pyyaml
-          scripts/run_in_environment.sh python3 -m pip install --user --quiet "$BLACK"
-      - name: Check the models
-        run: python3 scripts/ddml-bench github preflight
+          python3 scripts/ddml-bench github preflight
       # What it found, each model's summary, full log and plots of the barrel
       # shots, whether they passed or not
       - if: ${{ !cancelled() }}

@@ -57,8 +57,7 @@ preflight
         In the container, after check (preflight()). Each model with chains
         to run has its preflight (ddml_bench/preflight.py), as the pipeline
         runs it before simulating it: its description, its weights, its own
-        Python code (Black, which the workflow installs as the plan job's
-        output black says, and importing it) and shots into the ECal barrel.
+        Python code (Black, and importing it) and shots into the ECal barrel.
         What it found goes to <paths.data_dir>/preflight_output, which the
         workflow keeps as the artifact low-cost-preflight, and to the job's
         summary. The shards start only once every model passes.
@@ -195,17 +194,6 @@ def add_summary(text):
     if path:
         with open(path, "a") as stream:
             stream.write(text.rstrip("\n") + "\n\n")
-
-
-def black_requirement(config):
-    """What pip installs for the preflight's check against Black: the major
-    version of preflight.black, or any."""
-    from .preflight import PreflightError, settings
-    try:
-        black = settings(config)["black"]
-    except PreflightError as error:
-        raise GitHubError(str(error))
-    return "black==%s.*" % black if black else "black"
 
 
 def github_settings(config):
@@ -1325,7 +1313,7 @@ def main(argv):
         add_summary(plan_summary(record))
         set_outputs(shards=list(range(len(record["shards"]))), chains=len(record["chains"]),
                     report="true" if record["models"] else "false",
-                    models=" ".join(record["models"]), black=black_requirement(load_config()))
+                    models=" ".join(record["models"]))
         return 0
     if args.command == "check":
         arguments(0, "no arguments")

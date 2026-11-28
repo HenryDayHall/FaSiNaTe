@@ -333,21 +333,17 @@ def check_code(model, preflight, log):
         except (SyntaxError, ValueError) as error:
             raise StepFailed("%s doesn't compile: %s" % (os.path.relpath(path, REPO_DIR), error))
     command = black_command()
-    install = "python3 -m pip install --user 'black%s' where the stages run (e.g. " \
-              "scripts/run_in_environment.sh python3 -m pip install --user 'black%s')" % (
-                  ("==%s.*" % preflight["black"],) * 2 if preflight["black"] else ("", ""))
     if command is None:
-        raise StepFailed("Black isn't installed here, so the code can't be checked against "
-                         "it: install it with " + install)
+        raise StepFailed("Black isn't found here, so the code can't be checked against it")
     status, output = _run(command + ["--version"], log, timeout=120)
     match = re.search(r"\b(\d+)\.(\d+)(?:\.\d+)?", output or "")
     if status != 0 or not match:
-        raise StepFailed("Black doesn't run here (see %s); install it with %s" % (LOG, install))
+        raise StepFailed("Black doesn't run here (see %s)" % LOG)
     version = match.group(0)
     if preflight["black"] and match.group(1) != preflight["black"]:
-        raise StepFailed("Black %s is installed here, but the code is checked with Black %s "
-                         "(preflight.black), whose style may differ: install it with %s"
-                         % (version, preflight["black"], install))
+        raise StepFailed("Black %s is here, but the code is checked with Black %s "
+                         "(preflight.black), whose style may differ"
+                         % (version, preflight["black"]))
     paths = [path for _, path in code]
     status, output = _run(command + ["--check", "--diff", "--quiet"] + paths, log,
                           timeout=300, cwd=REPO_DIR)
